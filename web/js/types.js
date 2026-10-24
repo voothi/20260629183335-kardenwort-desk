@@ -74,8 +74,11 @@
  * @typedef {Object} UpdatePayload
  * @property {string} [stage] - Current pipeline stage ('init' | 'tokenized' | 'translated_text' | 'finished' | 'error')
  * @property {string} [status] - 'ok' | 'processing' | 'finished' | 'error'
+ * @property {boolean} [is_finished] - Terminal update flag
+ * @property {boolean} [is_global] - Update spans all sentence cards
+ * @property {boolean} [all_sentences] - Legacy global-update flag
  * @property {boolean} [ok] - Success flag
- * @property {Object} [data] - Wrapped payload data
+ * @property {UpdatePayload} [data] - Wrapped payload data
  * @property {string} [translated_text] - Updated sentence translation string
  * @property {string} [sentence_translation] - Alias for translated_text
  * @property {string} [translatedText] - Alias for translated_text
@@ -98,6 +101,7 @@
  * @property {string} [target_lang] - Target language code (e.g. 'ru')
  * @property {string} [target_language] - Target language alias
  * @property {string} [source_text] - Raw source text
+ * @property {string} [sourceText] - Legacy source projection alias
  * @property {string} [translated_text] - Full translated text
  * @property {string} [sentence_translation] - Translated text alias
  * @property {string} [text_mode] - 'single' | 'multi' | 'container'

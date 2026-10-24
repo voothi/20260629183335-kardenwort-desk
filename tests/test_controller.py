@@ -520,7 +520,7 @@ def test_controller_render_language_mismatch_with_bypass(running_controller):
         assert len(res["data"]["html_b64"]) > 0
 
 
-def test_controller_session_retext_writes_updates_js(running_controller):
+def test_controller_session_retext_publishes_committed_update(running_controller, request, monkeypatch):
     server_url, server = running_controller
 
     # 1. Create a session
@@ -542,6 +542,12 @@ def test_controller_session_retext_writes_updates_js(running_controller):
         assert resp.status == 200
         create_res = json.loads(resp.read().decode('utf-8'))
         session_zid = create_res["data"]["session_zid"]
+
+    # Browser SQLite delivery remains diskless; inspect the actual controller queue.
+    server.config.set('server', 'update_delivery', 'controller')
+    subscriber = server.arbiter.register_subscriber(session_zid)
+    request.addfinalizer(lambda: server.arbiter.unregister_subscriber(session_zid, subscriber))
+    monkeypatch.setattr(kardenwort_controller, 'translate_source_text', lambda *a, **kw: {0: '\u044f\u0431\u043b\u043e\u043a\u043e'})
 
     # 2. Trigger /session/retext
     retext_url = f"{server_url}/session/retext"
@@ -565,21 +571,14 @@ def test_controller_session_retext_writes_updates_js(running_controller):
         assert "translated_text" in retext_res["data"]
         assert len(retext_res["data"]["translated_text"]) > 0
 
-    # 3. Verify .updates/*.js written
+    # 3. Committed stage is visible without compatibility artifacts.
+    event = subscriber.get(timeout=2)
+    assert event['stage'] == 'finished'
+    assert event['status'] == 'success'
+    assert event['translatedText']
     results_dir = kardenwort_desk.resolve_results_dir(server.resolved_paths, server.config)
-    tsv_path = kardenwort_desk.find_working_tsv(results_dir, session_zid, "en")
-    assert tsv_path is not None and tsv_path.exists()
-
-    updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
-    assert updates_dir.exists()
-    js_files = sorted(updates_dir.glob("*.js"))
-    assert len(js_files) > 0
-
-    latest_js = js_files[-1].read_text(encoding="utf-8")
-    assert "window.receiveUpdate(" in latest_js
-    assert '"stage": "finished"' in latest_js
-    assert '"status": "success"' in latest_js
-    assert '"translatedText":' in latest_js
+    assert not list(results_dir.glob(f'{session_zid}*.updates'))
+    assert not list(results_dir.glob(f'{session_zid}*.tsv'))
 
     # Verify session is updated in arbiter memory and SQLite database
     adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)

@@ -9,6 +9,10 @@
 
 /**
  * @typedef {import('../types.js').UpdatePayload} UpdatePayload
+ * @typedef {{type: 'ping'|'heartbeat'|'connected'|'disconnected'}} ConnectionEvent
+ * @typedef {{type: 'provider_failover', task_type?: string, task?: string, new_provider?: string, to?: string, provider?: string}} ProviderFailoverEvent
+ * @typedef {{type: 'tag_updated', row_id: string|number, status: boolean}} TagEvent
+ * @typedef {(UpdatePayload & {type?: undefined})|ConnectionEvent|ProviderFailoverEvent|TagEvent} StreamEvent
  */
 
 (function () {
@@ -67,7 +71,8 @@
         // Guard against file:/// filesystem URI errors
         if (window.location.protocol === 'file:' && !serverUrl) return;
 
-        // Guard against duplicate EventSource for the same session
+        // Repeated mounts preserve the existing session subscription.
+        if (activeEventSource && activeSessionZid === sessionZid) return;
         if (activeEventSource) {
             try { activeEventSource.close(); } catch (e) { console.warn('[SSE] Error closing active EventSource:', e); }
             activeEventSource = null;
@@ -101,8 +106,29 @@
             };
 
             es.onmessage = function (e) {
+                var data;
                 try {
-                    var data = JSON.parse(e.data);
+                    data = JSON.parse(e.data);
+                } catch (err) {
+                    console.error('[SSE] Invalid JSON event', err);
+                    updateConnectionIndicator('error');
+                    return;
+                }
+                try {
+                    applyEvent(data);
+                } catch (err) {
+                    console.error('[SSE] Event application failed', err);
+                    updateConnectionIndicator('error');
+                    throw err;
+                }
+            };
+            /** @param {StreamEvent|null} data */
+            function applyEvent(data) {
+                if (data && (data.type === 'ping' || data.type === 'heartbeat')) return;
+                if (data && data.type === 'disconnected') {
+                    disconnect();
+                    return;
+                }
                     if (!data) return;
 
                     if (data.type === 'connected') {
@@ -138,12 +164,12 @@
                     } else if (w.AppStore) {
                         w.AppStore.applyDeltas(data);
                     }
-                } catch (err) {
-                    // Non-JSON comments or keep-alive ping
-                }
-            };
+            }
+
         } catch (e) {
             updateConnectionIndicator('error');
+            console.error('[SSE] Connection initialization failed', e);
+            throw e;
         }
     }
 

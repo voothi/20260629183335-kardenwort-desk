@@ -1197,7 +1197,7 @@ def test_sse_streaming_diskless_updates(page, test_server, tmp_path):
     Stage 3: 20261013004500-sse-streaming-diskless-updates
     Verify:
     1. EventDispatcher thread-safe in-memory pub/sub
-    2. write_update_js skips disk file creation when SSE subscriber is active or diskless=True
+    2. write_update_js skips disk file creation when diskless delivery is explicitly selected
     3. web/js/services/sse.js connects, routes deltas to store, and updates connection indicator
     """
     from http_server import EventDispatcher
@@ -1219,8 +1219,8 @@ def test_sse_streaming_diskless_updates(page, test_server, tmp_path):
     tsv_file.write_text("col1\tcol2\nval1\tval2\n", encoding="utf-8")
     updates_dir = tmp_path / f"{test_zid}.de.updates"
 
-    # When subscriber is active, write_update_js publishes to SSE and DOES NOT write .js file
-    kardenwort_desk.write_update_js(tsv_file, [["val1", "val2"]], ["WordSource", "WordDestination"], {"lemma": "WordSource"}, stage="source", zid=test_zid)
+    # Explicit diskless delivery publishes to SSE without any file sink.
+    kardenwort_desk.write_update_js(tsv_file, [["val1", "val2"]], ["WordSource", "WordDestination"], {"lemma": "WordSource"}, stage="source", zid=test_zid, diskless=True)
     assert not updates_dir.exists() or len(list(updates_dir.glob("*.js"))) == 0
 
     # Unregister subscriber

@@ -111,10 +111,10 @@ def test_overview_tab_selection_and_f5_restoration(page, tmp_path):
     assert "kw-row-selected" in (row0.get_attribute("class") or "")
 
 
-def test_bidirectional_selection_isolation(page, tmp_path):
+def test_bidirectional_shared_selection(page, tmp_path):
     """
-    Task 4.2: End-to-end test verifying strict bidirectional selection isolation
-    between Tab 1 (sentence_idx=0) and constituent sentence tabs (Tabs 2..N).
+    September 28 shared-membership decision supersedes September 7 isolation.
+    Overview and constituent records retain separate coordinate identities.
     """
     db_path = tmp_path / "test_tab_iso.db"
     KardenwortDB(db_path=db_path).run_migrations()
@@ -183,25 +183,25 @@ def test_bidirectional_selection_isolation(page, tmp_path):
     assert cards_match is not None
     cards = json.loads(cards_match.group(1))
 
-    # Tab 1 (Overview, sentence_idx=0) has token 0 selected, but NOT token 2
+    # The accepted shared-membership contract projects both selections in overview.
     assert "0" in cards[0]["selected_ids"]
-    assert "2" not in cards[0]["selected_ids"]
+    assert "2" in cards[0]["selected_ids"]
 
-    # Tab 2 (Sentence 1, sentence_idx=1) has NO selections (token 0 was selected on Tab 1, not Tab 2)
-    assert cards[1]["selected_ids"] == []
+    # Sentence 1 retains its own coordinates and shares the selected lemma.
+    assert cards[1]["selected_ids"] == ["0"]
 
     # Tab 3 (Sentence 2, sentence_idx=2) has token 2 selected, but NOT token 0
     assert "2" in cards[2]["selected_ids"]
     assert "0" not in cards[2]["selected_ids"]
 
-    # In database: words table has selected=1 only for token_order 2
+    # Database membership includes both selected lemmas.
     words = adapter.db.get_words_by_session(unique_zid)
     sent_words_selected = {w["token_order"]: w["selected"] for w in words}
-    assert sent_words_selected[0] == 0  # Tab 1 selection did NOT bleed into words table
+    assert sent_words_selected[0] == 1  # Overview gesture persists shared membership
     assert sent_words_selected[2] == 1  # Tab 3 selection preserved
 
-    # overview_selections table has only token_order 0
-    assert adapter.get_overview_selections(unique_zid) == {0}
+    # Overview records agree with constituent selection intent.
+    assert adapter.get_overview_selections(unique_zid) == {0, 2}
 
 
 def test_ctrl_s_single_execution_and_clean_hotkey(page, tmp_path):
@@ -304,12 +304,13 @@ def test_anki_card_generation_integrity_preserved(tmp_path):
     assert len(restored["data_rows"]) == 3
     assert len(restored["words"]) == 3
 
-    # Anki cards correspond to selected=1 in constituent sentences (rows 0 and 2)
+    # Shared overview selection includes row 1 without synthesizing duplicate records.
     rest_headers = restored["headers"]
     sel_idx = rest_headers.index("DeskSelected")
     quot_idx = rest_headers.index("Quotation")
     selected_for_anki = [r for r in restored["data_rows"] if str(r[sel_idx]).strip() in ("1", "true")]
-    assert len(selected_for_anki) == 2
+    assert len(selected_for_anki) == 3
     assert selected_for_anki[0][quot_idx] == "one"
-    assert selected_for_anki[1][quot_idx] == "three"
+    assert selected_for_anki[1][quot_idx] == "two"
+    assert selected_for_anki[2][quot_idx] == "three"
 

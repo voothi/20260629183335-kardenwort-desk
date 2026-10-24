@@ -21,13 +21,7 @@
         if (w && typeof w.escapeHtml === 'function') {
             return w.escapeHtml(str);
         }
-        if (!str) return '';
-        return String(str)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
+        throw new Error('Required canonical escapeHtml helper is unavailable');
     }
 
     /**
@@ -40,13 +34,17 @@
         tbody: null,
         /** @type {boolean} */
         _mounted: false,
+        /** @type {EventListener|null} */
+        _contextHandler: null,
 
         /**
          * Mount component to DOM container
          * @param {HTMLTableElement|string} target
          */
         mount: function (target) {
-            if (this._mounted) return;
+            var next = typeof target === 'string' ? document.querySelector(target) : target;
+            if (this._mounted && this.table === next) return;
+            this.dispose();
             if (typeof target === 'string') {
                 this.table = /** @type {HTMLTableElement|null} */ (document.querySelector(target));
             } else {
@@ -57,6 +55,12 @@
                 this.tbody = this.table.querySelector('tbody');
                 this.bindEvents();
             }
+        },
+
+        dispose: function () {
+            if (this.table && this._contextHandler) this.table.removeEventListener('contextmenu', this._contextHandler);
+            this._contextHandler = null;
+            this._mounted = false;
         },
 
         /**
@@ -180,7 +184,7 @@
         bindEvents: function () {
             if (!this.table) return;
 
-            this.table.addEventListener('contextmenu', function (e) {
+            this._contextHandler = /** @param {Event} e */ function (e) {
                 var target = /** @type {HTMLElement|null} */ (e.target);
                 var row = target && target.closest ? target.closest('#lemma-table tbody tr') : null;
                 if (row) {
@@ -195,14 +199,15 @@
                         var lemCell = row.querySelector('.col-lemma');
                         var transCell = row.querySelector('.col-translation');
                         var isTrans = (uiCfg.audio_rmb_source === 'word_translation');
-                        var text = isTrans ? (transCell ? transCell.textContent.trim() : '') : (lemCell ? lemCell.textContent.trim() : '');
+                        var text = isTrans ? (transCell ? (transCell.textContent || '').trim() : '') : (lemCell ? (lemCell.textContent || '').trim() : '');
                         var lang = isTrans ? (w.AppState && (w.AppState.target_lang || w.AppState.target_language)) || 'ru' : (typeof w.getSessionLang === 'function' ? w.getSessionLang() : (w.AppState && w.AppState.language) || 'de');
                         if (text && typeof w.playAudio === 'function') {
                             w.playAudio(text, lang);
                         }
                     }
                 }
-            });
+            };
+            this.table.addEventListener('contextmenu', this._contextHandler);
         }
     };
 

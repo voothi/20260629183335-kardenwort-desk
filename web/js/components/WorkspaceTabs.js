@@ -88,13 +88,7 @@
             if (typeof w.escapeHtml === 'function') {
                 return w.escapeHtml(str);
             }
-            if (!str) return '';
-            return String(str)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
+            throw new Error('Required canonical escapeHtml helper is unavailable');
         }
 
         /**
@@ -103,19 +97,9 @@
          * @param {EventListenerOrEventListenerObject|Function} fn
          */
         function addEvent(el, type, fn) {
-            if (!el) return;
             var w = /** @type {any} */ (window);
-            if (typeof w.addEvent === 'function') {
-                w.addEvent(el, type, fn);
-            } else if (el.addEventListener) {
-                // @ts-ignore
-                el.addEventListener(type, fn, false);
-            } else if (/** @type {any} */ (el).attachEvent) {
-                /** @type {any} */ (el).attachEvent('on' + type, fn);
-            } else {
-                // @ts-ignore
-                el['on' + type] = fn;
-            }
+            if (typeof w.addEvent !== 'function') throw new Error('Required canonical addEvent helper is unavailable');
+            return w.addEvent(el, type, fn);
         }
 
         /**
@@ -123,17 +107,9 @@
          * @param {string} cls
          */
         function addClass(el, cls) {
-            if (!el) return;
             var w = /** @type {any} */ (window);
-            if (typeof w.addClass === 'function') {
-                w.addClass(el, cls);
-            } else if (el.classList) {
-                el.classList.add(cls);
-            } else {
-                var cur = el.className || '';
-                var reg = new RegExp('(\\s|^)' + cls + '(\\s|$)');
-                if (!reg.test(cur)) el.className = (cur + ' ' + cls).trim();
-            }
+            if (typeof w.addClass !== 'function') throw new Error('Required canonical addClass helper is unavailable');
+            return w.addClass(el, cls);
         }
 
         /**
@@ -141,17 +117,9 @@
          * @param {string} cls
          */
         function removeClass(el, cls) {
-            if (!el) return;
             var w = /** @type {any} */ (window);
-            if (typeof w.removeClass === 'function') {
-                w.removeClass(el, cls);
-            } else if (el.classList) {
-                el.classList.remove(cls);
-            } else {
-                var cur = el.className || '';
-                var reg = new RegExp('(\\s|^)' + cls + '(\\s|$)');
-                el.className = cur.replace(reg, ' ').trim();
-            }
+            if (typeof w.removeClass !== 'function') throw new Error('Required canonical removeClass helper is unavailable');
+            return w.removeClass(el, cls);
         }
 
         /**
@@ -284,10 +252,8 @@
          */
         function formatProvenanceTooltip(prov) {
             var w = /** @type {any} */ (window);
-            if (typeof w.formatProvenanceTooltip === 'function') {
-                return w.formatProvenanceTooltip(prov);
-            }
-            return prov || '';
+            if (typeof w.formatProvenanceTooltip !== 'function') throw new Error('Required canonical formatProvenanceTooltip helper is unavailable');
+            return w.formatProvenanceTooltip(prov);
         }
 
         /**
@@ -297,10 +263,8 @@
          */
         function formatTranslationCellTooltip(translation, provenance) {
             var w = /** @type {any} */ (window);
-            if (typeof w.formatTranslationCellTooltip === 'function') {
-                return w.formatTranslationCellTooltip(translation, provenance);
-            }
-            return translation || '';
+            if (typeof w.formatTranslationCellTooltip !== 'function') throw new Error('Required canonical formatTranslationCellTooltip helper is unavailable');
+            return w.formatTranslationCellTooltip(translation, provenance);
         }
 
         /**
@@ -312,10 +276,8 @@
          */
         function formatInflectedTooltip(sentenceText, inflectedVal, tokenOrder, lemma) {
             var w = /** @type {any} */ (window);
-            if (typeof w.formatInflectedTooltip === 'function') {
-                return w.formatInflectedTooltip(sentenceText, inflectedVal, tokenOrder, lemma);
-            }
-            return (inflectedVal || sentenceText || '').trim();
+            if (typeof w.formatInflectedTooltip !== 'function') throw new Error('Required canonical formatInflectedTooltip helper is unavailable');
+            return w.formatInflectedTooltip(sentenceText, inflectedVal, tokenOrder, lemma);
         }
 
         /**
@@ -327,10 +289,8 @@
          */
         function formatLemmaTooltip(lemma, gender, activeLang, pos) {
             var w = /** @type {any} */ (window);
-            if (typeof w.formatLemmaTooltip === 'function') {
-                return w.formatLemmaTooltip(lemma, gender, activeLang, pos);
-            }
-            return (lemma || '').trim();
+            if (typeof w.formatLemmaTooltip !== 'function') throw new Error('Required canonical formatLemmaTooltip helper is unavailable');
+            return w.formatLemmaTooltip(lemma, gender, activeLang, pos);
         }
 
         /**
@@ -339,10 +299,8 @@
          */
         function formatPosTooltip(pos) {
             var w = /** @type {any} */ (window);
-            if (typeof w.formatPosTooltip === 'function') {
-                return w.formatPosTooltip(pos);
-            }
-            return pos || '';
+            if (typeof w.formatPosTooltip !== 'function') throw new Error('Required canonical formatPosTooltip helper is unavailable');
+            return w.formatPosTooltip(pos);
         }
 
         /**
@@ -353,10 +311,8 @@
          */
         function formatGenderTooltip(gender, lemma, prov) {
             var w = /** @type {any} */ (window);
-            if (typeof w.formatGenderTooltip === 'function') {
-                return w.formatGenderTooltip(gender, lemma, prov);
-            }
-            return gender || '';
+            if (typeof w.formatGenderTooltip !== 'function') throw new Error('Required canonical formatGenderTooltip helper is unavailable');
+            return w.formatGenderTooltip(gender, lemma, prov);
         }
 
         /**
@@ -365,10 +321,8 @@
          */
         function formatGenderBadge(gender) {
             var w = /** @type {any} */ (window);
-            if (typeof w.formatGenderBadge === 'function') {
-                return w.formatGenderBadge(gender);
-            }
-            return escapeHtml(gender || '');
+            if (typeof w.formatGenderBadge !== 'function') throw new Error('Required canonical formatGenderBadge helper is unavailable');
+            return w.formatGenderBadge(gender);
         }
 
         function updateEmptySelectionState() {
@@ -629,7 +583,8 @@
             activeTabSeq = initialSeq;
             w._kwActiveTabSeq = activeTabSeq;
             if (!w.AppState) w.AppState = {};
-            w.AppState.selectedLemmas = {};
+            w.AppState.selectedLemmas = w.AppState.selectedLemmas || {};
+            if (typeof w.syncSelectionsToCardsAndState === 'function') w.syncSelectionsToCardsAndState();
             if (cards && cards.length > 0) {
                 switchToTab(initialSeq, true);
             }

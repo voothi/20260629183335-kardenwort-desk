@@ -20,13 +20,7 @@
         if (w && typeof w.escapeHtml === 'function') {
             return w.escapeHtml(str);
         }
-        if (!str) return '';
-        return String(str)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
+        throw new Error('Required canonical escapeHtml helper is unavailable');
     }
 
     /**
@@ -47,13 +41,17 @@
         container: null,
         /** @type {boolean} */
         _mounted: false,
+        /** @type {EventListener|null} */
+        _contextHandler: null,
 
         /**
          * Mount component to DOM container
          * @param {HTMLElement|string} target
          */
         mount: function (target) {
-            if (this._mounted) return;
+            var next = typeof target === 'string' ? document.querySelector(target) : target;
+            if (this._mounted && this.container === next) return;
+            this.dispose();
             if (typeof target === 'string') {
                 this.container = /** @type {HTMLElement|null} */ (document.querySelector(target));
             } else {
@@ -63,6 +61,12 @@
                 this._mounted = true;
                 this.bindEvents();
             }
+        },
+
+        dispose: function () {
+            if (this.container && this._contextHandler) this.container.removeEventListener('contextmenu', this._contextHandler);
+            this._contextHandler = null;
+            this._mounted = false;
         },
 
         /**
@@ -117,7 +121,7 @@
          */
         bindEvents: function () {
             if (!this.container) return;
-            this.container.addEventListener('contextmenu', function (e) {
+            this._contextHandler = /** @param {Event} e */ function (e) {
                 var target = /** @type {HTMLElement|null} */ (e.target);
                 var span = target && target.closest ? target.closest('#translation-container span.word') : null;
                 if (span) {
@@ -136,7 +140,8 @@
                         }
                     }
                 }
-            });
+            };
+            this.container.addEventListener('contextmenu', this._contextHandler);
         }
     };
 

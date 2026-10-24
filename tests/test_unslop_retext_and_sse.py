@@ -112,13 +112,13 @@ def test_persist_retext_direct_provenance_call(tmp_path):
         active_text_prov="live:deepl",
         tsv_path=tsv_file,
     )
-    assert mock_adapter.update_sentence_translation.called
-    _, kwargs = mock_adapter.update_sentence_translation.call_args
+    assert mock_adapter.persist_retext.called
+    _, kwargs = mock_adapter.persist_retext.call_args
     assert kwargs.get("provenance") == "live:deepl"
 
     # 2. Verify that TypeError fails fast and is not retried defensively without provenance
     mock_adapter.reset_mock()
-    mock_adapter.update_sentence_translation.side_effect = TypeError("Invalid argument")
+    mock_adapter.persist_retext.side_effect = TypeError("Invalid argument")
     with pytest.raises(TypeError, match="Invalid argument"):
         arbiter._persist_retext_updates(
             session_zid=session_zid,
@@ -126,7 +126,7 @@ def test_persist_retext_direct_provenance_call(tmp_path):
             active_text_prov="live:deepl",
             tsv_path=tsv_file,
         )
-    assert mock_adapter.update_sentence_translation.call_count == 1
+    assert mock_adapter.persist_retext.call_count == 1
 
 
 def test_get_session_status_cqrs_no_mutation(controller_server):

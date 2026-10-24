@@ -935,7 +935,7 @@ def test_ephemeral_progressive_updates_sqlite_emits_ipc_files(tmp_path):
     import configparser
     import json
     sqlite_cfg = configparser.ConfigParser()
-    sqlite_cfg.read_string("[storage]\nbackend=sqlite\n")
+    sqlite_cfg.read_string("[storage]\nbackend=sqlite\n[server]\nupdate_delivery=desktop_file\n")
 
     tsv_file = tmp_path / "20260829020000-session.tsv"
     tsv_file.write_text("WordSource\tWordDestination\nApfel\t\n", encoding="utf-8")

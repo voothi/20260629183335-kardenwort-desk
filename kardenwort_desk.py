@@ -2310,53 +2310,68 @@ def resolve_results_dir(resolved_paths, kw_config):
         return (Path(resolved_paths['base_dir']) / 'results').resolve()
     return Path('results').resolve()
 
+def _file_updates_enabled(config):
+    from kardenwort_delivery import delivery_sinks
+    return 'desktop_file' in delivery_sinks(config)
+
+
+def _touch_compatibility_marker(path, suffix, config):
+    if _file_updates_enabled(config):
+        path.with_suffix(suffix).touch(exist_ok=True)
+
+
+def _remove_compatibility_updates(path, config):
+    if not _file_updates_enabled(config):
+        return
+    directory = path.parent / f'{path.stem}.updates'
+    root = path.parent.resolve()
+    if directory.resolve().parent != root:
+        raise ValueError('Update cleanup target escapes its results directory')
+    if directory.is_dir():
+        import shutil
+        shutil.rmtree(directory)
+
+
+def _stale_results_artifact(entry, cutoff):
+    if entry.stat().st_mtime >= cutoff:
+        return False
+    if entry.is_dir():
+        return entry.name.endswith('.updates')
+    markers = ('.base_translation_done', '.enrichment_done', '.the_cut_done')
+    if entry.name.endswith(markers):
+        return True
+    return entry.name.endswith('.log') and entry.stat().st_size == 0
+
+
 def prune_stale_results_artifacts(results_dir, max_age_seconds=300):
-    """
-    Safely prunes stale temporary artifacts from results_dir older than max_age_seconds.
-    Removes:
-      - .updates/ directories (legacy progressive update js files)
-      - Stale .done markers (.base_translation_done, .enrichment_done, .the_cut_done)
-      - Zero-byte .log files (empty/orphaned session logs)
-    Returns the count of pruned items.
-    """
+    """Explicit maintenance only removes verified, contained stale IPC artifacts."""
     if not results_dir:
         return 0
-    results_dir = Path(results_dir)
-    if not results_dir.exists() or not results_dir.is_dir():
+    root = Path(results_dir).resolve()
+    if not root.is_dir():
         return 0
+    cutoff = time.time() - max_age_seconds
+    removed = 0
+    for entry in root.iterdir():
+        try:
+            if entry.resolve().parent != root:
+                continue
+            if not _stale_results_artifact(entry, cutoff):
+                continue
+            _remove_results_artifact(entry)
+            removed += 1
+        except OSError as exc:
+            logger.warning('Could not prune stale artifact %s: %s', entry.name, type(exc).__name__)
+    return removed
 
-    import time
-    import shutil
-    now = time.time()
-    pruned_count = 0
 
-    try:
-        for entry in results_dir.iterdir():
-            try:
-                mtime = entry.stat().st_mtime
-                is_stale = (now - mtime) > max_age_seconds
+def _remove_results_artifact(entry):
+    if entry.is_dir():
+        import shutil
+        shutil.rmtree(entry)
+    else:
+        entry.unlink()
 
-                if entry.is_dir() and entry.name.endswith(".updates"):
-                    if is_stale:
-                        shutil.rmtree(entry, ignore_errors=True)
-                        pruned_count += 1
-                elif entry.is_file():
-                    # Check done markers
-                    if any(entry.name.endswith(suffix) for suffix in ('.base_translation_done', '.enrichment_done', '.the_cut_done')):
-                        if is_stale:
-                            entry.unlink(missing_ok=True)
-                            pruned_count += 1
-                    # Check zero-byte logs
-                    elif entry.name.endswith(".log") and entry.stat().st_size == 0:
-                        if is_stale:
-                            entry.unlink(missing_ok=True)
-                            pruned_count += 1
-            except (OSError, PermissionError):
-                pass
-    except Exception:
-        pass
-
-    return pruned_count
 
 @functools.lru_cache(maxsize=32)
 def _load_anki_mapping_cached(mapping_str: str):
@@ -2978,20 +2993,10 @@ def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, 
         "provider": provider,
     }
     kwargs.update(extra_kwargs)
-    try:
-        sig = inspect.signature(write_update_js)
-        has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
-        if has_varkw:
-            filtered_kwargs = kwargs
-        else:
-            accepted_params = set(sig.parameters.keys())
-            filtered_kwargs = {k: v for k, v in kwargs.items() if k in accepted_params}
-        return write_update_js(tsv_path, data_rows, headers, role_fields, **filtered_kwargs)
-    except Exception:
-        try:
-            return write_update_js(tsv_path, data_rows, headers, role_fields, stage=stage, status=status)
-        except Exception:
-            return write_update_js(tsv_path, data_rows, headers, role_fields)
+    sig = inspect.signature(write_update_js)
+    has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+    filtered = kwargs if has_varkw else {key: value for key, value in kwargs.items() if key in sig.parameters}
+    return write_update_js(tsv_path, data_rows, headers, role_fields, **filtered)
 
 class TranslationException(Exception):
     def __init__(self, message, envelope=None):
@@ -4507,45 +4512,31 @@ class SqliteStorageAdapter(StorageAdapter):
         selected: Union[int, bool, str],
         zid: Optional[str] = None,
     ) -> bool:
-        """
-        Updates the 'selected' state (0 or 1) for a word row atomically in SQLite.
-        When sentence_idx == 0, upserts into the overview_selections table to ensure
-        Tab 1 Overview selections are persisted and strictly isolated from constituent sentences.
-        """
-        sel_val = 1 if str(selected).strip() in ("1", "true", "True") else 0
-        try:
-            s_idx = int(sentence_idx) if sentence_idx is not None else None
-        except (ValueError, TypeError):
-            s_idx = None
-
+        """Apply normalized-lemma membership to this reading session atomically."""
+        selected_value = int(str(selected).strip().lower() in ('1', 'true'))
         with self.db.get_connection(zid=zid) as conn:
-            cursor = conn.cursor()
-            if s_idx == 0:
-                cursor.execute(
-                    """
-                    INSERT INTO overview_selections (session_zid, token_order, selected)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(session_zid, token_order) DO UPDATE SET selected = excluded.selected;
-                    """,
-                    (session_zid, token_order, sel_val),
-                )
-                return True
-            elif s_idx is not None and s_idx > 0:
-                cursor.execute(
-                    "UPDATE words SET selected = ? WHERE session_zid = ? AND sentence_index = ? AND token_order = ?;",
-                    (sel_val, session_zid, s_idx, token_order),
-                )
-            else:
-                cursor.execute(
-                    "UPDATE words SET selected = ? WHERE session_zid = ? AND token_order = ?;",
-                    (sel_val, session_zid, token_order),
-                )
-            if cursor.rowcount == 0 and token_order is not None and sentence_idx is None:
-                cursor.execute(
-                    "UPDATE words SET selected = ? WHERE session_zid = ? AND token_order = ?;",
-                    (sel_val, session_zid, token_order),
-                )
-            return cursor.rowcount > 0
+            words = conn.execute("SELECT sentence_index, token_order, lemma FROM words WHERE session_zid = ? ORDER BY sentence_index, token_order",
+                                 (session_zid,)).fetchall()
+            target = self._selection_target(words, sentence_idx, token_order)
+            if target is None:
+                return False
+            lemma = target['lemma'].strip().lower()
+            matching = [word for word in words if word['lemma'].strip().lower() == lemma]
+            conn.executemany("UPDATE words SET selected = ? WHERE session_zid = ? AND sentence_index = ? AND token_order = ?",
+                             [(selected_value, session_zid, word['sentence_index'], word['token_order']) for word in matching])
+            conn.executemany("INSERT INTO overview_selections(session_zid, token_order, selected) VALUES (?, ?, ?) "
+                             "ON CONFLICT(session_zid, token_order) DO UPDATE SET selected = excluded.selected",
+                             [(session_zid, word['token_order'], selected_value) for word in matching])
+        return True
+
+    @staticmethod
+    def _selection_target(words, sentence_idx, token_order):
+        for word in words:
+            if word['token_order'] != int(token_order):
+                continue
+            if sentence_idx is None or int(sentence_idx) == 0 or word['sentence_index'] == int(sentence_idx):
+                return word
+        return None
 
     def get_overview_selections(
         self,
@@ -4565,6 +4556,71 @@ class SqliteStorageAdapter(StorageAdapter):
                 return {int(row[0]) for row in cursor.fetchall()}
             except Exception:
                 return set()
+
+    def persist_word_deletion(self, session_zid, sentence_idx, token_order, deleted, restore=None, zid=None):
+        """Delete exact word records or restore an acknowledged Undo snapshot."""
+        with self.db.get_connection(zid=zid) as conn:
+            if not deleted:
+                self._restore_deleted_words(conn, session_zid, token_order, restore)
+                return []
+            clause = "session_zid = ? AND token_order = ?"
+            params = [session_zid, token_order]
+            if sentence_idx and int(sentence_idx) > 0:
+                clause += " AND sentence_index = ?"
+                params.append(int(sentence_idx))
+            records = [dict(row) for row in conn.execute("SELECT * FROM words WHERE " + clause, params)]
+            conn.execute("DELETE FROM words WHERE " + clause, params)
+            return records
+
+    @staticmethod
+    def _restore_deleted_words(conn, session_zid, token_order, records):
+        if not records:
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Undo deletion requires an acknowledged row snapshot')
+        allowed = {row[1] for row in conn.execute('PRAGMA table_info(words)')}
+        for record in records:
+            SqliteStorageAdapter._insert_restored_word(conn, session_zid, token_order, record, allowed)
+
+    @staticmethod
+    def _insert_restored_word(conn, session_zid, token_order, record, allowed):
+        if record.get('session_zid') != session_zid or record.get('token_order') != token_order:
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Undo deletion identity mismatch')
+        columns = list(record)
+        if not set(columns).issubset(allowed):
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Invalid restoration fields')
+        names = ','.join('"' + name + '"' for name in columns)
+        placeholders = ','.join('?' * len(columns))
+        conn.execute(f'INSERT INTO words ({names}) VALUES ({placeholders})', list(map(record.__getitem__, columns)))
+
+    def persist_retext(self, session_zid, main, padded, provenance=None, zid=None):
+        """Commit a translation patch, context fields and provenance together."""
+        with self.db.get_connection(zid=zid) as conn:
+            self._persist_retext_sentences(conn, session_zid, main, 'sentence_destination', provenance)
+            self._persist_retext_sentences(conn, session_zid, padded, 'sentence_destination2', provenance)
+            self._persist_retext_context(conn, session_zid, main, padded)
+            conn.execute("UPDATE sessions SET updated_at = ? WHERE zid = ?",
+                         (datetime.now(timezone.utc).isoformat(), session_zid))
+
+    @staticmethod
+    def _persist_retext_sentences(conn, session_zid, values, field, provenance):
+        for index, value in values.items():
+            if not value or not value.strip():
+                continue
+            conn.execute(f"UPDATE sentences SET {field} = ?, text_provenance = COALESCE(?, text_provenance) "
+                         "WHERE session_zid = ? AND sentence_index = ?",
+                         (value, provenance, session_zid, index))
+
+    @staticmethod
+    def _persist_retext_context(conn, session_zid, main, padded):
+        words = conn.execute("SELECT sentence_index, token_order, extra_fields FROM words WHERE session_zid = ?",
+                             (session_zid,)).fetchall()
+        for word in words:
+            fields = json.loads(word['extra_fields'] or '{}')
+            for name, values in (('SentenceDestination', main), ('SentenceDestination2', padded)):
+                value = values.get(word['sentence_index'])
+                if value and value.strip():
+                    fields[name] = value
+            conn.execute("UPDATE words SET extra_fields = ? WHERE session_zid = ? AND sentence_index = ? AND token_order = ?",
+                         (json.dumps(fields, ensure_ascii=False), session_zid, word['sentence_index'], word['token_order']))
 
     def update_sentence_translation(
         self,
@@ -9021,7 +9077,10 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
     import re
 
     # Universal cleanup of stale .updates, zero-byte logs, and done markers (> 5 minutes old) across all backends
-    prune_stale_results_artifacts(results_dir, max_age_seconds=300)
+    from kardenwort_delivery import delivery_sinks
+    file_delivery = 'desktop_file' in delivery_sinks(config)
+    if file_delivery:
+        prune_stale_results_artifacts(results_dir, max_age_seconds=300)
 
     if not is_sqlite:
         results_dir.mkdir(parents=True, exist_ok=True)
@@ -9040,12 +9099,7 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
 
         # Clean up any leftover .updates from previous sessions to avoid polling stale data
         updates_dir = working_tsv_path.parent / f"{working_tsv_path.stem}.updates"
-        if updates_dir.exists():
-            try:
-                import shutil
-                shutil.rmtree(updates_dir)
-            except OSError:
-                pass
+        _remove_compatibility_updates(working_tsv_path, config)
     else:
         # SQLite caching check
         if ttl_seconds > 0:
@@ -10492,7 +10546,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         kardenwort_workspace = resolved_paths['kardenwort_workspace']
         kw_config = load_kardenwort_config(kardenwort_workspace)
         results_dir = resolve_results_dir(resolved_paths, kw_config)
-        if results_dir.exists():
+        if _file_updates_enabled(config) and results_dir.exists():
             # Cleanup old markers from previous runs with the same ZID to prevent race conditions
             for marker in results_dir.glob(f"{zid[:14]}*"):
                 if marker.suffix in ['.base_translation_done', '.enrichment_done', '.the_cut_done']:
@@ -10651,7 +10705,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
 
         if not is_sqlite:
             try:
-                master_tsv_path.with_suffix('.the_cut_done').touch(exist_ok=True)
+                _touch_compatibility_marker(master_tsv_path, '.the_cut_done', config)
             except Exception:
                 pass
 
@@ -10674,15 +10728,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                         master_trans_path.unlink()
                 except Exception:
                     pass
-            try:
-                # Clean up orphaned .updates/ directory created by write_update_js for progressive mode.
-                # Without this, stub-mode TSV deletions leave empty directories accumulating in results/.
-                master_updates_dir = master_tsv_path.parent / f"{master_tsv_path.stem}.updates"
-                if master_updates_dir.exists() and master_updates_dir.is_dir():
-                    import shutil
-                    shutil.rmtree(master_updates_dir, ignore_errors=True)
-            except Exception:
-                pass
+            _remove_compatibility_updates(master_tsv_path, config)
             try:
                 storage_adapter = get_storage_adapter(config, resolved_paths)
                 if storage_adapter.backend_name == 'sqlite':
@@ -10975,7 +11021,7 @@ html, body {{
 
     is_progressive = display_mode_val == 'progressive'
     updates_dir = working_tsv_path.parent / f"{working_tsv_path.stem}.updates"
-    if is_progressive and updates_dir.exists():
+    if _file_updates_enabled(config) and is_progressive and updates_dir.exists():
         try:
             for js_file in updates_dir.glob("*.js"):
                 with open(js_file, 'r', encoding='utf-8') as f:
@@ -11325,7 +11371,7 @@ html, body {{
                 comments, headers, data_rows = load_tsv_rows(working_tsv_path)
 
     if is_progressive and not worker_launched:
-        write_update_js(working_tsv_path, data_rows, headers, role_fields, stage="finished", empty_payload=True, row_provenances=row_provenances)
+        write_update_js(working_tsv_path, data_rows, headers, role_fields, stage="finished", empty_payload=True, row_provenances=row_provenances, config=config)
         # Only flag WordDestination as [FAILED] if the base provider was expected to fill it but didn't.
         # IPA, Morphology, etc. are exclusively intellifiller fields — they must NOT be flagged here
         # because intellifiller was never scheduled to run in this code path.
@@ -11361,11 +11407,11 @@ html, body {{
 
         if not is_sqlite:
             try:
-                working_tsv_path.with_suffix('.base_translation_done').touch(exist_ok=True)
+                _touch_compatibility_marker(working_tsv_path, '.base_translation_done', config)
             except Exception:
                 pass
             try:
-                working_tsv_path.with_suffix('.enrichment_done').touch(exist_ok=True)
+                _touch_compatibility_marker(working_tsv_path, '.enrichment_done', config)
             except Exception:
                 pass
 
@@ -15419,7 +15465,7 @@ def cmd_reprocess(args):
         role_fields = get_role_fields(mapping, headers)
         run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
         if run_enrich == 'auto':
-            safe_write_update_js(tsv_path, data_rows, headers, role_fields, zid=zid, trace_id=trace_id)
+            safe_write_update_js(tsv_path, data_rows, headers, role_fields, zid=zid, trace_id=trace_id, config=config)
     except Exception as e:
         print_structured_error("DESK_FAILED", f"Failed to save working TSV after clearing fields: {e}")
         sys.exit(1)
@@ -15518,7 +15564,7 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
             run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
                 sorted_rows = sort_session_data_rows(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, zid=zid, trace_id=trace_id)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, zid=zid, trace_id=trace_id, config=config)
     return data_rows
 
 
@@ -15544,7 +15590,7 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
         )
         comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
         sorted_rows = sort_session_data_rows(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="enrichment", zid=zid, trace_id=trace_id)
+        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="enrichment", zid=zid, trace_id=trace_id, config=config)
         return sorted_rows
 
     batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=5)
@@ -15560,7 +15606,7 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
             sorted_rows = sort_session_data_rows(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
             run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, zid=zid, trace_id=batch_trace_id)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, zid=zid, trace_id=batch_trace_id, config=config)
             data_rows = sorted_rows
         except Exception as e:
             logger.error(f"Failed to write update JS after IntelliFiller batch: {e}")
@@ -15663,13 +15709,13 @@ def cmd_reprocess_worker(args):
                     with storage_adapter.file_lock(tsv_path):
                         save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 sorted_rows = sort_session_data_rows(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, zid=zid, trace_id=trace_id)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, zid=zid, trace_id=trace_id, config=config)
                 selected_rows = remaining_selected
 
         if selected_rows and lemmas_provider in ('combined', 'google', 'deepl'):
             try:
                 data_rows = _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang, zid=zid, trace_id=trace_id)
-                safe_write_update_js(tsv_path, data_rows, headers, role_fields, zid=zid, trace_id=trace_id)
+                safe_write_update_js(tsv_path, data_rows, headers, role_fields, zid=zid, trace_id=trace_id, config=config)
             except Exception as e:
                 logger.error(f"Failed fast-path translation during reprocess: {e}")
 
@@ -15785,7 +15831,7 @@ def cmd_reprocess_worker(args):
                 except Exception:
                     pass
             sorted_rows = sort_session_data_rows(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, class_cols=class_cols, error=worker_error, zid=zid, trace_id=trace_id, row_provenances=reprocess_provenances)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, class_cols=class_cols, error=worker_error, zid=zid, trace_id=trace_id, row_provenances=reprocess_provenances, config=config)
             if sess_logger:
                 sess_logger.info("Reprocess finished event emitted")
         except Exception as e:
@@ -15864,13 +15910,6 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
 def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, text_provenance=None, row_provenances=None, provenance=None, sentences=None, provider=None, **extra_kwargs):
     import time
     global _update_seq_counter
-    _update_seq_counter += 1
-
-    if config is None:
-        try:
-            config = load_config()[0]
-        except Exception:
-            config = None
 
     if zid is None and tsv_path:
         m = re.match(r"^(\d{14})", tsv_path.name)
@@ -15882,9 +15921,10 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     if not tsv_path.is_absolute() and not str(tsv_path).startswith((".", "/", "\\")):
         return None
 
+    from kardenwort_delivery import delivery_sinks
+    sinks = delivery_sinks(config, diskless=bool(extra_kwargs.get('diskless')))
     updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
-    updates_dir.mkdir(parents=True, exist_ok=True)
-    update_js_path = updates_dir / f"{_update_seq_counter:06d}.js"
+    update_js_path = None
 
     if empty_payload:
         update_data = {
@@ -16099,20 +16139,15 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     if active_ap:
         update_data["active_provider"] = active_ap
 
-    # Task 1.3 & 3.1: Publish to in-memory EventDispatcher for active SSE subscribers
-    try:
-        from http_server import EventDispatcher
-        dispatcher = EventDispatcher.get_instance()
-        if zid:
-            dispatcher.publish(zid, update_data)
-        has_sse_subscribers = dispatcher.has_subscribers(zid) if zid else False
-    except Exception:
-        has_sse_subscribers = False
-
-    # Task 3.1: Deprecate disk update file creation when SSE client is active or diskless mode is requested
-    is_diskless = bool(extra_kwargs.get("diskless") or (config and config.getboolean("server", "diskless_updates", fallback=False)))
-    if has_sse_subscribers or is_diskless:
-        return update_js_path
+    if 'controller' in sinks:
+        from kardenwort_events import EventDispatcher
+        from kardenwort_delivery import deliver_stage
+        deliver_stage(config, zid, update_data, EventDispatcher.get_instance())
+    if 'desktop_file' not in sinks:
+        return None
+    _update_seq_counter += 1
+    updates_dir.mkdir(parents=True, exist_ok=True)
+    update_js_path = updates_dir / f"{_update_seq_counter:06d}.js"
 
     js_content = f"if (typeof window.receiveUpdate === 'function') {{ window.receiveUpdate({json.dumps(update_data)}); }}"
 
@@ -16201,7 +16236,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                             col_sentence_dest2=_col_sentence_dest2,
                             persist=(not is_sqlite), return_single=False
                         )
-                        safe_write_update_js(tsv_path, curr_rows, h, role_fields, stage=None, zid=zid, trace_id=trace_id)
+                        safe_write_update_js(tsv_path, curr_rows, h, role_fields, stage=None, zid=zid, trace_id=trace_id, config=config)
 
                     sentence_translations_raw = translate_source_text(
                         text, getattr(args, 'language', 'en'), args.target_lang, getattr(args, 'text_mode', 'single'), config, resolved_paths, main_text_provider, zid=zid, trace_id=trace_id, chunk_callback=on_chunk_done)
@@ -16253,11 +16288,11 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
 
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
                     active_text_prov = getattr(sentence_translations_raw, 'provenance', active_text_prov or f"live:{main_text_provider}")
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov, config=config)
                 except Exception as e:
                     logger.warning(f"[{zid}] Sentence text translation failed (non-fatal, proceeding to lemma translation): {e}")
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", translated_text="", zid=zid, trace_id=trace_id, text_translation_status="failed", text_translation_failed=True)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", translated_text="", zid=zid, trace_id=trace_id, text_translation_status="failed", text_translation_failed=True, config=config)
 
         if run_base == 'auto' and col_lemma != -1:
             lang = getattr(args, 'language', 'en')
@@ -16367,7 +16402,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         )
                     else:
                         sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances)
+                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, config=config)
                 else:
                     chunk_size = config.getint(SEC_TRANSLATION, 'translation_chunk_size', fallback=0)
                     if chunk_size == 0:
@@ -16430,17 +16465,17 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                 data_rows = current_rows
 
                         sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id, row_provenances=row_provenances, provider=provider)
+                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id, row_provenances=row_provenances, provider=provider, config=config)
 
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov, provider=provider)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov, provider=provider, config=config)
             else:
                 sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov, provider=provider)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov, provider=provider, config=config)
         else:
             lang = getattr(args, 'language', 'en')
             sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov, config=config)
     except Exception as e:
         logger.error(f"Failing in translated stage: {e}")
         failed_lemmas = chunk if 'chunk' in locals() else (lemmas_to_translate if 'lemmas_to_translate' in locals() else [])
@@ -16457,7 +16492,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
         if zid and results_dir:
             sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
             sess_logger.error(f"Translation stage failed: [{err_obj.get('code')}] {err_obj.get('message')}")
-        safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed", error=err_obj, zid=zid, trace_id=trace_id)
+        safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed", error=err_obj, zid=zid, trace_id=trace_id, config=config)
     return StageTranslationResult(data_rows, active_text_prov)
 
 def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="enrichment", selected_rows=None):
@@ -16505,7 +16540,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
         if not selected_rows:
             logger.info("No rows requiring enrichment in progressive stage; skipping IntelliFiller.")
             sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id, config=config)
             return data_rows
 
         prompt_val = getattr(args, 'prompt', None) or config.get(SEC_LANGUAGES, f"{getattr(args, 'language', 'en')}_prompt", fallback="")
@@ -16524,7 +16559,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
             )
             comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
             sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id, config=config)
         else:
             for i in range(0, len(selected_rows), batch_size):
                 batch = selected_rows[i:i + batch_size]
@@ -16533,7 +16568,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
 
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
                 sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id, config=config)
     except Exception as e:
         logger.error(f"Failing in {stage_name} stage: {e}")
         err_obj = getattr(e, 'envelope', None) or {
@@ -16546,7 +16581,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
         if zid and results_dir:
             sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
             sess_logger.error(f"Enrichment stage failed: [{err_obj.get('code')}] {err_obj.get('message')}")
-        safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=stage_name, status="failed", error=err_obj, zid=zid, trace_id=trace_id)
+        safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=stage_name, status="failed", error=err_obj, zid=zid, trace_id=trace_id, config=config)
     return data_rows
 
 def cmd_retext(args):
@@ -17130,7 +17165,7 @@ def cmd_progressive_worker(args):
             lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
             sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
             # Write initial source stage immediately so UI renders without delay
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=zid, trace_id=trace_id, row_provenances=worker_row_provenances)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=zid, trace_id=trace_id, row_provenances=worker_row_provenances, config=config)
 
             lemma_chain, _ = resolve_provider_chain(config, task_type='lemma')
             base_provider = getattr(args, 'provider', None) or (lemma_chain[0] if lemma_chain else config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
@@ -17163,7 +17198,7 @@ def cmd_progressive_worker(args):
 
                 if not is_sqlite:
                     try:
-                        tsv_path.with_suffix('.base_translation_done').touch()
+                        _touch_compatibility_marker(tsv_path, '.base_translation_done', config)
                     except Exception:
                         pass
 
@@ -17210,11 +17245,11 @@ def cmd_progressive_worker(args):
                 # 3. Finished Event
                 if not is_sqlite:
                     try:
-                        tsv_path.with_suffix('.base_translation_done').touch(exist_ok=True)
+                        _touch_compatibility_marker(tsv_path, '.base_translation_done', config)
                     except Exception:
                         pass
                     try:
-                        tsv_path.with_suffix('.enrichment_done').touch(exist_ok=True)
+                        _touch_compatibility_marker(tsv_path, '.enrichment_done', config)
                     except Exception:
                         pass
                 try:
@@ -17235,7 +17270,7 @@ def cmd_progressive_worker(args):
                         except Exception:
                             pass
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id, row_provenances=worker_row_provenances, text_provenance=active_text_prov)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id, row_provenances=worker_row_provenances, text_provenance=active_text_prov, config=config)
                     if is_sqlite and hasattr(storage_adapter, 'db'):
                         try:
                             now_iso = datetime.now(timezone.utc).isoformat()
@@ -17292,6 +17327,7 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                 if fingerprint != current_fp:
                     raise StructuredError(ErrorCode.ROW_STALE, f"Row content hash mismatch. Rendered: {fingerprint}, Current: {current_fp}")
 
+            deleted_rows = []
             for delta in deltas:
                 row_id = delta.get("row_id")
                 token_order = delta.get("token_order") if delta.get("token_order") is not None else row_id
@@ -17303,8 +17339,9 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                     raise StructuredError(ErrorCode.INVALID_STATE, "Each delta must have 'row_id', 'column', and 'value'")
 
                 if col_name == "_delete":
-                    with storage_adapter.db.get_connection(zid=zid) as conn:
-                        conn.execute("DELETE FROM words WHERE session_zid = ? AND token_order = ?;", (session_zid, token_order))
+                    records = storage_adapter.persist_word_deletion(session_zid, sentence_idx, token_order,
+                                                                    val, delta.get('restore'), zid=zid)
+                    deleted_rows.append(dict(delta, restore=records))
                     continue
 
                 if col_name not in editable_cols and col_name.lower() not in [c.lower() for c in editable_cols]:
@@ -17340,30 +17377,10 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                 try:
                     with file_lock(tsv_path):
                         comments, headers, data_rows = load_tsv_rows(tsv_path)
-                        col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-                        for delta in deltas:
-                            r_id = delta.get("row_id")
-                            t_ord = delta.get("token_order")
-                            c_name = delta.get("column")
-                            v_val = delta.get("value")
-                            target_row_idx = None
-                            if col_token_order != -1 and t_ord is not None:
-                                for idx, r in enumerate(data_rows):
-                                    if r is not None and len(r) > col_token_order and str(r[col_token_order]).strip() == str(t_ord):
-                                        target_row_idx = idx
-                                        break
-                            if target_row_idx is None and r_id is not None and 0 <= r_id < len(data_rows):
-                                target_row_idx = r_id
-
-                            if target_row_idx is not None:
-                                if c_name == "_delete":
-                                    data_rows[target_row_idx] = None
-                                elif c_name in headers and data_rows[target_row_idx] is not None:
-                                    if c_name.strip().lower() in ("gender", "wordsourcegender"):
-                                        g_clean = str(v_val).strip().lower() if v_val is not None else ""
-                                        v_val = g_clean if g_clean in ("m", "f", "n") else ""
-                                    data_rows[target_row_idx][headers.index(c_name)] = v_val
-                        data_rows = [r for r in data_rows if r is not None]
+                        projection_headers = updated_restored['headers']
+                        projection_columns = {name: index for index, name in enumerate(projection_headers)}
+                        data_rows = [[row[projection_columns[name]] if name in projection_columns else '' for name in headers]
+                                     for row in updated_restored['data_rows']]
                         save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 except Exception as e:
                     logger.warning(f"Failed updating mirror TSV during SQLite edit-save: {e}")
@@ -17375,6 +17392,7 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
 
             return {
                 "status": "success",
+                "deleted_rows": deleted_rows,
                 "fingerprint": new_fingerprint,
                 "session_zid": session_zid,
                 "zid": zid
@@ -17416,6 +17434,7 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
         if selected_col_name not in editable_cols:
             editable_cols.append(selected_col_name)
 
+        deleted_rows = []
         for delta in deltas:
             row_id = delta.get("row_id")
             col_name = delta.get("column")
@@ -17425,7 +17444,11 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                 raise StructuredError(ErrorCode.INVALID_STATE, "Each delta must have 'row_id', 'column', and 'value'")
 
             if col_name == "_delete":
-                if 0 <= row_id < len(data_rows):
+                if not val:
+                    for record in delta.get('restore') or []:
+                        data_rows.insert(record['row_id'], record['values'])
+                elif 0 <= row_id < len(data_rows):
+                    deleted_rows.append(dict(delta, restore=[{'row_id': row_id, 'values': list(data_rows[row_id])}]))
                     data_rows[row_id] = None
                 continue
 
@@ -17454,6 +17477,7 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
 
     return {
         "status": "success",
+        "deleted_rows": deleted_rows,
         "fingerprint": new_fingerprint,
         "session_zid": session_zid,
         "zid": zid
@@ -17997,44 +18021,10 @@ def persist_config_value(section: str, key: str, value: Any, base_dir=None) -> b
         return False
 
     try:
-        content = desk_config.read_text(encoding="utf-8-sig")
-        str_val = str(value)
-
-        sec_pattern = re.compile(rf'^[ \t]*\[[ \t]*{re.escape(section)}[ \t]*\][ \t]*$', re.IGNORECASE | re.MULTILINE)
-        sec_match = sec_pattern.search(content)
-
-        if not sec_match:
-            prefix = "" if (not content or content.endswith("\n")) else "\n"
-            content = f"{content}{prefix}\n[{section}]\n{key} = {str_val}\n"
-        else:
-            sec_start = sec_match.end()
-            next_sec_match = re.search(r'^[ \t]*\[[^\]]+\]', content[sec_start:], re.MULTILINE)
-            if next_sec_match:
-                sec_end = sec_start + next_sec_match.start()
-            else:
-                sec_end = len(content)
-
-            sec_body = content[sec_start:sec_end]
-            key_pattern = re.compile(rf'^([ \t]*{re.escape(key)}[ \t]*=[ \t]*).*$', re.IGNORECASE | re.MULTILINE)
-            key_match = key_pattern.search(sec_body)
-
-            if key_match:
-                new_sec_body = key_pattern.sub(lambda m: m.group(1) + str_val, sec_body, count=1)
-                content = content[:sec_start] + new_sec_body + content[sec_end:]
-            else:
-                lines = sec_body.splitlines(keepends=True)
-                last_non_blank = -1
-                for idx, line in enumerate(lines):
-                    if line.strip():
-                        last_non_blank = idx
-                if last_non_blank == -1:
-                    new_sec_body = f"\n{key} = {str_val}\n" + sec_body.lstrip("\r\n")
-                else:
-                    lines.insert(last_non_blank + 1, f"{key} = {str_val}\n")
-                    new_sec_body = "".join(lines)
-                content = content[:sec_start] + new_sec_body + content[sec_end:]
-
-        desk_config.write_text(content, encoding="utf-8")
+        from kardenwort_configuration import patch_ini_value
+        content = desk_config.read_bytes().decode('utf-8')
+        changed = patch_ini_value(content, section, key, str(value))
+        desk_config.write_bytes(changed.encode('utf-8'))
         return True
     except Exception as e:
         logger.warning(f"Failed to update desk config.ini with [{section}] {key}={value}: {e}")
@@ -18045,7 +18035,8 @@ def spawn_ahk(args_list, base_dir=None):
     if not base_dir:
         base_dir = Path(__file__).resolve().parent
     base_dir = Path(base_dir)
-    ahk_repo = next(base_dir.parent.glob("*-autohotkey"), None) if base_dir.parent else None
+    configured_repo = os.environ.get('KARDENWORT_NATIVE_REPO')
+    ahk_repo = Path(configured_repo) if configured_repo else next(base_dir.parent.glob("*-autohotkey"), None)
     if not ahk_repo:
         logger.error("Could not find autohotkey repository in parent directory.")
         return False
@@ -19703,4 +19694,6 @@ if __name__ == "__main__":
     if sys.stderr is not None and hasattr(sys.stderr, 'reconfigure'):
         sys.stderr.reconfigure(encoding='utf-8')
 
-    main()
+    from kardenwort_delivery import controller_producer
+    with controller_producer():
+        main()

@@ -1152,7 +1152,7 @@ class EnrichmentQueue:
 
             # Emit initial source stage if not already emitted
             sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=session_zid, trace_id=eff_trace_id)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=session_zid, trace_id=eff_trace_id, config=self.config)
             arbiter.emit_event(session_zid, {
                 "type": "stage",
                 "stage": "source",
@@ -1266,7 +1266,7 @@ class EnrichmentQueue:
                     translated_html = format_translated_html(sentence_translations_raw, text_mode=text_mode, text=text, config=self.config)
                     sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                     structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov, sentences=sentences_list, provider=eff_tp_name)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov, sentences=sentences_list, provider=eff_tp_name, config=self.config)
                     arbiter.emit_event(session_zid, {
                         "type": "update",
                         "stage": "translated_text",
@@ -1291,7 +1291,7 @@ class EnrichmentQueue:
                     active_text_prov = None
                     sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                     structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text="", text_translation_status="failed", text_translation_failed=True)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text="", text_translation_status="failed", text_translation_failed=True, config=self.config)
                     arbiter.emit_event(session_zid, {
                         "type": "update",
                         "stage": "translated_text",
@@ -1453,7 +1453,7 @@ class EnrichmentQueue:
 
                 sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                 structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields, row_provenances=sess_row_provs)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov, row_provenances=sess_row_provs)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov, row_provenances=sess_row_provs, config=self.config)
                 trans_event = {
                     "type": "update",
                     "stage": "translated",
@@ -1548,7 +1548,7 @@ class EnrichmentQueue:
             structured_rows = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=fin_row_provs) if (data_rows and headers and role_fields) else {}
             if tsv_path and data_rows and headers:
                 sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov, row_provenances=fin_row_provs)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov, row_provenances=fin_row_provs, config=self.config)
 
             finished_event = {
                 "type": "update",
@@ -1587,32 +1587,13 @@ class EnrichmentQueue:
         self._progressive_executor.shutdown(wait=wait)
 
 
-def to_one_based_sentence_map(raw) -> Tuple[Dict[int, str], Dict[int, str]]:
-    """Convert translate_source_text() output (0-based keys) into 1-based (main, padded) maps."""
-    if isinstance(raw, str):
-        if not raw.strip():
-            raise StructuredError(ErrorCode.DESK_FAILED, "Translation output is empty.")
-        return {1: raw}, {}
-    if not isinstance(raw, dict):
-        raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Unsupported translation output type: {type(raw).__name__}")
-
-    def _convert(d) -> Dict[int, str]:
-        out: Dict[int, str] = {}
-        for k, v in d.items():
-            if isinstance(k, bool) or not str(k).isdigit():
-                continue
-            if v is None:
-                continue
-            out[int(k) + 1] = str(v)
-        return out
-
-    main = _convert(raw)
-    padded = _convert(raw.get('PADDED') or {}) if isinstance(raw.get('PADDED'), dict) else {}
-    if not main and raw.get('FULL_TEXT'):
-        main = {1: str(raw['FULL_TEXT'])}
-    if not main:
-        raise StructuredError(ErrorCode.DESK_FAILED, "Translation output has no sentence entries.")
-    return main, padded
+def to_one_based_sentence_map(raw, single_unit=False) -> Tuple[Dict[int, str], Dict[int, str]]:
+    """Normalize provider identities once, without inventing alignment."""
+    from kardenwort_alignment import normalize_sentence_result
+    try:
+        return normalize_sentence_result(raw, single_unit=single_unit)
+    except ValueError as exc:
+        raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
 
 
 def pair_sentence_records(records: List[Dict[str, Any]]) -> Tuple[List[str], List[str]]:
@@ -1628,59 +1609,7 @@ def pair_sentence_records(records: List[Dict[str, Any]]) -> Tuple[List[str], Lis
 # ---------------------------------------------------------------------------
 # In-Memory Session Arbiter & SSE Event Dispatcher
 # ---------------------------------------------------------------------------
-class EventDispatcher:
-    """
-    Thread-safe Server-Sent Events (SSE) dispatcher for session-scoped in-memory streams.
-    Manages subscriber queues without requiring disk-based update files.
-    """
-    _instance: Optional["EventDispatcher"] = None
-    _singleton_lock = threading.Lock()
-
-    def __init__(self):
-        self._subscribers: Dict[str, List[queue.Queue]] = {}
-        self._lock = threading.Lock()
-
-    @classmethod
-    def get_instance(cls) -> "EventDispatcher":
-        with cls._singleton_lock:
-            if cls._instance is None:
-                cls._instance = EventDispatcher()
-            return cls._instance
-
-    def register(self, session_zid: str) -> queue.Queue:
-        q = queue.Queue(maxsize=1000)
-        with self._lock:
-            if session_zid not in self._subscribers:
-                self._subscribers[session_zid] = []
-            self._subscribers[session_zid].append(q)
-        return q
-
-    def unregister(self, session_zid: str, q: queue.Queue):
-        with self._lock:
-            if session_zid in self._subscribers:
-                try:
-                    self._subscribers[session_zid].remove(q)
-                    if not self._subscribers[session_zid]:
-                        del self._subscribers[session_zid]
-                except ValueError:
-                    pass
-
-    def has_subscribers(self, session_zid: str) -> bool:
-        with self._lock:
-            return bool(self._subscribers.get(session_zid))
-
-    def publish(self, session_zid: str, event_data: Dict[str, Any]):
-        payload = dict(event_data)
-        if "timestamp" not in payload:
-            payload["timestamp"] = datetime.now(timezone.utc).isoformat()
-        payload["session_zid"] = session_zid
-        with self._lock:
-            queues = list(self._subscribers.get(session_zid, []))
-        for q in queues:
-            try:
-                q.put_nowait(payload)
-            except queue.Full:
-                pass
+from kardenwort_events import EventDispatcher
 
 
 # ---------------------------------------------------------------------------
@@ -1941,6 +1870,11 @@ class SessionArbiter:
                     except Exception:
                         pass
 
+        adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
+        selection = None
+        if adapter.backend_name == 'sqlite' and any(d.get('column') == 'DeskSelected' for d in deltas):
+            words = adapter.db.get_words_by_session(session_zid)
+            selection = {word['lemma'].strip().lower(): bool(word['selected']) for word in words}
         # Broadcast state mutation event to all connected SSE clients
         self.emit_event(session_zid, {
             "type": "update",
@@ -1948,370 +1882,172 @@ class SessionArbiter:
             "status": "success",
             "fingerprint": res["fingerprint"],
             "deltas": deltas,
+            "shared_selection": selection,
             "zid": res["zid"]
         })
 
         return res
 
-    def _persist_retext_updates(
-        self,
-        session_zid: str,
-        sentence_trans: Any,
-        active_text_prov: Optional[str] = None,
-        req_zid: Optional[str] = None,
-        tsv_path: Optional[Union[Path, str]] = None,
-        active_text_provider: Optional[str] = None,
-        translated_text: Optional[str] = None,
-        sentence_map: Optional[Dict[int, str]] = None,
-        padded_map: Optional[Dict[int, str]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Encapsulates row updates, SQLite sentence translation updates, and TSV synchronization
-        for a session's sentence translation deltas.
-        """
-        req_zid = req_zid or generate_unique_zid()
-
-        if sentence_map is None:
-            if not isinstance(sentence_trans, dict):
-                raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Retext persistence requires a 1-based sentence map.")
-            sentence_map = {int(k): str(v) for k, v in sentence_trans.items() if not isinstance(k, bool) and str(k).isdigit() and v is not None}
-            if padded_map is None and isinstance(sentence_trans.get('PADDED'), dict):
-                padded_map = {int(k): str(v) for k, v in sentence_trans['PADDED'].items() if str(k).isdigit() and v is not None}
-        padded_map = padded_map or {}
-        if not sentence_map:
-            raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Retext persistence requires a non-empty 1-based sentence map.")
-        if 0 in sentence_map or 0 in padded_map:
-            raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Retext persistence keys must be 1-based; key 0 is not allowed.")
-
-        storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
-        is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
-
-        sess_memo = {}
+    def _retext_memo(self, session_zid):
         with self._lock:
-            if hasattr(self, 'sessions') and session_zid in self.sessions:
-                sess_memo = dict(self.sessions[session_zid])
+            return dict(self.sessions.get(session_zid, {}))
 
-        resolved_tsv_path: Optional[Path] = None
-        if tsv_path:
-            resolved_tsv_path = Path(tsv_path)
-        else:
-            cand_str = sess_memo.get("tsv_path")
-            if cand_str:
-                resolved_tsv_path = Path(cand_str)
-            if not resolved_tsv_path:
-                lang = sess_memo.get("language") or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
-                results_dir = resolve_results_dir(self.resolved_paths, self.config)
-                resolved_tsv_path = find_working_tsv(results_dir, session_zid, lang, storage_adapter=storage_adapter)
-                if not resolved_tsv_path:
-                    resolved_tsv_path = results_dir / f"{session_zid}.{lang}.tsv"
+    def _retext_path(self, adapter, session_zid, memo, path=None):
+        candidate = path or memo.get('tsv_path')
+        if candidate:
+            return Path(candidate)
+        language = memo.get('language') or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
+        results = resolve_results_dir(self.resolved_paths, self.config)
+        return find_working_tsv(results, session_zid, language, storage_adapter=adapter) or results / f'{session_zid}.{language}.tsv'
 
-        if not resolved_tsv_path.exists():
-            comments = sess_memo.get("comments", [])
-            headers = sess_memo.get("headers", [])
-            data_rows = sess_memo.get("data_rows", [])
-            if headers and data_rows:
-                try:
-                    resolved_tsv_path.parent.mkdir(parents=True, exist_ok=True)
-                    save_tsv_rows_safely(resolved_tsv_path, comments, headers, data_rows)
-                except Exception:
-                    pass
+    @staticmethod
+    def _prepare_legacy_retext(adapter, path, memo):
+        if adapter.backend_name == 'sqlite' or path.exists():
+            return
+        if memo.get('headers') and memo.get('data_rows'):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            save_tsv_rows_safely(path, memo.get('comments', []), memo['headers'], memo['data_rows'])
 
-        eff_active_text_prov = active_text_prov or getattr(sentence_trans, "provenance", "live:retext")
+    @staticmethod
+    def _retext_maps(sentence_trans, sentence_map, padded_map):
+        from kardenwort_alignment import persistence_map
+        try:
+            main = persistence_map(sentence_trans if sentence_map is None else sentence_map)
+            padded = persistence_map(padded_map if padded_map is not None else sentence_trans.get('PADDED', {}))
+            if not main:
+                raise ValueError('Retext persistence requires a non-empty one-based sentence map')
+            return main, padded
+        except (ValueError, AttributeError) as exc:
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
 
-        with storage_adapter.file_lock(resolved_tsv_path):
-            comments, headers, data_rows = storage_adapter.load_tsv_rows(resolved_tsv_path)
-            mapping = load_anki_mapping(self.resolved_paths['anki_mapping_file'])
-            role_fields = sess_memo.get("role_fields") or get_role_fields(mapping, headers)
-            col_sentence_dest = headers.index('SentenceDestination') if 'SentenceDestination' in headers else (headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1)
-            col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else -1
-            col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
-
-            if col_sentence_dest != -1 or col_sentence_dest2 != -1:
-                if col_sent == -1 and len(sentence_map) > 1:
-                    raise StructuredError(ErrorCode.INVALID_STATE, "Cannot align multi-sentence retext without SentenceSourceIndex column.")
-
-                single_main_val = list(sentence_map.values())[0] if len(sentence_map) == 1 else None
-                single_padded_val = list(padded_map.values())[0] if len(padded_map) == 1 else None
-
-                for row in data_rows:
-                    if col_sent == -1:
-                        if col_sentence_dest != -1 and len(row) > col_sentence_dest and single_main_val and str(single_main_val).strip():
-                            row[col_sentence_dest] = str(single_main_val)
-                        if col_sentence_dest2 != -1 and len(row) > col_sentence_dest2 and single_padded_val and str(single_padded_val).strip():
-                            row[col_sentence_dest2] = str(single_padded_val)
-                    else:
-                        sent_cell = str(row[col_sent]).strip() if len(row) > col_sent else ""
-                        if sent_cell.isdigit():
-                            s_idx = int(sent_cell)
-                            if s_idx in sentence_map and str(sentence_map[s_idx]).strip():
-                                if col_sentence_dest != -1 and len(row) > col_sentence_dest:
-                                    row[col_sentence_dest] = str(sentence_map[s_idx])
-                            if s_idx in padded_map and str(padded_map[s_idx]).strip():
-                                if col_sentence_dest2 != -1 and len(row) > col_sentence_dest2:
-                                    row[col_sentence_dest2] = str(padded_map[s_idx])
-
-                if is_sqlite:
-                    for s_idx, trans in sentence_map.items():
-                        if trans and isinstance(trans, str) and trans.strip():
-                            storage_adapter.update_sentence_translation(
-                                session_zid, s_idx, trans, target_field="sentence_destination", zid=req_zid, provenance=eff_active_text_prov
-                            )
-
-                    for s_idx, padded_trans in padded_map.items():
-                        if padded_trans and isinstance(padded_trans, str) and padded_trans.strip():
-                            storage_adapter.update_sentence_translation(
-                                session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid, provenance=eff_active_text_prov
-                            )
-
-                storage_adapter.save_tsv_rows_safely(resolved_tsv_path, comments, headers, data_rows)
-
-        new_fp = compute_content_fingerprint(data_rows)
-        eff_active_text_p = active_text_provider
-        if not eff_active_text_p and eff_active_text_prov and str(eff_active_text_prov).startswith("live:"):
-            eff_active_text_p = str(eff_active_text_prov)[5:].strip().lower()
-        elif not eff_active_text_p:
-            eff_active_text_p = eff_active_text_prov
-
-        eff_translated_text = translated_text
-        if eff_translated_text is None:
-            eff_translated_text = format_translated_html(
-                sentence_trans,
-                text_mode=sess_memo.get("text_mode", "single"),
-                text=sess_memo.get("text", ""),
-                config=self.config
-            )
-
-        with self._lock:
-            if session_zid not in self.sessions:
-                self.sessions[session_zid] = {}
-            self.sessions[session_zid]["data_rows"] = data_rows
-            self.sessions[session_zid]["fingerprint"] = new_fp
-            self.sessions[session_zid]["sentence_translation"] = sentence_trans
-            self.sessions[session_zid]["text_provenance"] = eff_active_text_prov
-            self.sessions[session_zid]["textProvenance"] = eff_active_text_prov
-            self.sessions[session_zid]["active_text_provider"] = eff_active_text_p
-            self.sessions[session_zid]["active_provider"] = eff_active_text_p or self.sessions[session_zid].get("active_provider")
-            self.sessions[session_zid]["translatedText"] = eff_translated_text
-            self.sessions[session_zid]["translated_text"] = eff_translated_text
-
-        return {
-            "status": "success",
-            "session_zid": session_zid,
-            "data_rows": data_rows,
-            "headers": headers,
-            "comments": comments,
-            "role_fields": role_fields,
-            "fingerprint": new_fp,
-            "tsv_path": resolved_tsv_path,
-            "translated_text": eff_translated_text,
-            "translatedText": eff_translated_text,
-            "text_provenance": eff_active_text_prov,
-            "textProvenance": eff_active_text_prov,
-            "active_text_provider": eff_active_text_p,
-        }
-
-    def retext_session(
-        self,
-        session_zid: str,
-        language: Optional[str] = None,
-        text_mode: str = "single",
-        zid: Optional[str] = None
-    ) -> Dict[str, Any]:
-        req_zid = zid or generate_unique_zid()
-        lang = language or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
-        target_lang = self.config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
-
-        storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
-        is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
-
-        existing_sentences = []
-        if is_sqlite:
+    def _persist_retext_rows(self, adapter, path, session_zid, memo, main, padded, provenance, req_zid):
+        from kardenwort_alignment import patch_translation_rows
+        with adapter.file_lock(path):
+            comments, headers, rows = adapter.load_tsv_rows(path)
+            roles = memo.get('role_fields') or get_role_fields(load_anki_mapping(self.resolved_paths['anki_mapping_file']), headers)
             try:
-                existing_sentences = storage_adapter.db.get_sentences_by_session(session_zid)
+                rows = patch_translation_rows(rows, headers, roles, main, padded)
+            except ValueError as exc:
+                raise StructuredError(ErrorCode.INVALID_STATE, str(exc)) from exc
+            if adapter.backend_name == 'sqlite':
+                adapter.persist_retext(session_zid, main, padded, provenance=provenance, zid=req_zid)
+            else:
+                adapter.save_tsv_rows_safely(path, comments, headers, rows)
+        return comments, headers, rows, roles
+
+    def _persist_retext_updates(self, session_zid, sentence_trans, active_text_prov=None,
+                                req_zid=None, tsv_path=None, active_text_provider=None,
+                                translated_text=None, sentence_map=None, padded_map=None):
+        main, padded = self._retext_maps(sentence_trans, sentence_map, padded_map)
+        adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
+        memo = self._retext_memo(session_zid)
+        path = self._retext_path(adapter, session_zid, memo, tsv_path)
+        self._prepare_legacy_retext(adapter, path, memo)
+        provenance = active_text_prov or getattr(sentence_trans, 'provenance', 'live:retext')
+        provider = active_text_provider or str(provenance).removeprefix('live:')
+        if translated_text is None:
+            translated_text = format_translated_html(sentence_trans, text_mode=memo.get('text_mode', 'single'), text=memo.get('text', ''), config=self.config)
+        comments, headers, rows, roles = self._persist_retext_rows(adapter, path, session_zid, memo, main, padded, provenance, req_zid)
+        result = dict(status='success', session_zid=session_zid, comments=comments, headers=headers,
+                      data_rows=rows, role_fields=roles, fingerprint=compute_content_fingerprint(rows),
+                      tsv_path=path, translated_text=translated_text, translatedText=translated_text,
+                      text_provenance=provenance, textProvenance=provenance, active_text_provider=provider)
+        self._cache_retext_result(session_zid, result, sentence_trans)
+        return result
+
+    def _cache_retext_result(self, session_zid, result, raw):
+        with self._lock:
+            session = self.sessions.setdefault(session_zid, {})
+            session.update({key: result[key] for key in ('data_rows', 'fingerprint', 'translated_text', 'translatedText', 'text_provenance', 'textProvenance', 'active_text_provider')})
+            session['sentence_translation'] = raw
+            session['active_provider'] = result['active_text_provider']
+
+    @staticmethod
+    def _read_retext_sentences(adapter, session_zid):
+        if adapter.backend_name != 'sqlite':
+            return []
+        from kardenwort_alignment import validate_authoritative_records
+        try:
+            records = adapter.db.get_sentences_by_session(session_zid)
+            validate_authoritative_records(records)
+            return records
+        except Exception as exc:
+            raise StructuredError(ErrorCode.DESK_FAILED, f'Re-text sentence read failed for session {session_zid}') from exc
+
+    def _read_retext_source(self, adapter, session_zid, memo, path, records):
+        from kardenwort_alignment import sentence_sources
+        if records:
+            return sentence_sources(records)
+        source = path.with_suffix('.txt')
+        if adapter.backend_name != 'sqlite' and source.exists():
+            return source.read_text(encoding='utf-8')
+        if memo.get('text'):
+            return memo['text']
+        try:
+            recovered = adapter.restore_session(session_zid).get('source_text', '')
+        except Exception as exc:
+            raise StructuredError(ErrorCode.DESK_FAILED, 'Re-text source read failed') from exc
+        if not recovered:
+            raise StructuredError(ErrorCode.DESK_FAILED, f'Source text not recoverable for session {session_zid}')
+        return recovered
+
+    def _retext_providers(self):
+        providers, _ = resolve_provider_chain(self.config, task_type='text')
+        preferred = self.config.get(SEC_PIPELINE, 'text_reprocess_provider', fallback='').strip().lower()
+        if preferred:
+            return [preferred] + [provider for provider in providers if provider != preferred]
+        return providers
+
+    def _translate_retext(self, text, language, target, mode, req_zid):
+        last_error = None
+        for provider in self._retext_providers():
+            try:
+                translated = translate_source_text(text, language, target, mode, self.config, self.resolved_paths, provider, zid=req_zid)
+                if translated:
+                    return translated, provider
             except Exception as exc:
-                raise StructuredError(
-                    ErrorCode.DESK_FAILED,
-                    f"Re-text sentence read failed for session {session_zid}"
-                ) from exc
+                logger.warning("Retext provider '%s' failed", provider)
+                last_error = exc
+        raise StructuredError(ErrorCode.DESK_FAILED, 'All retext providers failed or returned empty output') from last_error
 
-        tsv_path = None
-        session_text = ""
-        with self._lock:
-            if session_zid in self.sessions:
-                sess = self.sessions[session_zid]
-                session_text = sess.get("text", "")
-                if sess.get("tsv_path"):
-                    cand = Path(sess["tsv_path"])
-                    if cand.exists():
-                        tsv_path = cand
-                    else:
-                        tsv_path = cand
-                        comments = sess.get("comments", [])
-                        headers = sess.get("headers", [])
-                        data_rows = sess.get("data_rows", [])
-                        if headers and data_rows:
-                            try:
-                                tsv_path.parent.mkdir(parents=True, exist_ok=True)
-                                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-                            except Exception:
-                                pass
-
-        if not tsv_path:
-            results_dir = resolve_results_dir(self.resolved_paths, self.config)
-            tsv_path = find_working_tsv(results_dir, session_zid, lang, storage_adapter=storage_adapter)
-            if not tsv_path:
-                tsv_path = results_dir / f"{session_zid}.{lang}.tsv"
-
-        if not is_sqlite and (not tsv_path or not tsv_path.exists()):
-            raise StructuredError(ErrorCode.DESK_FAILED, f"Working TSV file not found for session {session_zid}")
-
-        source_txt = tsv_path.with_suffix('.txt') if tsv_path else None
-        if not is_sqlite and source_txt and source_txt.exists():
-            text = source_txt.read_text(encoding='utf-8')
-        elif session_text:
-            text = session_text
-            if not is_sqlite and source_txt:
-                try:
-                    source_txt.write_text(text, encoding='utf-8')
-                except Exception:
-                    pass
-        else:
-            # Fallback: recover source text from storage_adapter / SQLite session record
-            recovered_text = ""
+    @staticmethod
+    def _align_retext(raw, records):
+        from kardenwort_alignment import validate_complete_alignment
+        main, padded = to_one_based_sentence_map(raw, single_unit=len(records) == 1)
+        if records:
             try:
-                bundle = storage_adapter.restore_session(session_zid)
-                recovered_text = bundle.get("source_text", "") or ""
-                if recovered_text:
-                    # Lazy session warm-up: populate in-memory cache so subsequent calls skip SQLite
-                    with self._lock:
-                        if session_zid not in self.sessions:
-                            self.sessions[session_zid] = {}
-                        self.sessions[session_zid]["text"] = recovered_text
-                        if bundle.get("tsv_path"):
-                            self.sessions[session_zid]["tsv_path"] = str(bundle["tsv_path"])
-                        if bundle.get("data_rows") is not None:
-                            self.sessions[session_zid]["data_rows"] = bundle["data_rows"]
-                        if bundle.get("headers") is not None:
-                            self.sessions[session_zid]["headers"] = bundle["headers"]
-                        if bundle.get("comments") is not None:
-                            self.sessions[session_zid]["comments"] = bundle["comments"]
-            except Exception:
-                pass
-            if not recovered_text and source_txt and source_txt.exists():
-                text = source_txt.read_text(encoding='utf-8')
-            elif not recovered_text:
-                raise StructuredError(ErrorCode.DESK_FAILED, f"Source text not recoverable for session {session_zid}")
-            else:
-                text = recovered_text
+                validate_complete_alignment(main, records)
+            except ValueError as exc:
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
+        return main, padded
 
-        # Resolve text provider chain and failover strategy
-        providers, strategy = resolve_provider_chain(self.config, task_type='text')
-        reprocess_p = self.config.get(SEC_PIPELINE, 'text_reprocess_provider', fallback=None) if self.config and self.config.has_section(SEC_PIPELINE) else None
-        if reprocess_p and reprocess_p.strip():
-            reprocess_p = reprocess_p.strip().lower()
-            if reprocess_p not in providers:
-                providers = [reprocess_p] + providers
-            elif providers and providers[0] != reprocess_p:
-                providers = [reprocess_p] + [p for p in providers if p != reprocess_p]
+    def retext_session(self, session_zid, language=None, text_mode='single', zid=None):
+        req_zid = zid or generate_unique_zid()
+        language = language or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
+        target = self.config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
+        adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
+        records = self._read_retext_sentences(adapter, session_zid)
+        memo = self._retext_memo(session_zid)
+        path = self._retext_path(adapter, session_zid, memo)
+        text = self._read_retext_source(adapter, session_zid, memo, path, records)
+        mode = 'multi' if len(records) > 1 else text_mode
+        raw, provider = self._translate_retext(text, language, target, mode, req_zid)
+        main, padded = self._align_retext(raw, records)
+        provenance = getattr(raw, 'provenance', f'live:{provider}')
+        translated = format_translated_html(raw, text_mode=mode, text=text, config=self.config)
+        result = self._persist_retext_updates(session_zid, raw, provenance, req_zid, path, provider, translated, main, padded)
+        return self._publish_retext_result(result, main, language)
 
-        eff_retext_text = text
-        eff_retext_mode = text_mode
-        if existing_sentences and len(existing_sentences) >= 2:
-            sent_sources = [s["sentence_source"].strip() for s in existing_sentences if s.get("sentence_source")]
-            if len(sent_sources) >= 2:
-                eff_retext_text = "\n".join(sent_sources)
-                eff_retext_mode = "multi"
-
-        sentence_trans = None
-        last_err = None
-        active_text_provider = None
-        for prov in providers:
-            try:
-                sentence_trans = translate_source_text(eff_retext_text, lang, target_lang, eff_retext_mode, self.config, self.resolved_paths, prov, zid=req_zid)
-                if sentence_trans:
-                    active_text_provider = prov
-                    break
-            except Exception as e:
-                logger.warning(f"Retext provider '{prov}' failed for session {session_zid}: {e}")
-                last_err = e
-                continue
-
-        if not sentence_trans:
-            if last_err:
-                raise StructuredError(ErrorCode.DESK_FAILED, f"All retext providers failed. Last error: {last_err}") from last_err
-            else:
-                raise StructuredError(ErrorCode.DESK_FAILED, "Retext translation produced empty result.")
-
-        active_text_prov = getattr(sentence_trans, "provenance", f"live:{active_text_provider}")
-
-        main_map, padded_map = to_one_based_sentence_map(sentence_trans)
-
-        # Enforce discrete <div> containers per sentence when multiple sentences exist
-        translated_html = format_translated_html(sentence_trans, text_mode=eff_retext_mode, text=eff_retext_text, config=self.config)
-
-        persist_res = self._persist_retext_updates(
-            session_zid=session_zid,
-            sentence_trans=sentence_trans,
-            active_text_prov=active_text_prov,
-            req_zid=req_zid,
-            tsv_path=tsv_path,
-            active_text_provider=active_text_provider,
-            translated_text=translated_html,
-            sentence_map=main_map,
-            padded_map=padded_map,
-        )
-
-        data_rows = persist_res["data_rows"]
-        headers = persist_res["headers"]
-        role_fields = persist_res["role_fields"]
-        new_fp = persist_res["fingerprint"]
-
-        normalized_sentences = main_map
-
-        sorted_rows = sort_session_data_rows(data_rows, headers, language, self.config, self.resolved_paths, role_fields=role_fields)
-        structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-        safe_write_update_js(
-            tsv_path,
-            sorted_rows,
-            headers,
-            role_fields,
-            stage="finished",
-            status="success",
-            source_text="",
-            translated_text=translated_html,
-            sentences=normalized_sentences,
-            zid=session_zid,
-            config=self.config
-        )
-
-        self.emit_event(session_zid, {
-            "type": "update",
-            "stage": "translated_text",
-            "status": "success",
-            "fingerprint": new_fp,
-            "translated_text": translated_html,
-            "translatedText": translated_html,
-            "sentences": normalized_sentences,
-            "active_provider": active_text_provider,
-            "active_text_provider": active_text_provider,
-            "text_provenance": active_text_prov,
-            "textProvenance": active_text_prov,
-        })
-
-        return {
-            "status": "success",
-            "session_zid": session_zid,
-            "fingerprint": new_fp,
-            "data_rows": data_rows,
-            "rows": structured_rows,
-            "translated_text": translated_html,
-            "translatedText": translated_html,
-            "sentences": normalized_sentences,
-            "active_provider": active_text_provider,
-            "active_text_provider": active_text_provider,
-            "text_provenance": active_text_prov,
-            "textProvenance": active_text_prov,
-        }
+    def _publish_retext_result(self, result, sentences, language):
+        rows = sort_session_data_rows(result['data_rows'], result['headers'], language, self.config, self.resolved_paths, role_fields=result['role_fields'])
+        payload = {key: result[key] for key in ('status', 'session_zid', 'fingerprint', 'data_rows', 'translated_text', 'translatedText', 'text_provenance', 'textProvenance', 'active_text_provider')}
+        payload.update(sentences=sentences, active_provider=result['active_text_provider'], rows=format_update_rows_dict(rows, result['headers'], result['role_fields']))
+        try:
+            safe_write_update_js(result['tsv_path'], rows, result['headers'], result['role_fields'], stage='finished', status='success', source_text='', translated_text=result['translated_text'], sentences=sentences, zid=result['session_zid'], config=self.config)
+            self.emit_event(result['session_zid'], dict(payload, type='update', stage='translated_text'))
+        except Exception as exc:
+            raise StructuredError(ErrorCode.DESK_FAILED, 'Re-text committed; update delivery failed', details={'committed': True}) from exc
+        return payload
 
     def propagate_enrichment_to_siblings(
         self,
@@ -3007,7 +2743,7 @@ class SessionArbiter:
                 sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                 structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
                 if not is_sqlite and sib_tsv:
-                    safe_write_update_js(sib_tsv, sorted_rows, headers, role_fields, stage="translated", zid=sib_zid)
+                    safe_write_update_js(sib_tsv, sorted_rows, headers, role_fields, stage="translated", zid=sib_zid, config=self.config)
                 self.emit_event(sib_zid, {
                     "type": "update",
                     "stage": "translated",
@@ -3260,7 +2996,7 @@ class SessionArbiter:
         effective_text_prov = f"live:{text_provider}" if (need_sentence_trans and translated_text_res) else None
 
         if not is_sqlite and tsv_path:
-            safe_write_update_js(tsv_path, display_rows, headers, role_fields, stage="translated", status="success", translated_text=translated_text_res, text_provenance=effective_text_prov, zid=session_zid, trace_id=eff_trace_id, row_provenances=retried_row_provenances)
+            safe_write_update_js(tsv_path, display_rows, headers, role_fields, stage="translated", status="success", translated_text=translated_text_res, text_provenance=effective_text_prov, zid=session_zid, trace_id=eff_trace_id, row_provenances=retried_row_provenances, config=self.config)
 
         event_payload = {
             "type": "update",
@@ -3500,6 +3236,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             dispatcher.unregister(zid, q)
 
     def _dispatch_route(self, method: str):
+        EventDispatcher.get_instance().controller_owned = True
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         qs = urllib.parse.parse_qs(parsed_url.query)
@@ -3593,6 +3330,40 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 bypass_lang_check=body.get('bypass_lang_check', False)
             )
             self._send_json(200, res)
+            return
+
+        if path == '/internal/selection':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, 'Selection query requires POST')
+            body = self._read_json_body()
+            self._authenticate_token(body)
+            session_zid = body.get('session_zid')
+            if not session_zid:
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Selection query requires a session')
+            adapter = getattr(self.server.arbiter, 'storage_adapter', None) or get_storage_adapter(self.server.config, self.server.resolved_paths)
+            words = adapter.db.get_words_by_session(session_zid)
+            membership = {word['lemma'].strip().lower(): bool(word['selected']) for word in words}
+            events = []
+            client_id = body.get('client_id')
+            if client_id:
+                events = EventDispatcher.get_instance().poll_events(
+                    session_zid, str(client_id), accept=body.get('accept_updates', True), close=body.get('close', False))
+            self._send_json(200, {'ok': True, 'shared_selection': membership, 'events': events})
+            return
+
+        if path == '/internal/stage':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, 'Stage ingress requires POST')
+            body = self._read_json_body()
+            self._authenticate_token(body)
+            session_zid = body.get('session_zid')
+            event = body.get('event')
+            if not session_zid or not isinstance(event, dict):
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Stage ingress requires a session and event')
+            if event.get('session_zid', session_zid) != session_zid:
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Stage session identity mismatch')
+            self.server.arbiter.emit_event(session_zid, event)
+            self._send_json(200, {'ok': True})
             return
 
         if path == '/session/save':

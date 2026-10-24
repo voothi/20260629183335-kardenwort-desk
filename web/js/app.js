@@ -1,3 +1,5 @@
+// @ts-check
+/// <reference path="host.d.ts" />
 (function() {
     window.reserveTextRegions = function(reset) {
         ['source-container', 'translation-container'].forEach(function(id) {
@@ -10,7 +12,7 @@
         });
     };
     window.addEventListener('resize', function() { window.reserveTextRegions(true); });
-    window.AppState = window.AppState || {};
+    window.AppState = window.AppState || {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
     window.AppState.rows = window.AppState.rows || {};
 
     window.escapeHtml = function(str) {
@@ -31,20 +33,26 @@
     var FINGERPRINT = '';
     var SERVER_ENABLED = false;
     var IS_OFFLINE = false;
-    var sseSource = null;
+
+    /** @param {string} id @returns {HTMLElement} */
+    function requireElement(id) {
+        var element = document.getElementById(id);
+        if (!element) throw new Error('Required UI element missing: ' + id);
+        return element;
+    }
 
     function getSelectedRowIds() {
-        var selected = [];
-        var seen = {};
+        /** @type {number[]} */ var selected = [];
+        var /** @type {Desk.Membership} */ seen = {};
 
-        var checkedBoxes = document.querySelectorAll('.kw-tag-checkbox:checked');
+        var checkedBoxes = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('.kw-tag-checkbox:checked'));
         checkedBoxes.forEach(function (cb) {
             var rId = cb.getAttribute('data-row-id');
             if (rId === null || rId === '') {
                 rId = cb.getAttribute('data-token-order');
             }
             if (rId !== null && rId !== '') {
-                var num = parseInt(rId, 10);
+                var num = parseInt(String(rId), 10);
                 if (!isNaN(num) && !seen[num]) {
                     seen[num] = true;
                     selected.push(num);
@@ -52,14 +60,14 @@
             }
         });
 
-        var selectedRows = document.querySelectorAll('#lemma-table tbody tr.kw-row-selected, #lemma-table tbody tr.selected, #lemma-table tbody tr[data-selected="1"]');
+        var selectedRows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr.kw-row-selected, #lemma-table tbody tr.selected, #lemma-table tbody tr[data-selected="1"]'));
         selectedRows.forEach(function (row) {
             var rId = row.getAttribute('data-row-id');
             if (rId === null || rId === '') {
                 rId = row.getAttribute('data-token-order');
             }
             if (rId !== null && rId !== '') {
-                var num = parseInt(rId, 10);
+                var num = parseInt(String(rId), 10);
                 if (!isNaN(num) && !seen[num]) {
                     seen[num] = true;
                     selected.push(num);
@@ -69,7 +77,7 @@
 
         if (selected.length === 0 && window.AppState && Array.isArray(window.AppState.selected_ids)) {
             window.AppState.selected_ids.forEach(function (id) {
-                var num = parseInt(id, 10);
+                var num = parseInt(String(id), 10);
                 if (!isNaN(num) && !seen[num]) {
                     seen[num] = true;
                     selected.push(num);
@@ -85,6 +93,7 @@
         return JSON.stringify(getSelectedRowIds());
     };
 
+    /** @param {string} msg @param {boolean} isError */
     function setStatusMessage(msg, isError) {
         var statusEl = document.getElementById('kw-interactive-status');
         if (statusEl) {
@@ -94,6 +103,7 @@
         }
     }
 
+    /** @param {string} status */
     function setSseStatus(status) {
         var el = document.getElementById('sse-status');
         if (!el) return;
@@ -116,7 +126,7 @@
             window.notifyAHKSelection();
             return;
         }
-        var rowEl = checkboxEl.closest ? checkboxEl.closest('tr') : checkboxEl.parentElement.parentElement;
+        var rowEl = checkboxEl.closest ? checkboxEl.closest('tr') : (checkboxEl.parentElement && checkboxEl.parentElement.parentElement);
         if (rowEl) {
             if (newStatus) {
                 rowEl.classList.add('kw-row-selected');
@@ -193,7 +203,7 @@
 
     window.kwExportSelected = function () {
         var selectedIds = getSelectedRowIds();
-        var btn = document.getElementById('kw-export-btn');
+        var btn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-export-btn'));
         if (btn) btn.disabled = true;
         setStatusMessage('Exporting...', false);
 
@@ -230,78 +240,17 @@
         });
     };
 
+    /** @param {string} sessionZid */
     function initSSE(sessionZid) {
-        if (!sessionZid || typeof window.EventSource === 'undefined') return;
-        // R25, Task 7.9: Guard against local file:/// filesystem URI errors
-        if (window.location.protocol === 'file:' && !SERVER_URL) return;
-
-        try {
-            // R5, Task 7.5: Active connection guard: only single EventSource per session
-            if (window._kwEvtSource) {
-                try { window._kwEvtSource.close(); } catch (e) { console.warn('[Kardenwort] Error closing active EventSource:', e); }
-                window._kwEvtSource = null;
-                window.__sseActiveZid = null;
-            }
-            if (sseSource) {
-                try { sseSource.close(); } catch (e) { console.warn('[Kardenwort] Error closing local EventSource:', e); }
-                sseSource = null;
-            }
-
-            // R25, Task 7.9: Construct safe URL with SERVER_URL
-            var base = (SERVER_URL || '').replace(/\/+$/, '');
-            var sseUrl = (base ? base : '') + '/events?zid=' + encodeURIComponent(sessionZid);
-            sseSource = new EventSource(sseUrl);
-            window._kwEvtSource = sseSource;
-            window.__sseActiveZid = sessionZid;
-
-            sseSource.onopen = function () {
-                setSseStatus('connected');
-            };
-            sseSource.onerror = function () {
-                setSseStatus('error');
-            };
-
-            // R12, Task 7.6: Wire sseSource.onmessage to process progressive updates
-            sseSource.onmessage = function (e) {
-                try {
-                    var data = JSON.parse(e.data);
-                    if (!data) return;
-
-                    if (data.type === 'provider_failover') {
-                        if (typeof window.updateActiveProvider === 'function') {
-                            var tType = data.task_type || data.task;
-                            var nProv = data.new_provider || data.to || data.provider;
-                            if (nProv) window.updateActiveProvider(tType, nProv);
-                        }
-                    } else if (data.type === 'tag_updated') {
-                        var cb = document.querySelector('.kw-tag-checkbox[data-token-order="' + data.row_id + '"]');
-                        if (cb && cb.checked !== data.status) {
-                            cb.checked = data.status;
-                            var r = cb.closest ? cb.closest('tr') : cb.parentElement.parentElement;
-                            if (r) {
-                                if (data.status) r.classList.add('kw-row-selected');
-                                else r.classList.remove('kw-row-selected');
-                            }
-                        }
-                    } else if (data.type === 'update' || data.stage === 'translated_text' || data.rows || data.stage === 'enrichment' || data.is_finished) {
-                        if (typeof window.receiveUpdate === 'function') {
-                            window.receiveUpdate(data);
-                        }
-                    }
-                } catch (err) {
-                    // Ignore ping or non-json SSE comments
-                }
-            };
-        } catch (e) {
-            setSseStatus('error');
-        }
+        if (!window.SSEBridge) throw new Error('Required SSE bridge is unavailable');
+        window.SSEBridge.connect(sessionZid, SERVER_URL);
     }
     window.initSSE = initSSE;
 
 
     // Tokenization Helpers
-    var sourceSpansArray = [];
-    var transSpansArray = [];
+    /** @type {HTMLElement[]} */ var sourceSpansArray = [];
+    /** @type {HTMLElement[]} */ var transSpansArray = [];
     var isMvpIndexBuilt = false;
 
     window.sourceSpansArray = sourceSpansArray;
@@ -310,12 +259,14 @@
     window.__selectableTextMode = false;
     window.__persistentSelectableMode = false;
 
+    /** @param {string} text */
     function tokenizeText(text) {
         var rx = /([a-zA-Z0-9'\u00C0-\u024F\u0400-\u04FF\u0500-\u052F\u1E00-\u1EFF]+)/g;
         return text.split(rx);
     }
     window.tokenizeText = tokenizeText;
 
+    /** @param {unknown} str */
     function escapeHtml(str) {
         if (!str) return '';
         return String(str)
@@ -330,7 +281,7 @@
     function tokenizeSource() {
         var sc = document.getElementById('source-container');
         if (!sc) return;
-        if (sc.querySelector('span.word')) return;
+        if (/** @type {HTMLElement|null} */ (sc.querySelector('span.word'))) return;
         var raw = (sc.textContent || '').trim();
         if (!raw) return;
         var parts = tokenizeText(raw);
@@ -352,10 +303,11 @@
     }
     window.tokenizeSource = tokenizeSource;
 
+    /** @param {string=} text @param {Desk.Word[]=} words */
     function tokenizeTranslation(text, words) {
         var tc = document.getElementById('translation-container');
         if (!tc) return;
-        if (tc.querySelector('[data-pending="true"]') || tc.querySelector('.skeleton-loader') || tc.classList.contains('skeleton-loader')) {
+        if (/** @type {HTMLElement|null} */ (tc.querySelector('[data-pending="true"]')) || /** @type {HTMLElement|null} */ (tc.querySelector('.skeleton-loader')) || tc.classList.contains('skeleton-loader')) {
             return;
         }
         if (typeof text === 'string' && text) {
@@ -365,32 +317,32 @@
         var sc = document.getElementById('source-container');
         var maxSourceSent = 1;
         if (sc) {
-            var scChunks = sc.querySelectorAll('.kw-sentence-chunk, span.word[data-sentence-idx]');
+            var scChunks = /** @type {NodeListOf<HTMLElement>} */ (sc.querySelectorAll('.kw-sentence-chunk, span.word[data-sentence-idx]'));
             for (var scIdx = 0; scIdx < scChunks.length; scIdx++) {
-                var sVal = parseInt(scChunks[scIdx].getAttribute('data-sentence-idx'), 10);
+                var sVal = parseInt(String(scChunks[scIdx].getAttribute('data-sentence-idx')), 10);
                 if (!isNaN(sVal) && sVal > maxSourceSent) maxSourceSent = sVal;
             }
         }
         if (maxSourceSent === 1 && window.AppState && window.AppState.sentenceCards && window.AppState.sentenceCards.length > 1) {
             maxSourceSent = window.AppState.sentenceCards.length - 1;
         }
-        var isSingleChildTab = (tc.getAttribute('data-sentence-idx') && parseInt(tc.getAttribute('data-sentence-idx'), 10) > 0);
+        var isSingleChildTab = (tc.getAttribute('data-sentence-idx') && parseInt(String(tc.getAttribute('data-sentence-idx')), 10) > 0);
         var hasMultiSent = (!isSingleChildTab && maxSourceSent > 1);
 
         var divs = tc.getElementsByTagName('div');
         if (divs.length === 0) {
             var tcSentIdx = tc.getAttribute('data-sentence-idx') || '1';
             var tcLineIdx = tc.getAttribute('data-line-idx') || '0';
-            var firstChild = tc.firstChild;
+            var firstChild = /** @type {HTMLElement|null} */ (tc.firstChild);
             if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
                 var childSpans = tc.getElementsByTagName('span');
                 for (var j = 0; j < childSpans.length; j++) {
                     var span = childSpans[j];
                     if (span.classList && span.classList.contains('word')) {
                         if (!span.classList.contains('hl-mvp')) span.classList.add('hl-mvp');
-                        if (!span.getAttribute('data-line-idx')) span.setAttribute('data-line-idx', tcLineIdx);
-                        if (!span.getAttribute('data-sentence-idx')) span.setAttribute('data-sentence-idx', tcSentIdx);
-                        if (!span.getAttribute('data-word')) span.setAttribute('data-word', span.textContent.trim());
+                        if (!span.getAttribute('data-line-idx')) span.setAttribute('data-line-idx', String(tcLineIdx));
+                        if (!span.getAttribute('data-sentence-idx')) span.setAttribute('data-sentence-idx', String(tcSentIdx));
+                        if (!span.getAttribute('data-word')) span.setAttribute('data-word', String((span.textContent || '').trim()));
                         if (!span.getAttribute('data-order')) span.setAttribute('data-order', String(j));
                     }
                 }
@@ -398,7 +350,7 @@
                 var rawText = tc.textContent || tc.innerText || '';
                 var parts = tokenizeText(rawText);
                 var html = '';
-                var curSent = hasMultiSent ? 1 : (parseInt(tcSentIdx, 10) || 1);
+                var curSent = hasMultiSent ? 1 : (parseInt(String(tcSentIdx), 10) || 1);
                 var wordCounter = 0;
                 for (var k = 0; k < parts.length; k++) {
                     var part = parts[k];
@@ -418,7 +370,7 @@
             }
         } else if (divs.length === 1 && hasMultiSent) {
             var div = divs[0];
-            var firstChild = div.firstChild;
+            var firstChild = /** @type {HTMLElement|null} */ (div.firstChild);
             if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
                 var childSpans = div.getElementsByTagName('span');
                 for (var j = 0; j < childSpans.length; j++) {
@@ -427,7 +379,7 @@
                         if (!span.classList.contains('hl-mvp')) span.classList.add('hl-mvp');
                         if (!span.getAttribute('data-line-idx')) span.setAttribute('data-line-idx', '0');
                         if (!span.getAttribute('data-sentence-idx')) span.setAttribute('data-sentence-idx', '1');
-                        if (!span.getAttribute('data-word')) span.setAttribute('data-word', span.textContent.trim());
+                        if (!span.getAttribute('data-word')) span.setAttribute('data-word', String((span.textContent || '').trim()));
                         if (!span.getAttribute('data-order')) span.setAttribute('data-order', String(j));
                     }
                 }
@@ -458,9 +410,9 @@
             for (var i = 0; i < divs.length; i++) {
                 var div = divs[i];
                 var divSentIdx = div.getAttribute('data-sentence-idx') || String(i + 1);
-                div.setAttribute('data-sentence-idx', divSentIdx);
+                div.setAttribute('data-sentence-idx', String(divSentIdx));
                 div.setAttribute('data-line-idx', String(i));
-                var firstChild = div.firstChild;
+                var firstChild = /** @type {HTMLElement|null} */ (div.firstChild);
                 if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
                     var childSpans = div.getElementsByTagName('span');
                     for (var j = 0; j < childSpans.length; j++) {
@@ -468,8 +420,8 @@
                         if (span.classList && span.classList.contains('word')) {
                             if (!span.classList.contains('hl-mvp')) span.classList.add('hl-mvp');
                             if (!span.getAttribute('data-line-idx')) span.setAttribute('data-line-idx', String(i));
-                            if (!span.getAttribute('data-sentence-idx')) span.setAttribute('data-sentence-idx', divSentIdx);
-                            if (!span.getAttribute('data-word')) span.setAttribute('data-word', span.textContent.trim());
+                            if (!span.getAttribute('data-sentence-idx')) span.setAttribute('data-sentence-idx', String(divSentIdx));
+                            if (!span.getAttribute('data-word')) span.setAttribute('data-word', String((span.textContent || '').trim()));
                             if (!span.getAttribute('data-order')) span.setAttribute('data-order', String(globalWordCounter++));
                         }
                     }
@@ -510,13 +462,13 @@
         if (effProv) {
             var pTitle = (typeof formatProvenanceTooltip === 'function') ? formatProvenanceTooltip(effProv) : ((typeof window.formatProvenanceTooltip === 'function') ? window.formatProvenanceTooltip(effProv) : ('Translated via ' + effProv));
             if (pTitle) {
-                tc.setAttribute('data-provenance', effProv);
-                tc.setAttribute('title', pTitle);
+                tc.setAttribute('data-provenance', String(effProv));
+                tc.setAttribute('title', String(pTitle));
                 var spans = tc.getElementsByTagName('span');
                 for (var sIdx = 0; sIdx < spans.length; sIdx++) {
                     if (spans[sIdx].classList && (spans[sIdx].classList.contains('word') || spans[sIdx].classList.contains('hl-mvp'))) {
-                        spans[sIdx].setAttribute('data-provenance', effProv);
-                        spans[sIdx].setAttribute('title', pTitle);
+                        spans[sIdx].setAttribute('data-provenance', String(effProv));
+                        spans[sIdx].setAttribute('title', String(pTitle));
                     }
                 }
             }
@@ -537,11 +489,11 @@
         transSpansArray = [];
         var sc = document.getElementById('source-container');
         if (sc) {
-            var srcSpans = sc.querySelectorAll('span.word');
+            var srcSpans = /** @type {NodeListOf<HTMLElement>} */ (sc.querySelectorAll('span.word'));
             if (srcSpans.length > 0) isMvpIndexBuilt = true;
             for (var i = 0; i < srcSpans.length; i++) {
                 var span = srcSpans[i];
-                var chunk = span.closest ? span.closest('.kw-sentence-chunk') : span.parentElement;
+                var chunk = /** @type {HTMLElement|null} */ (span.closest ? span.closest('.kw-sentence-chunk') : span.parentElement);
                 if (chunk && chunk.classList && chunk.classList.contains('kw-sentence-chunk') && chunk.style && chunk.style.display === 'none') {
                     continue;
                 }
@@ -550,7 +502,7 @@
                 var sentIdx = span.getAttribute('data-sentence-idx');
                 if (!sentIdx && chunk && chunk.getAttribute) {
                     sentIdx = chunk.getAttribute('data-sentence-idx');
-                    if (sentIdx) span.setAttribute('data-sentence-idx', sentIdx);
+                    if (sentIdx) span.setAttribute('data-sentence-idx', String(sentIdx));
                 }
                 sourceSpansArray.push(span);
             }
@@ -558,10 +510,10 @@
         var tc = document.getElementById('translation-container');
         if (tc) {
             var tcSentIdx = tc.getAttribute('data-sentence-idx');
-            var transSpans = tc.querySelectorAll('span.word, span.hl-mvp');
+            var transSpans = /** @type {NodeListOf<HTMLElement>} */ (tc.querySelectorAll('span.word, span.hl-mvp'));
             for (var j = 0; j < transSpans.length; j++) {
                 var span = transSpans[j];
-                var chunk = span.closest ? span.closest('div') : span.parentElement;
+                var chunk = /** @type {HTMLElement|null} */ (span.closest ? span.closest('div') : span.parentElement);
                 if (chunk && chunk.style && chunk.style.display === 'none') {
                     continue;
                 }
@@ -575,7 +527,7 @@
                         spanSentIdx = tcSentIdx;
                     }
                     if (spanSentIdx) {
-                        span.setAttribute('data-sentence-idx', spanSentIdx);
+                        span.setAttribute('data-sentence-idx', String(spanSentIdx));
                     }
                 }
                 transSpansArray.push(span);
@@ -587,15 +539,15 @@
     window.buildLcIndex = buildLcIndex;
 
     function wireActionToolbar() {
-        var btnSame = document.getElementById('kw-btn-same-lemma');
+        var btnSame = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-same-lemma'));
         if (btnSame && !btnSame.__kw_bound) {
             btnSame.__kw_bound = true;
             btnSame.addEventListener('click', function (e) {
                 e.preventDefault();
                 if (typeof window.toggleHighlightSameLemma === 'function') {
                     window.toggleHighlightSameLemma();
-                } else if (typeof toggleHighlightSameLemma === 'function') {
-                    toggleHighlightSameLemma();
+                } else if (typeof window.toggleHighlightSameLemma === 'function') {
+                    window.toggleHighlightSameLemma();
                 }
             });
             if (window.AppState && window.AppState.highlightSameLemma) {
@@ -603,15 +555,15 @@
             }
         }
 
-        var btnFilter = document.getElementById('kw-btn-filter-selected');
+        var btnFilter = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-filter-selected'));
         if (btnFilter && !btnFilter.__kw_bound) {
             btnFilter.__kw_bound = true;
             btnFilter.addEventListener('click', function (e) {
                 e.preventDefault();
                 if (typeof window.toggleFilterSelectedOnly === 'function') {
                     window.toggleFilterSelectedOnly();
-                } else if (typeof toggleFilterSelectedOnly === 'function') {
-                    toggleFilterSelectedOnly();
+                } else if (typeof window.toggleFilterSelectedOnly === 'function') {
+                    window.toggleFilterSelectedOnly();
                 }
             });
             if (window.AppState && window.AppState.filterSelectedOnly) {
@@ -621,7 +573,7 @@
             }
         }
 
-        var btnSave = document.getElementById('kw-btn-save');
+        var btnSave = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-save'));
         if (btnSave && !btnSave.__kw_bound) {
             btnSave.__kw_bound = true;
             btnSave.addEventListener('click', function (e) {
@@ -630,7 +582,7 @@
             });
         }
 
-        var btnUpdate = document.getElementById('kw-btn-update');
+        var btnUpdate = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-update'));
         if (btnUpdate && !btnUpdate.__kw_bound) {
             btnUpdate.__kw_bound = true;
             btnUpdate.addEventListener('click', function (e) {
@@ -639,7 +591,7 @@
             });
         }
 
-        var btnRetext = document.getElementById('kw-btn-retext');
+        var btnRetext = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-retext'));
         if (btnRetext && !btnRetext.__kw_bound) {
             btnRetext.__kw_bound = true;
             btnRetext.addEventListener('click', function (e) {
@@ -648,7 +600,7 @@
             });
         }
 
-        var btnReword = document.getElementById('kw-btn-reword');
+        var btnReword = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-reword'));
         if (btnReword && !btnReword.__kw_bound) {
             btnReword.__kw_bound = true;
             btnReword.addEventListener('click', function (e) {
@@ -657,7 +609,7 @@
             });
         }
 
-        var btnExport = document.getElementById('kw-btn-export');
+        var btnExport = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-export'));
         if (btnExport && !btnExport.__kw_bound) {
             btnExport.__kw_bound = true;
             btnExport.addEventListener('click', function (e) {
@@ -666,7 +618,7 @@
             });
         }
 
-        var btnHand = document.getElementById('kw-btn-hand-tool');
+        var btnHand = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-hand-tool'));
         if (btnHand && !btnHand.__kw_bound) {
             btnHand.__kw_bound = true;
             btnHand.addEventListener('click', function (e) {
@@ -675,7 +627,7 @@
             });
         }
 
-        var btnDelete = document.getElementById('kw-btn-delete');
+        var btnDelete = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-delete'));
         if (btnDelete && !btnDelete.__kw_bound) {
             btnDelete.__kw_bound = true;
             btnDelete.addEventListener('click', function (e) {
@@ -684,7 +636,7 @@
             });
         }
 
-        var btnLangYes = document.getElementById('kw-btn-lang-yes');
+        var btnLangYes = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-yes'));
         if (btnLangYes && !btnLangYes.__kw_bound) {
             btnLangYes.__kw_bound = true;
             btnLangYes.addEventListener('click', function (e) {
@@ -693,7 +645,7 @@
             });
         }
 
-        var btnLangNo = document.getElementById('kw-btn-lang-no');
+        var btnLangNo = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-no'));
         if (btnLangNo && !btnLangNo.__kw_bound) {
             btnLangNo.__kw_bound = true;
             btnLangNo.addEventListener('click', function (e) {
@@ -702,7 +654,7 @@
             });
         }
 
-        var btnLangCancel = document.getElementById('kw-btn-lang-cancel');
+        var btnLangCancel = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-cancel'));
         if (btnLangCancel && !btnLangCancel.__kw_bound) {
             btnLangCancel.__kw_bound = true;
             btnLangCancel.addEventListener('click', function (e) {
@@ -714,32 +666,6 @@
     window.wireActionToolbar = wireActionToolbar;
 
 
-
-    window.playAudio = function(text, lang) {
-        if (typeof playAudio === 'function' && playAudio !== window.playAudio) {
-            return playAudio(text, lang);
-        }
-    };
-
-    window.undo = function() {
-        if (typeof historyIndex !== 'undefined' && historyIndex >= 0 && typeof revertAction === 'function') {
-            var action = historyStack[historyIndex];
-            historyIndex--;
-            revertAction(action);
-            if (typeof rebuildDeltas === 'function') rebuildDeltas();
-            if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
-        }
-    };
-
-    window.redo = function() {
-        if (typeof historyIndex !== 'undefined' && typeof historyStack !== 'undefined' && historyIndex < historyStack.length - 1 && typeof applyAction === 'function') {
-            historyIndex++;
-            var action = historyStack[historyIndex];
-            applyAction(action);
-            if (typeof rebuildDeltas === 'function') rebuildDeltas();
-            if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
-        }
-    };
 
     function hydrateSession() {
         var bootstrapEl = document.getElementById('kardenwort-bootstrap');
@@ -754,7 +680,7 @@
                 bootstrapPayload = JSON.parse(rawBootstrap);
             } catch (err) {
                 console.error('Error parsing #kardenwort-bootstrap JSON:', err);
-                throw new Error('Malformed #kardenwort-bootstrap JSON: ' + (err.message || String(err)));
+                throw new Error('Malformed #kardenwort-bootstrap JSON: ' + (err instanceof Error ? err.message : String(err)));
             }
         }
 
@@ -764,7 +690,7 @@
                 sessionPayload = JSON.parse(rawSession);
             } catch (err) {
                 console.error('Error parsing #session-data JSON:', err);
-                throw new Error('Malformed #session-data JSON: ' + (err.message || String(err)));
+                throw new Error('Malformed #session-data JSON: ' + (err instanceof Error ? err.message : String(err)));
             }
         }
 
@@ -778,7 +704,7 @@
             // Unpack Unified Bootstrap State into window globals & AppState
             if (bootstrapPayload) {
                 window.__CONFIG__ = bootstrapPayload.ui_config || window.__CONFIG__ || {};
-                window.AppState = window.AppState || {};
+                window.AppState = window.AppState || {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
                 window.AppState.config = window.__CONFIG__;
                 window.AppState.bootstrap = bootstrapPayload;
                 if (bootstrapPayload.sentence_cards) {
@@ -791,7 +717,7 @@
                 }
             } else if (session) {
                 window.__CONFIG__ = window.__CONFIG__ || {};
-                window.AppState = window.AppState || {};
+                window.AppState = window.AppState || {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
                 window.AppState.config = window.__CONFIG__;
             }
 
@@ -812,7 +738,7 @@
 
             if (session.sentence_translation || session.translated_text) {
                 window.AppState.translatedText = session.sentence_translation || session.translated_text;
-                window.AppState.translated_text = window.AppState.translatedText;
+                window.AppState.translated_text = window.AppState.translatedText || undefined;
             }
             if (session.source_text) {
                 window.AppState.sourceText = session.source_text;
@@ -832,9 +758,9 @@
             // Check mismatch
             var mismEl = document.getElementById('mismatch-info');
             var isMismatch = false;
-            if (mismEl && mismEl.textContent.trim() && mismEl.textContent.trim() !== '{}') {
+            if (mismEl && (mismEl.textContent || '').trim() && (mismEl.textContent || '').trim() !== '{}') {
                 try {
-                    var mParsed = JSON.parse(mismEl.textContent);
+                    var mParsed = JSON.parse(mismEl.textContent || '{}');
                     if (mParsed && mParsed.is_mismatch) isMismatch = true;
                 } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             }
@@ -845,7 +771,7 @@
             var srcEl = document.getElementById('source-container');
             if (isMismatch) {
                 if (srcEl) srcEl.textContent = '';
-            } else if (srcEl && !srcEl.children.length && !srcEl.textContent.trim() && session.source_text) {
+            } else if (srcEl && !srcEl.children.length && !(srcEl.textContent || '').trim() && session.source_text) {
                 srcEl.textContent = session.source_text;
             }
 
@@ -853,12 +779,12 @@
             var transEl = document.getElementById('translation-container');
             if (isMismatch) {
                 if (transEl) transEl.textContent = '';
-            } else if (transEl && !transEl.children.length && !transEl.textContent.trim() && session.sentence_translation) {
+            } else if (transEl && !transEl.children.length && !(transEl.textContent || '').trim() && session.sentence_translation) {
                 transEl.textContent = session.sentence_translation;
             }
 
             // Hydrate Table
-            var tbody = document.querySelector('#lemma-table tbody');
+            var tbody = /** @type {HTMLElement|null} */ (document.querySelector('#lemma-table tbody'));
             if (isMismatch) {
                 if (tbody) tbody.innerHTML = '';
             } else if (tbody && !tbody.children.length && session.data_rows && session.data_rows.length) {
@@ -878,13 +804,14 @@
                 if (colGen === -1) colGen = headers.indexOf('gender');
                 if (colGen === -1) colGen = headers.indexOf('g');
 
-                session.data_rows.forEach(function (row, idx) {
+                var hydrationBody = tbody;
+                session.data_rows.forEach(/** @param {string[]} row @param {number} idx */ function (row, idx) {
                     var tr = document.createElement('tr');
-                    tr.setAttribute('data-row-id', idx);
-                    tr.setAttribute('data-token-order', idx);
+                    tr.setAttribute('data-row-id', String(idx));
+                    tr.setAttribute('data-token-order', String(idx));
                     var isInitSel = (window.AppState && window.AppState.selected_ids && window.AppState.selected_ids.indexOf(idx) !== -1);
-                    tr.setAttribute('data-selected', isInitSel ? '1' : '0');
-                    tr.setAttribute('data-filter-hidden', isInitSel ? '0' : '1');
+                    tr.setAttribute('data-selected', String(isInitSel ? '1' : '0'));
+                    tr.setAttribute('data-filter-hidden', String(isInitSel ? '0' : '1'));
                     if (isInitSel) {
                         tr.classList.add('selected', 'kw-row-selected');
                     }
@@ -895,17 +822,18 @@
                         var cb = document.createElement('input');
                         cb.type = 'checkbox';
                         cb.className = 'kw-tag-checkbox';
-                        cb.setAttribute('data-row-id', idx);
-                        cb.setAttribute('data-token-order', idx);
-                        cb.onchange = function () { window.kwToggleTag(this, idx); };
+                        cb.setAttribute('data-row-id', String(idx));
+                        cb.setAttribute('data-token-order', String(idx));
+                        cb.onchange = function () { window.kwToggleTag(cb, idx); };
                         tdTag.appendChild(cb);
                         tr.appendChild(tdTag);
                     }
 
+                    /** @param {string} cls @param {string} colName @param {string|Node} text @param {boolean} isEditable */
                     function makeCell(cls, colName, text, isEditable) {
                         var td = document.createElement('td');
                         td.className = (isEditable ? 'editable ' : '') + cls;
-                        if (colName) td.setAttribute('data-col', colName);
+                        if (colName) td.setAttribute('data-col', String(colName));
                         var scrollDiv = document.createElement('div');
                         scrollDiv.className = 'scrollable-cell';
                         var nodeVal = /** @type {any} */ (text);
@@ -918,7 +846,7 @@
                                 scrollDiv.innerHTML = text;
                             }
                         } else {
-                            scrollDiv.textContent = text || '';
+                            scrollDiv.textContent = String(text || '');
                         }
                         td.appendChild(scrollDiv);
                         return td;
@@ -940,18 +868,18 @@
                     tr.appendChild(makeCell('col-pos', 'WordSourcePOS', valPos, false));
                     tr.appendChild(makeCell('col-gender', 'WordSourceGender', valGen, false));
 
-                    tbody.appendChild(tr);
+                    hydrationBody.appendChild(tr);
                 });
             }
 
             // Synchronize thead tag header with actual checkboxes
-            var theadTr = document.querySelector('#lemma-table thead tr');
+            var theadTr = /** @type {HTMLElement|null} */ (document.querySelector('#lemma-table thead tr'));
             if (theadTr) {
-                var existingTagTh = theadTr.querySelector('.kw-tag-header');
-                var hasCheckboxes = !!document.querySelector('#lemma-table tbody .kw-tag-control, #lemma-table tbody .kw-tag-checkbox');
+                var existingTagTh = /** @type {HTMLElement|null} */ (theadTr.querySelector('.kw-tag-header'));
+                var hasCheckboxes = !!/** @type {HTMLElement|null} */ (document.querySelector('#lemma-table tbody .kw-tag-control, #lemma-table tbody .kw-tag-checkbox'));
                 var shouldHaveTagHeader = SERVER_ENABLED && hasCheckboxes;
                 if (!shouldHaveTagHeader && existingTagTh) {
-                    existingTagTh.parentNode.removeChild(existingTagTh);
+                    if (existingTagTh.parentNode) existingTagTh.parentNode.removeChild(existingTagTh);
                 } else if (shouldHaveTagHeader && !existingTagTh) {
                     var newTh = document.createElement('th');
                     newTh.className = 'kw-tag-header';
@@ -1040,13 +968,14 @@
     }
     checkAhkHost();
 
+    /** @template {keyof HTMLElementEventMap} K @param {EventTarget} el @param {K} type @param {(this: HTMLElement, event: HTMLElementEventMap[K]) => void} fn */
     function addEvent(el, type, fn) {
         if (el.addEventListener) {
-            el.addEventListener(type, fn, false);
-        } else if (el.attachEvent) {
-            el.attachEvent('on' + type, fn);
+            el.addEventListener(type, /** @type {EventListener} */ (fn), false);
         } else {
-            el['on' + type] = fn;
+            var legacy = /** @type {EventTarget & {attachEvent?: (name: string, listener: EventListener) => void} & Partial<Record<`on${string}`, EventListener>>} */ (el);
+            if (legacy.attachEvent) legacy.attachEvent('on' + type, /** @type {EventListener} */ (fn));
+            else legacy[/** @type {`on${string}`} */ ('on' + type)] = /** @type {EventListener} */ (fn);
         }
     }
 
@@ -1059,16 +988,23 @@
 
     window.__mvpInitialized = true;
 
+    /** @param {Element|null|undefined} el @param {string} name */
     function removeClass(el, name) {
         if (el && el.classList) {
             el.classList.remove(name);
         }
     }
+    /** @param {Element|null|undefined} el @param {string} name */
     function addClass(el, name) {
         if (el && el.classList) {
             el.classList.add(name);
         }
     }
+    window.addClass = addClass;
+    window.removeClass = removeClass;
+    window.addEvent = addEvent;
+
+    /** @param {Node|null} el */
     function isAttached(el) {
         while (el) {
             if (el === document.documentElement) return true;
@@ -1078,10 +1014,11 @@
     }
 
 
+    /** @param {string} providerName */
     function formatProviderSkeletonLabel(providerName) {
         if (!providerName) return "Loading...";
         var name = String(providerName).trim().toLowerCase();
-        var map = {
+        var /** @type {Record<string,string>} */ map = {
             'argos': 'Argos...',
             'google': 'Google...',
             'deepl': 'DeepL...',
@@ -1091,10 +1028,11 @@
         return name.charAt(0).toUpperCase() + name.slice(1) + '...';
     }
 
+    /** @param {unknown} prov */
     function formatProvenanceTooltip(prov) {
         if (!prov) return "";
-        prov = String(prov).trim();
-        var p = prov;
+        var original = String(prov).trim();
+        var p = original;
         if (p.indexOf('live:') === 0) {
             p = p.substring(5);
         } else if (p.indexOf('provider:') === 0) {
@@ -1110,7 +1048,7 @@
             return 'Pre-filled from Corpus (WordFill)';
         }
         if (pLower.indexOf('corpus:wordfill:') === 0) {
-            return 'Pre-filled from Corpus (ZID: ' + prov.substring(16) + ')';
+            return 'Pre-filled from Corpus (ZID: ' + original.substring(16) + ')';
         }
         if (pLower === 'cached:sqlite') {
             return 'Loaded from session cache (SQLite)';
@@ -1119,18 +1057,19 @@
             return 'Loaded from translation file cache';
         }
         if (pLower.indexOf('fallback:') === 0) {
-            var pFb = prov.substring(9);
+            var pFb = original.substring(9);
             return 'Translated via fallback (' + pFb + ')';
         }
-        if (prov.indexOf('live:') === 0 || prov.indexOf('provider:') === 0) {
+        if (original.indexOf('live:') === 0 || original.indexOf('provider:') === 0) {
             return 'Translated via ' + p.charAt(0).toUpperCase() + p.slice(1);
         }
-        return prov;
+        return original;
     }
     window.formatProvenanceTooltip = formatProvenanceTooltip;
 
+    /** @param {unknown} translation @param {unknown=} provenance */
     function formatTranslationCellTooltip(translation, provenance) {
-        var cleanTrans = (translation || '').replace(/<[^>]+>/g, '').trim();
+        var cleanTrans = String(translation || '').replace(/<[^>]+>/g, '').trim();
         if (!cleanTrans || cleanTrans.indexOf('skeleton-loader') !== -1) {
             return '';
         }
@@ -1142,6 +1081,7 @@
     }
     window.formatTranslationCellTooltip = formatTranslationCellTooltip;
 
+    /** @param {string} text */
     function toUnicodeBold(text) {
         if (!text) return "";
         var res = "";
@@ -1160,21 +1100,22 @@
         return res;
     }
 
+    /** @param {string} sentenceText @param {string} inflectedVal @param {Desk.RowId=} tokenOrder @param {string=} lemma */
     function formatInflectedTooltip(sentenceText, inflectedVal, tokenOrder, lemma) {
         if (!sentenceText) return (inflectedVal || "").trim();
         if (!inflectedVal) return sentenceText.trim();
-        var targetIndices = {};
+        var /** @type {Desk.Membership} */ targetIndices = {};
         if (tokenOrder !== undefined && tokenOrder !== null) {
             var tStr = String(tokenOrder).trim();
             if (tStr.indexOf('+') !== -1) {
                 var parts = tStr.split('+');
                 for (var i = 0; i < parts.length; i++) {
-                    var num = parseInt(parts[i].trim(), 10);
+                    var num = parseInt(String(parts[i].trim()), 10);
                     if (!isNaN(num)) targetIndices[num] = true;
                 }
             }
         }
-        var targetWords = {};
+        var /** @type {Desk.Membership} */ targetWords = {};
         var lemmaClean = (lemma && String(lemma).trim()) ? String(lemma).trim().toLowerCase() : null;
         var rawComponents = String(inflectedVal || "").split(',');
         for (var c = 0; c < rawComponents.length; c++) {
@@ -1266,6 +1207,7 @@
         return null;
     }
 
+    /** @param {string} lemma @param {string=} gender @param {string=} lang @param {string=} pos */
     function formatLemmaTooltip(lemma, gender, lang, pos) {
         if (!lemma) return "";
         var cleanLemma = String(lemma).trim();
@@ -1327,6 +1269,7 @@
         return cleanLemma;
     }
 
+    /** @param {string} posVal @returns {string} */
     function formatPosTooltip(posVal) {
         if (!posVal) return "";
         var pClean = String(posVal).trim();
@@ -1349,6 +1292,7 @@
         return pClean;
     }
 
+    /** @param {string|undefined} lemma @param {string} genderCode */
     function detectGermanGenderSuffix(lemma, genderCode) {
         if (!lemma) return null;
         var w = String(lemma).trim().toLowerCase();
@@ -1396,12 +1340,14 @@
         return null;
     }
 
+    /** @param {unknown} provenance */
     function isAiProvenance(provenance) {
         if (!provenance) return false;
         var pStr = String(provenance).trim().toLowerCase();
         return pStr.indexOf('intellifiller') !== -1 || pStr === 'ai' || pStr === 'live:ai';
     }
 
+    /** @param {string} genderVal @param {string=} lemma @param {string=} provenance */
     function formatGenderTooltip(genderVal, lemma, provenance) {
         if (!genderVal) return "";
         var gClean = String(genderVal).trim().replace(/\.+$/, '').toLowerCase();
@@ -1432,6 +1378,7 @@
         return genderName;
     }
 
+    /** @param {string} classVal @param {string} role */
     function formatClassificationTooltip(classVal, role) {
         if (!classVal) return "";
         var valStr = String(classVal).trim();
@@ -1454,6 +1401,7 @@
         return valStr;
     }
 
+    /** @param {string} genderVal */
     function formatGenderBadge(genderVal) {
         if (!genderVal) return "";
         var g = String(genderVal).trim();
@@ -1510,6 +1458,7 @@
         return 'google';
     }
 
+    /** @param {string|null} taskType @param {string} newProvider */
     function updateActiveProvider(taskType, newProvider) {
         if (!newProvider) return;
         var provStr = String(newProvider).trim();
@@ -1527,7 +1476,7 @@
         var isText = (!tType || tType === 'text' || tType === 'sentence' || tType === 'all');
         var isLemma = (!tType || tType === 'lemma' || tType === 'word' || tType === 'all');
 
-        if (!window.AppState) window.AppState = {};
+        if (!window.AppState) window.AppState = {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
 
         // 1. Synchronize base provider script tags and AppState
         if (isText) {
@@ -1546,7 +1495,7 @@
         window.AppState.active_provider = pLower;
 
         // 2. Dynamically synchronize text translation skeletons
-        var updateSkeletonHtml = function(html) {
+        var updateSkeletonHtml = /** @param {string|undefined} html */ function(html) {
             if (!html || html.indexOf('skeleton-loader') === -1) return html;
             return html.replace(/(<span[^>]*class="[^"]*skeleton-loader[^"]*"[^>]*>)([^]*?)(<[/]span>)/gi, function(match, openTag, innerText, closeTag) {
                 var newOpenTag = openTag;
@@ -1567,20 +1516,20 @@
             if (tc) {
                 var isPendingTc = tc.classList.contains('skeleton-loader') ||
                                   tc.getAttribute('data-pending') === 'true' ||
-                                  tc.querySelector('.skeleton-loader') !== null ||
-                                  tc.querySelector('[data-pending="true"]') !== null;
+                                  /** @type {HTMLElement|null} */ (tc.querySelector('.skeleton-loader')) !== null ||
+                                  /** @type {HTMLElement|null} */ (tc.querySelector('[data-pending="true"]')) !== null;
                 if (isPendingTc) {
-                    var childSkels = tc.querySelectorAll('.skeleton-loader, [data-pending="true"]');
+                    var childSkels = /** @type {NodeListOf<HTMLElement>} */ (tc.querySelectorAll('.skeleton-loader, [data-pending="true"]'));
                     if (childSkels.length > 0) {
                         for (var i = 0; i < childSkels.length; i++) {
                             childSkels[i].textContent = label;
-                            childSkels[i].setAttribute('title', label);
-                            childSkels[i].setAttribute('data-tooltip', capProv);
+                            childSkels[i].setAttribute('title', String(label));
+                            childSkels[i].setAttribute('data-tooltip', String(capProv));
                         }
                     } else if (tc.classList.contains('skeleton-loader') || tc.getAttribute('data-pending') === 'true') {
                         tc.textContent = label;
-                        tc.setAttribute('title', label);
-                        tc.setAttribute('data-tooltip', capProv);
+                        tc.setAttribute('title', String(label));
+                        tc.setAttribute('data-tooltip', String(capProv));
                     }
                 }
             }
@@ -1588,7 +1537,7 @@
                 var cards = window.WorkspaceTabs.getCards();
                 if (cards && cards.length > 0) {
                     for (var c = 0; c < cards.length; c++) {
-                        if (cards[c].translated_text && cards[c].translated_text.indexOf('skeleton-loader') !== -1) {
+                        if (cards[c].translated_text && String(cards[c].translated_text).indexOf('skeleton-loader') !== -1) {
                             cards[c].translated_text = updateSkeletonHtml(cards[c].translated_text);
                         }
                     }
@@ -1598,20 +1547,20 @@
 
         // 3. Dynamically synchronize lemma translation skeletons in table rows
         if (isLemma) {
-            var tableSkels = document.querySelectorAll('td.col-translation .skeleton-loader, td.col-translation[data-pending="true"] .skeleton-loader, td[data-col="WordDestination"] .skeleton-loader, td[data-col="word_translation"] .skeleton-loader');
+            var tableSkels = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('td.col-translation .skeleton-loader, td.col-translation[data-pending="true"] .skeleton-loader, td[data-col="WordDestination"] .skeleton-loader, td[data-col="word_translation"] .skeleton-loader'));
             for (var k = 0; k < tableSkels.length; k++) {
                 var tSk = tableSkels[k];
                 tSk.textContent = label;
-                tSk.setAttribute('title', label);
-                tSk.setAttribute('data-tooltip', capProv);
+                tSk.setAttribute('title', String(label));
+                tSk.setAttribute('data-tooltip', String(capProv));
             }
             if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
                 var wCards = window.WorkspaceTabs.getCards();
                 if (wCards && wCards.length > 0) {
                     for (var wc = 0; wc < wCards.length; wc++) {
                         if (wCards[wc].words) {
-                            for (var wi = 0; wi < wCards[wc].words.length; wi++) {
-                                var wordObj = wCards[wc].words[wi];
+                            for (var wi = 0; wi < (wCards[wc].words || []).length; wi++) {
+                                var wordObj = (wCards[wc].words || [])[wi];
                                 if (wordObj.is_pending) {
                                     wordObj.pending_provider = pLower;
                                     wordObj.row_html = null;
@@ -1631,24 +1580,24 @@
     window.getLemmaBaseProvider = getLemmaBaseProvider;
     window.updateActiveProvider = updateActiveProvider;
 
-    var mvpBookmarks = [];
-    var sourceSpansArray = [];
-    var transSpansArray = [];
+    /** @type {Desk.Bookmark[]} */ var mvpBookmarks = [];
+    /** @type {HTMLElement[]} */ var sourceSpansArray = [];
+    /** @type {HTMLElement[]} */ var transSpansArray = [];
     var mvpN = 3;
     var isMvpIndexBuilt = false;
     var mvpRainbowMode = true;
     var mvpHighlightEnabled = true;
 
-    var scriptEl = document.getElementById('hl-mvp-script');
+    var scriptEl = /** @type {HTMLScriptElement|null} */ (document.getElementById('hl-mvp-script'));
     if (scriptEl) {
         var dr = scriptEl.getAttribute('data-rainbow');
         if (dr !== null) mvpRainbowMode = (dr === '1' || dr === 'true');
         var db = scriptEl.getAttribute('data-bookmarks');
-        if (db) mvpN = parseInt(db, 10);
+        if (db) mvpN = parseInt(String(db), 10);
         var de = scriptEl.getAttribute('data-enabled');
         if (de !== null) mvpHighlightEnabled = (de === '1' || de === 'true');
     }
-    if (window.__mvpBookmarks) mvpN = parseInt(window.__mvpBookmarks, 10);
+    if (window.__mvpBookmarks) mvpN = parseInt(String(window.__mvpBookmarks), 10);
     if (isNaN(mvpN) || mvpN < 1) mvpN = 3;
 
     function refreshBookmarkClasses() {
@@ -1666,7 +1615,7 @@
                 removeClass(span, 'hl-mvp-pin-' + k);
             }
         }
-        var tRows = document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
+        var tRows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
         for (var rIdx = 0; rIdx < tRows.length; rIdx++) {
             var rEl = tRows[rIdx];
             removeClass(rEl, 'hl-mvp-pin');
@@ -1676,13 +1625,13 @@
         }
         for (var m = 0; m < mvpBookmarks.length; m++) {
             var b = mvpBookmarks[m];
-            var mappedRowIds = [];
+            /** @type {Desk.RowId[]} */ var mappedRowIds = [];
             if (b.srcSpan) {
                 addClass(b.srcSpan, 'hl-mvp-pin');
                 if (mvpRainbowMode && b.slot !== undefined) {
                     addClass(b.srcSpan, 'hl-mvp-pin-' + b.slot);
                 }
-                var td = (typeof findTokenData === 'function') ? findTokenData(b.srcSpan) : ((window.findTokenData) ? window.findTokenData(b.srcSpan) : null);
+                var td = (typeof window.findTokenData === 'function') ? window.findTokenData(b.srcSpan) : ((window.findTokenData) ? window.findTokenData(b.srcSpan) : null);
                 if (!td && window.findTokenDataByVisualIdx) {
                     var wIdxAttr = b.srcSpan.getAttribute('data-word-idx');
                     if (wIdxAttr !== null) td = window.findTokenDataByVisualIdx(wIdxAttr);
@@ -1707,12 +1656,12 @@
                 for (var rIdx = 0; rIdx < tRows.length; rIdx++) {
                     var rEl = tRows[rIdx];
                     var rIdStr = String(rEl.getAttribute('data-row-id'));
-                    var rIdInt = parseInt(rIdStr, 10);
+                    var rIdInt = parseInt(String(rIdStr), 10);
                     var matched = (mappedRowIds.indexOf(rIdInt) !== -1 || mappedRowIds.indexOf(rIdStr) !== -1);
                     if (!matched && window.getRowGroupIds) {
                         var pList = window.getRowGroupIds(rEl);
                         for (var p = 0; p < pList.length; p++) {
-                            if (mappedRowIds.indexOf(parseInt(pList[p], 10)) !== -1 || mappedRowIds.indexOf(pList[p]) !== -1) {
+                            if (mappedRowIds.indexOf(parseInt(String(pList[p]), 10)) !== -1 || mappedRowIds.indexOf(pList[p]) !== -1) {
                                 matched = true;
                                 break;
                             }
@@ -1732,6 +1681,7 @@
 
 
 
+    /** @param {number} idx @param {boolean} isSource */
     function getTargetIdx(idx, isSource) {
         var sourceArray = isSource ? sourceSpansArray : transSpansArray;
         var targetArray = isSource ? transSpansArray : sourceSpansArray;
@@ -1772,12 +1722,12 @@
         }
 
         // Tier 2: Line / Cue Scope resolution
-        var distinctSourceLines = {};
+        var /** @type {Desk.Membership} */ distinctSourceLines = {};
         for (var i = 0; i < sourceSentPool.length; i++) {
             var l = sourceArray[sourceSentPool[i]].getAttribute('data-line-idx') || "0";
             distinctSourceLines[l] = true;
         }
-        var distinctTargetLines = {};
+        var /** @type {Desk.Membership} */ distinctTargetLines = {};
         for (var j = 0; j < targetSentPool.length; j++) {
             var l2 = targetArray[targetSentPool[j]].getAttribute('data-line-idx') || "0";
             distinctTargetLines[l2] = true;
@@ -1842,13 +1792,13 @@
         var ensureIndex = function() {
             if (!isMvpIndexBuilt) buildLcIndex();
         };
-        var handleMouseOver = function() {
+        var handleMouseOver = /** @this {HTMLElement} */ function() {
             if (window.__selectableTextMode) return;
             ensureIndex();
             addClass(this, 'hl-mvp-hover');
             var idxStr = this.getAttribute('data-mvp-idx');
             if (idxStr !== null && idxStr !== '') {
-                var idx = parseInt(idxStr, 10);
+                var idx = parseInt(String(idxStr), 10);
                 var isSource = (this.getAttribute('data-mvp-type') === 'source');
                 var targetIdx = getTargetIdx(idx, isSource);
                 var targetSpan = isSource ? transSpansArray[targetIdx] : sourceSpansArray[targetIdx];
@@ -1857,8 +1807,8 @@
                 }
             }
             var rowId = null;
-            if (typeof findTokenData === 'function') {
-                var td = findTokenData(this);
+            if (typeof window.findTokenData === 'function') {
+                var td = window.findTokenData(this);
                 if (td && td.row_ids && td.row_ids.length > 0) {
                     rowId = td.row_ids[0];
                 }
@@ -1867,27 +1817,27 @@
                 rowId = this.getAttribute('data-row-id') || this.getAttribute('data-word-idx') || this.getAttribute('data-token-order');
             }
             if (rowId !== null && rowId !== undefined) {
-                var tr = document.querySelector('#lemma-table tbody tr[data-row-id="' + rowId + '"]');
+                var tr = /** @type {HTMLElement|null} */ (document.querySelector('#lemma-table tbody tr[data-row-id="' + rowId + '"]'));
                 if (tr) addClass(tr, 'hl-mvp-hover');
             }
             if (window.AppState && window.AppState.highlightSameLemma) {
                 var wordText = (this.getAttribute('data-word') || this.textContent || '').trim().toLowerCase();
                 var wordLemma = '';
-                if (typeof findTokenData === 'function') {
-                    var td = findTokenData(this);
+                if (typeof window.findTokenData === 'function') {
+                    var td = window.findTokenData(this);
                     if (td && td.lemma) wordLemma = String(td.lemma).trim().toLowerCase();
                 }
-                var targetLemmas = {};
+                var /** @type {Desk.Membership} */ targetLemmas = {};
                 if (wordLemma) targetLemmas[wordLemma] = true;
                 if (wordText) targetLemmas[wordText] = true;
-                var allWords = document.querySelectorAll('#source-container span.word');
+                var allWords = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#source-container span.word'));
                 for (var w = 0; w < allWords.length; w++) {
                     var otherSpan = allWords[w];
                     if (otherSpan === this) continue;
                     var otherText = (otherSpan.getAttribute('data-word') || otherSpan.textContent || '').trim().toLowerCase();
                     var otherLemma = '';
-                    if (typeof findTokenData === 'function') {
-                        var otd = findTokenData(otherSpan);
+                    if (typeof window.findTokenData === 'function') {
+                        var otd = window.findTokenData(otherSpan);
                         if (otd && otd.lemma) otherLemma = String(otd.lemma).trim().toLowerCase();
                     }
                     if ((otherLemma && targetLemmas[otherLemma]) || (otherText && targetLemmas[otherText])) {
@@ -1896,13 +1846,13 @@
                 }
             }
         };
-        var handleMouseOut = function() {
+        var handleMouseOut = /** @this {HTMLElement} */ function() {
             if (window.__selectableTextMode) return;
             ensureIndex();
             removeClass(this, 'hl-mvp-hover');
             var idxStr = this.getAttribute('data-mvp-idx');
             if (idxStr !== null && idxStr !== '') {
-                var idx = parseInt(idxStr, 10);
+                var idx = parseInt(String(idxStr), 10);
                 var isSource = (this.getAttribute('data-mvp-type') === 'source');
                 var targetIdx = getTargetIdx(idx, isSource);
                 var targetSpan = isSource ? transSpansArray[targetIdx] : sourceSpansArray[targetIdx];
@@ -1911,8 +1861,8 @@
                 }
             }
             var rowId = null;
-            if (typeof findTokenData === 'function') {
-                var td = findTokenData(this);
+            if (typeof window.findTokenData === 'function') {
+                var td = window.findTokenData(this);
                 if (td && td.row_ids && td.row_ids.length > 0) {
                     rowId = td.row_ids[0];
                 }
@@ -1921,24 +1871,24 @@
                 rowId = this.getAttribute('data-row-id') || this.getAttribute('data-word-idx') || this.getAttribute('data-token-order');
             }
             if (rowId !== null && rowId !== undefined) {
-                var tr = document.querySelector('#lemma-table tbody tr[data-row-id="' + rowId + '"]');
+                var tr = /** @type {HTMLElement|null} */ (document.querySelector('#lemma-table tbody tr[data-row-id="' + rowId + '"]'));
                 if (tr) removeClass(tr, 'hl-mvp-hover');
             }
             if (window.AppState && window.AppState.highlightSameLemma) {
-                if (typeof updateBidirectionalHighlights === 'function') {
-                    updateBidirectionalHighlights();
+                if (typeof window.updateBidirectionalHighlights === 'function') {
+                    window.updateBidirectionalHighlights();
                 } else {
-                    var peers = document.querySelectorAll('#source-container span.word.lemma-peer-highlight');
+                    var peers = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#source-container span.word.lemma-peer-highlight'));
                     for (var p = 0; p < peers.length; p++) {
                         removeClass(peers[p], 'lemma-peer-highlight');
                     }
                 }
             }
         };
-        var handleClick = function(e) {
+        var handleClick = /** @param {MouseEvent} e @this {HTMLElement} */ function(e) {
             if (window.__selectableTextMode) return;
             ensureIndex();
-            e = e || window.event;
+            e = /** @type {MouseEvent} */ (e || window.event);
             var btn = (e.button !== undefined) ? e.button : e.which;
             if (btn !== 0 && btn !== 1) return;
             var isSource = (this.getAttribute('data-mvp-type') === 'source');
@@ -1946,7 +1896,7 @@
 
             var idxStr = this.getAttribute('data-mvp-idx');
             if (idxStr === null || idxStr === '') return;
-            var idx = parseInt(idxStr, 10);
+            var idx = parseInt(String(idxStr), 10);
             var isSource = (this.getAttribute('data-mvp-type') === 'source');
             var bKey = (isSource ? 's' : 't') + idxStr;
             var bIdx = -1;
@@ -1964,14 +1914,10 @@
                         var sRowIds = (sTd.atomic_row_ids !== undefined && sTd.atomic_row_ids !== null)
                             ? sTd.atomic_row_ids.slice()
                             : ((sTd.row_ids && sTd.row_ids.slice) ? sTd.row_ids.slice() : []);
-                        if (typeof selectedRowIdsMap !== 'undefined') {
-                            for (var sr = 0; sr < sRowIds.length; sr++) {
-                                delete selectedRowIdsMap[String(sRowIds[sr])];
-                            }
-                        }
-                        if (typeof removeTokenFromActiveSelections === 'function') removeTokenFromActiveSelections(sSpan);
-                        if (typeof syncSelectionsToCardsAndState === 'function') syncSelectionsToCardsAndState();
-                        if (typeof updateRowStyles === 'function') updateRowStyles();
+                        sRowIds.forEach(function(id) { window.toggleRowSelection(id, false); });
+                        if (typeof window.removeTokenFromActiveSelections === 'function') window.removeTokenFromActiveSelections(sSpan);
+                        if (typeof window.syncSelectionsToCardsAndState === 'function') window.syncSelectionsToCardsAndState();
+                        window.syncSelectionsToCardsAndState();
                     }
                 }
                 mvpBookmarks.splice(bIdx, 1);
@@ -1980,13 +1926,13 @@
                 var srcSpan = isSource ? sourceSpansArray[idx] : sourceSpansArray[targetIdx];
                 var transSpan = isSource ? transSpansArray[targetIdx] : transSpansArray[idx];
                 while (mvpBookmarks.length >= mvpN) {
-                    var oldest = mvpBookmarks.shift();
+                    var oldest = /** @type {Desk.Bookmark} */ (mvpBookmarks.shift());
                     if (oldest.srcSpan) removeClass(oldest.srcSpan, 'hl-mvp-hover');
                     if (oldest.transSpan) removeClass(oldest.transSpan, 'hl-mvp-hover');
                 }
                 var slot = 0;
                 if (mvpRainbowMode) {
-                    var usedSlots = {};
+                    var /** @type {Desk.Membership} */ usedSlots = {};
                     for (var i = 0; i < mvpBookmarks.length; i++) {
                         if (mvpBookmarks[i].slot !== undefined) {
                             usedSlots[mvpBookmarks[i].slot] = true;
@@ -2007,29 +1953,25 @@
                         var sRowIds = (sTd.atomic_row_ids !== undefined && sTd.atomic_row_ids !== null)
                             ? sTd.atomic_row_ids.slice()
                             : ((sTd.row_ids && sTd.row_ids.slice) ? sTd.row_ids.slice() : []);
-                        if (typeof selectedRowIdsMap !== 'undefined') {
-                            for (var sr = 0; sr < sRowIds.length; sr++) {
-                                selectedRowIdsMap[String(sRowIds[sr])] = true;
-                            }
-                        }
-                        if (typeof addTokenToActiveSelections === 'function') addTokenToActiveSelections(activeSrcSpan);
-                        if (typeof syncSelectionsToCardsAndState === 'function') syncSelectionsToCardsAndState();
-                        if (typeof updateRowStyles === 'function') updateRowStyles();
+                        sRowIds.forEach(function(id) { window.toggleRowSelection(id, true); });
+                        if (typeof window.addTokenToActiveSelections === 'function') window.addTokenToActiveSelections(activeSrcSpan);
+                        if (typeof window.syncSelectionsToCardsAndState === 'function') window.syncSelectionsToCardsAndState();
+                        window.syncSelectionsToCardsAndState();
                     }
                 }
                 // Fallback row selection if sTd was not found
                 if (isSource) {
                     var rowId = null;
-                    if (typeof findTokenData === 'function') {
-                        var td = findTokenData(this);
+                    if (typeof window.findTokenData === 'function') {
+                        var td = window.findTokenData(this);
                         if (td && td.row_ids && td.row_ids.length > 0) rowId = td.row_ids[0];
                     }
                     if (rowId === null || rowId === undefined) {
                         rowId = this.getAttribute('data-row-id') || this.getAttribute('data-word-idx') || this.getAttribute('data-token-order') || 0;
                     }
                     var rStr = String(rowId);
-                    if (typeof selectedRowIdsMap !== 'undefined') selectedRowIdsMap[rStr] = true;
-                    var tr = document.querySelector('#lemma-table tbody tr[data-row-id="' + rStr + '"]');
+                    window.toggleRowSelection(rStr, true);
+                    var tr = /** @type {HTMLElement|null} */ (document.querySelector('#lemma-table tbody tr[data-row-id="' + rStr + '"]'));
                     if (tr) addClass(tr, 'kw-row-selected');
                 }
             }
@@ -2066,13 +2008,14 @@
     }
     window.wireMvpEvents = wireMvpEvents;
 
+    /** @param {HTMLElement} span */
     function isTokenPinnedInMVP(span) {
         if (!span || !mvpBookmarks || mvpBookmarks.length === 0) return false;
         for (var i = 0; i < mvpBookmarks.length; i++) {
             if (mvpBookmarks[i].srcSpan === span || mvpBookmarks[i].transSpan === span) return true;
         }
-        if (typeof findRelatedTokenSpans === 'function') {
-            var rel = findRelatedTokenSpans(span);
+        if (typeof window.findRelatedTokenSpans === 'function') {
+            var rel = window.findRelatedTokenSpans(span);
             for (var r = 0; r < rel.length; r++) {
                 for (var i = 0; i < mvpBookmarks.length; i++) {
                     if (mvpBookmarks[i].srcSpan === rel[r] || mvpBookmarks[i].transSpan === rel[r]) return true;
@@ -2082,16 +2025,17 @@
         return false;
     }
 
+    /** @param {HTMLElement} span */
     function unpinTokenFromMVP(span) {
         if (!span || !mvpBookmarks || mvpBookmarks.length === 0) return false;
         var targets = [span];
-        if (typeof findRelatedTokenSpans === 'function') {
-            targets = targets.concat(findRelatedTokenSpans(span));
+        if (typeof window.findRelatedTokenSpans === 'function') {
+            targets = targets.concat(window.findRelatedTokenSpans(span));
         }
         var removed = false;
         for (var i = mvpBookmarks.length - 1; i >= 0; i--) {
             var b = mvpBookmarks[i];
-            if (targets.indexOf(b.srcSpan) !== -1 || targets.indexOf(b.transSpan) !== -1) {
+            if ((b.srcSpan && targets.indexOf(b.srcSpan) !== -1) || (b.transSpan && targets.indexOf(b.transSpan) !== -1)) {
                 if (b.srcSpan) removeClass(b.srcSpan, 'hl-mvp-hover');
                 if (b.transSpan) removeClass(b.transSpan, 'hl-mvp-hover');
                 mvpBookmarks.splice(i, 1);
@@ -2104,12 +2048,13 @@
         return removed;
     }
 
+    /** @param {HTMLElement} span */
     function pinTokenToMVP(span) {
         if (!span || !mvpHighlightEnabled) return false;
         if (!isMvpIndexBuilt) buildLcIndex();
         var idxStr = span.getAttribute('data-mvp-idx');
         if (idxStr === null || idxStr === '') return false;
-        var idx = parseInt(idxStr, 10);
+        var idx = parseInt(String(idxStr), 10);
         var isSource = (span.getAttribute('data-mvp-type') === 'source');
         var bKey = (isSource ? 's' : 't') + idxStr;
 
@@ -2118,8 +2063,8 @@
                 return false;
             }
         }
-        if (typeof findRelatedTokenSpans === 'function') {
-            var related = findRelatedTokenSpans(span);
+        if (typeof window.findRelatedTokenSpans === 'function') {
+            var related = window.findRelatedTokenSpans(span);
             for (var r = 0; r < related.length; r++) {
                 for (var i = 0; i < mvpBookmarks.length; i++) {
                     if (mvpBookmarks[i].srcSpan === related[r] || mvpBookmarks[i].transSpan === related[r]) return false;
@@ -2132,14 +2077,14 @@
         var transSpan = isSource ? transSpansArray[targetIdx] : transSpansArray[idx];
 
         while (mvpBookmarks.length >= mvpN) {
-            var oldest = mvpBookmarks.shift();
+            var oldest = /** @type {Desk.Bookmark} */ (mvpBookmarks.shift());
             if (oldest.srcSpan) removeClass(oldest.srcSpan, 'hl-mvp-hover');
             if (oldest.transSpan) removeClass(oldest.transSpan, 'hl-mvp-hover');
         }
 
         var slot = 0;
         if (mvpRainbowMode) {
-            var usedSlots = {};
+            var /** @type {Desk.Membership} */ usedSlots = {};
             for (var i = 0; i < mvpBookmarks.length; i++) {
                 if (mvpBookmarks[i].slot !== undefined) {
                     usedSlots[mvpBookmarks[i].slot] = true;
@@ -2209,10 +2154,10 @@
             var prefix = bKey.charAt(0);
             var idx, isSource;
             if (prefix === 's' || prefix === 't') {
-                idx = parseInt(bKey.substring(1), 10);
+                idx = parseInt(String(bKey.substring(1)), 10);
                 isSource = (prefix === 's');
             } else {
-                idx = parseInt(bKey, 10);
+                idx = parseInt(String(bKey), 10);
                 isSource = true;
             }
             var targetIdx = getTargetIdx(idx, isSource);
@@ -2220,7 +2165,7 @@
             var transSpan = isSource ? transSpansArray[targetIdx] : transSpansArray[idx];
             var slot = 0;
             if (mvpRainbowMode) {
-                var usedSlots = {};
+                var /** @type {Desk.Membership} */ usedSlots = {};
                 for (var m = 0; m < mvpBookmarks.length; m++) {
                     if (mvpBookmarks[m].slot !== undefined) {
                         usedSlots[mvpBookmarks[m].slot] = true;
@@ -2254,7 +2199,7 @@
     };
 
     addEvent(window, 'keydown', function(e) {
-        e = e || window.event;
+        e = /** @type {KeyboardEvent} */ (e || window.event);
         if (e.key === 'Alt' || e.keyCode === 18) {
             if (!window.__selectableTextMode) {
                 window.setSelectableTextMode(true, false);
@@ -2263,7 +2208,7 @@
     });
 
     addEvent(window, 'keyup', function(e) {
-        e = e || window.event;
+        e = /** @type {KeyboardEvent} */ (e || window.event);
         if (e.key === 'Alt' || e.keyCode === 18) {
             if (!window.__persistentSelectableMode) {
                 window.setSelectableTextMode(false, false);
@@ -2289,10 +2234,10 @@
                 var prefix = bKey.charAt(0);
                 var idx, isSource;
                 if (prefix === 's' || prefix === 't') {
-                    idx = parseInt(bKey.substring(1), 10);
+                    idx = parseInt(String(bKey.substring(1)), 10);
                     isSource = (prefix === 's');
                 } else {
-                    idx = parseInt(bKey, 10);
+                    idx = parseInt(String(bKey), 10);
                     isSource = true;
                 }
                 var targetIdx = getTargetIdx(idx, isSource);
@@ -2323,19 +2268,20 @@
             hydrateSession();
         }
 
-        var tableRows = [];
-        var selectedRowIdsMap = {};
-        var selectedOrphanWordIdxsMap = {};
-        var initialHighlights = {};
+        /** @type {HTMLElement[]} */ var tableRows = [];
+        /** @type {Desk.Membership} */ var selectedRowIdsMap = {};
+        /** @type {Desk.Membership} */ var selectedOrphanWordIdxsMap = {};
+        /** @type {Desk.Membership} */ var initialHighlights = {};
         var hasHighlightCol = false;
-        var lastClickedRowId = null;
-        var focusedRowId = null;
-        var deltas = [];
-        var historyStack = [];
+        /** @type {number|null} */ var lastClickedRowId = null;
+        /** @type {number|null} */ var focusedRowId = null;
+        /** @type {Desk.Delta[]} */ var deltas = [];
+        /** @type {Record<string,Desk.AcknowledgedValue>} */ var acknowledgedValues = {};
+        /** @type {Desk.HistoryAction[]} */ var historyStack = [];
         var historyIndex = -1;
-        var touchedCells = {};
-        var lastClickedCell = null;
-        var lastHoveredCell = null;
+        /** @type {Desk.Membership} */ var touchedCells = {};
+        /** @type {HTMLElement|null} */ var lastClickedCell = null;
+        /** @type {HTMLElement|null} */ var lastHoveredCell = null;
         var isDragSelecting = false;
         var dragStartX = 0;
         var dragStartY = 0;
@@ -2346,7 +2292,7 @@
         var lastClickedVisualIdx = -1;
         var isShiftClick = false;
         var isCtrlKey = false;
-        var mousedownTargetRow = null;
+        /** @type {HTMLElement|null} */ var mousedownTargetRow = null;
         var dragSelectMode = true;
         var isTokenDragSelecting = false;
         var tokenDragMode = true;
@@ -2354,11 +2300,11 @@
         var justFinishedDrag = false;
         var tokenDragStartIdx = -1;
         var tokenDragLastIdx = -1;
-        var initialSelectedMap = null;
-        var mousedownTargetSpan = null;
+        /** @type {Desk.Membership|null} */ var initialSelectedMap = null;
+        /** @type {HTMLElement|null} */ var mousedownTargetSpan = null;
         var isRmbDragFlipping = false;
         var rmbFlipMode = true;
-        var initialFlippedMap = null;
+        /** @type {boolean[]|null} */ var initialFlippedMap = null;
 
         var pos_display_order_json;
         var POS_DISPLAY_ORDER_MAP = ((window.__CONFIG__ && window.__CONFIG__.pos_display_order) || {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3});
@@ -2366,9 +2312,10 @@
             POS_DISPLAY_ORDER_MAP = (window.__CONFIG__ && window.__CONFIG__.pos_display_order) || {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3};
         }
         window.POS_DISPLAY_ORDER_MAP = POS_DISPLAY_ORDER_MAP;
-        var tokenMap = [];
+        /** @type {Desk.Token[]} */ var tokenMap = [];
         try {
-            var tokenMapEl = document.getElementById('token-map');
+            var tokenMapEl = /** @type {HTMLScriptElement|null} */ (document.getElementById('token-map'));
+            if (!tokenMapEl) throw new Error('Missing token-map element');
             var jsonStr = tokenMapEl.text || tokenMapEl.textContent || tokenMapEl.innerHTML || "[]";
             tokenMap = JSON.parse(jsonStr);
         } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
@@ -2393,10 +2340,17 @@
             if (lsFilterVal !== null) initialFilterSelectedOnly = (lsFilterVal === 'true');
         } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
 
-        var existingState = window.AppState || {};
+        var existingState = window.AppState || {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
         window.AppState = existingState;
         if (!existingState.rows) existingState.rows = {};
         existingState.selectedLemmas = {};
+        var selectionCards = document.getElementById('sentence-cards');
+        var /** @type {Desk.Card[]} */ initialCards = selectionCards ? JSON.parse(selectionCards.textContent || '[]') : [];
+        initialCards.forEach(function(card) {
+            (card.words || []).forEach(function(word) {
+                if (String(word.selected) === '1') existingState.selectedLemmas[String(word.lemma || '').trim().toLowerCase()] = true;
+            });
+        });
         existingState.activeTokenSelections = [];
         existingState.highlightSameLemma = initialSameLemma;
         if (existingState.sourceText === undefined) existingState.sourceText = null;
@@ -2408,6 +2362,7 @@
         if (existingState.isFinished === undefined) existingState.isFinished = false;
         existingState.filterSelectedOnly = initialFilterSelectedOnly;
         existingState.applyDeltas = function(data) {
+            if (data.shared_selection && window.applySharedSelection) window.applySharedSelection(data.shared_selection);
                 if (!data) return;
 
                 var isTerminal = (data.stage === 'finished' || data.status === 'failed' || data.status === 'partial_persisted');
@@ -2452,12 +2407,12 @@
                         if (pLower === 'deepl') capProv = 'DeepL';
                         else if (pLower === 'intellifiller') capProv = 'IntelliFiller';
                         var label = capProv + '...';
-                        var skels = document.querySelectorAll('.skeleton-loader');
+                        var skels = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('.skeleton-loader'));
                         for (var ski = 0; ski < skels.length; ski++) {
                             var skEl = skels[ski];
                             skEl.textContent = label;
-                            skEl.setAttribute('title', label);
-                            skEl.setAttribute('data-tooltip', capProv);
+                            skEl.setAttribute('title', String(label));
+                            skEl.setAttribute('data-tooltip', String(capProv));
                         }
                     }
                 }
@@ -2488,9 +2443,7 @@
                 var src = (data.sourceText !== undefined && data.sourceText !== "") ? data.sourceText : ((data.source_text !== undefined && data.source_text !== "") ? data.source_text : null);
                 if (src !== null) {
                     window.AppState.sourceText = src;
-                    if (window.AppView.renderSourceText(data.stage)) updated = true;
-                } else if (document.getElementById('source-container') && document.getElementById('source-container').querySelector('[data-pending="true"]')) {
-                    if (window.AppView.renderSourceText(data.stage)) updated = true;
+
                 }
 
                 var trans = (data.translatedText !== undefined && data.translatedText !== "") ? data.translatedText : ((data.translated_text !== undefined && data.translated_text !== "") ? data.translated_text : ((data.Translation !== undefined && data.Translation !== "") ? data.Translation : null));
@@ -2503,7 +2456,7 @@
                 if (trans !== null) {
                     window.AppState.translatedText = trans;
                     if (window.AppView.renderTranslatedText(data.stage)) updated = true;
-                } else if (document.getElementById('translation-container') && (document.getElementById('translation-container').querySelector('[data-pending="true"]') || window.AppState.textTranslationFailed || data.stage === 'translated_text')) {
+                } else if (document.getElementById('translation-container') && (/** @type {HTMLElement|null} */ (requireElement('translation-container').querySelector('[data-pending="true"]')) || window.AppState.textTranslationFailed || data.stage === 'translated_text')) {
                     if (window.AppView.renderTranslatedText(data.stage)) updated = true;
                 }
 
@@ -2542,9 +2495,7 @@
                         if (rowsData.hasOwnProperty(rowId)) {
                             if (!window.AppState.rows[rowId]) window.AppState.rows[rowId] = {};
                             var delta = rowsData[rowId];
-                            for (var key in delta) {
-                                window.AppState.rows[rowId][key] = delta[key];
-                            }
+                            Object.assign(window.AppState.rows[rowId], delta);
                             if (delta.provenance) {
                                 window.AppState.rows[rowId].provenance = delta.provenance;
                             } else if (delta._provenance) {
@@ -2562,14 +2513,15 @@
                         }
                     }
                 }
+                /** @param {Record<string,Desk.RowUpdate>} rowsData @param {import("./types.js").UpdatePayload} rawPayload */
                 function applyCardProgressiveUpdate(rowsData, rawPayload) {
                     if (!rowsData) return;
                     var wCards = (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function')
                         ? window.WorkspaceTabs.getCards()
                         : (typeof getCardModels === 'function' ? getCardModels() : null);
                     if (!wCards || wCards.length === 0) return;
-                    var deltasByTokenOrder = {};
-                    var deltasByRowId = {};
+                    var /** @type {Record<string,Desk.RowUpdate>} */ deltasByTokenOrder = {};
+                    var /** @type {Record<string,Desk.RowUpdate>} */ deltasByRowId = {};
                     for (var rk in rowsData) {
                         if (rowsData.hasOwnProperty(rk)) {
                             var d = rowsData[rk];
@@ -2673,7 +2625,7 @@
                                             if (subLem && parentLem && subLem !== parentLem) {
                                                 continue;
                                             }
-                                            var subTr = "";
+                                            /** @type {string|undefined} */ var subTr = "";
                                             if (subDelta) {
                                                 subTr = (subDelta.trans !== undefined && subDelta.trans !== "") ? subDelta.trans : ((subDelta.WordDestination !== undefined && subDelta.WordDestination !== "") ? subDelta.WordDestination : subDelta.word_translation);
                                             }
@@ -2715,34 +2667,34 @@
                 applyCardProgressiveUpdate(rowsData, data);
                 if (window.AppState.isFinished) {
                     var tc = document.getElementById('translation-container');
-                    if (tc && (tc.querySelector('.skeleton-loader') || tc.querySelector('[data-pending="true"]') || tc.classList.contains('skeleton-loader') || !tc.textContent.trim())) {
+                    if (tc && (/** @type {HTMLElement|null} */ (tc.querySelector('.skeleton-loader')) || /** @type {HTMLElement|null} */ (tc.querySelector('[data-pending="true"]')) || tc.classList.contains('skeleton-loader') || !(tc.textContent || '').trim())) {
                         tc.classList.remove('skeleton-loader');
                         tc.removeAttribute('data-pending');
                         tc.innerHTML = window.AppState.translatedText || '';
                         updated = true;
                     }
                     var sc = document.getElementById('source-container');
-                    if (sc && (sc.querySelector('.skeleton-loader') || sc.querySelector('[data-pending="true"]') || sc.classList.contains('skeleton-loader'))) {
+                    if (sc && (/** @type {HTMLElement|null} */ (sc.querySelector('.skeleton-loader')) || /** @type {HTMLElement|null} */ (sc.querySelector('[data-pending="true"]')) || sc.classList.contains('skeleton-loader'))) {
                         sc.classList.remove('skeleton-loader');
                         sc.removeAttribute('data-pending');
                         sc.innerHTML = window.AppState.sourceText || "";
                         updated = true;
                     }
-                    var skels = document.querySelectorAll('td .skeleton-loader, #translation-container .skeleton-loader, #source-container .skeleton-loader, .skeleton-loader[data-pending="true"], [data-pending="true"]');
+                    var skels = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('td .skeleton-loader, #translation-container .skeleton-loader, #source-container .skeleton-loader, .skeleton-loader[data-pending="true"], [data-pending="true"]'));
                     if (skels.length > 0) {
                         for (var i = 0; i < skels.length; i++) {
                             var skel = skels[i];
                             skel.classList.remove('skeleton-loader');
                             skel.removeAttribute('data-pending');
-                            var p = skel.parentNode;
-                            var tr = skel.closest ? skel.closest('tr') : (function(node) {
-                                while (node && node.nodeName !== 'TR') { node = node.parentNode; }
+                            var p = /** @type {HTMLElement|null} */ (skel.parentNode);
+                            var tr = skel.closest ? skel.closest('tr') : (function(/** @type {HTMLElement|null} */ node) {
+                                while (node && node.nodeName !== 'TR') { node = node.parentElement; }
                                 return node;
                             })(skel);
-                            var rowId = tr ? (tr.getAttribute('data-row-id') || tr.getAttribute('data-token-order')) : null;
-                            if (rowId !== null && rowId !== undefined) {
+                            var cleanupRowId = tr ? (tr.getAttribute('data-row-id') || tr.getAttribute('data-token-order')) : null;
+                            if (cleanupRowId !== null && cleanupRowId !== undefined) {
                                 var skelTarget = (p && p.classList.contains('scrollable-cell') ? p : skel);
-                                var rStateS = window.AppState.rows[rowId];
+                                var rStateS = window.AppState.rows[cleanupRowId];
                                 var rTransS = rStateS ? (rStateS.trans || rStateS.WordDestination || rStateS.word_translation || '') : '';
                                 if (rTransS && rTransS !== '') {
                                     if (typeof setCellText === 'function') setCellText(skelTarget, rTransS);
@@ -2766,17 +2718,17 @@
                     }
 
                     // Comprehensive scan for any remaining blank/empty translation cells across all table rows:
-                    var allRows = document.querySelectorAll('tr[data-row-id]');
+                    var allRows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('tr[data-row-id]'));
                     for (var r = 0; r < allRows.length; r++) {
                         var rowEl = allRows[r];
                         var rId = rowEl.getAttribute('data-row-id') || rowEl.getAttribute('data-token-order');
                         var tOrd = rowEl.getAttribute('data-token-order');
                         var tdsEl = rowEl.getElementsByTagName('td');
                         if (tdsEl.length >= 3 && rId !== null && rId !== undefined) {
-                            var transTd = rowEl.querySelector('td[data-col="WordDestination"]') || tdsEl[2];
-                            var transDiv = transTd.querySelector('.scrollable-cell') || transTd;
+                            var transTd = /** @type {HTMLElement|null} */ (rowEl.querySelector('td[data-col="WordDestination"]')) || tdsEl[2];
+                            var transDiv = /** @type {HTMLElement|null} */ (transTd.querySelector('.scrollable-cell')) || transTd;
                             var transContent = (transDiv.textContent || transDiv.innerText || "").trim();
-                            if (!transContent || transContent === '...' || transContent === 'Loading...' || transDiv.querySelector('.skeleton-loader')) {
+                            if (!transContent || transContent === '...' || transContent === 'Loading...' || /** @type {HTMLElement|null} */ (transDiv.querySelector('.skeleton-loader'))) {
                                 var rState = window.AppState.rows[rId] || (tOrd ? window.AppState.rows[tOrd] : null);
                                 var rTrans = rState ? (rState.trans || rState.WordDestination || rState.word_translation || '') : '';
                                 if (rTrans && rTrans !== '') {
@@ -2785,13 +2737,13 @@
                                         else transDiv.textContent = rTrans;
                                         var rProv = rState ? (rState.provenance || rState._provenance || rState.transProvenance) : null;
                                         if (rProv) {
-                                            transTd.setAttribute('data-provenance', rProv);
+                                            transTd.setAttribute('data-provenance', String(rProv));
                                             var pTitle = formatTranslationCellTooltip(rTrans, rProv);
                                             if (pTitle) {
-                                                transTd.setAttribute('title', pTitle);
+                                                transTd.setAttribute('title', String(pTitle));
                                                 if (transDiv !== transTd) {
-                                                    transDiv.setAttribute('data-provenance', rProv);
-                                                    transDiv.setAttribute('title', pTitle);
+                                                    transDiv.setAttribute('data-provenance', String(rProv));
+                                                    transDiv.setAttribute('title', String(pTitle));
                                                 }
                                             }
                                         }
@@ -2806,14 +2758,14 @@
                                 var rState = window.AppState.rows[rId] || (tOrd ? window.AppState.rows[tOrd] : null);
                                 var rProv = rState ? (rState.provenance || rState._provenance || rState.transProvenance) : null;
                                 if (rProv && !transTd.classList.contains('dirty') && !transTd.classList.contains('editing')) {
-                                    if (!transDiv.querySelector('.skeleton-loader')) {
-                                        transTd.setAttribute('data-provenance', rProv);
+                                    if (!/** @type {HTMLElement|null} */ (transDiv.querySelector('.skeleton-loader'))) {
+                                        transTd.setAttribute('data-provenance', String(rProv));
                                         var pTitle = formatTranslationCellTooltip(transDiv.textContent || transTd.textContent, rProv);
                                         if (pTitle) {
-                                            transTd.setAttribute('title', pTitle);
+                                            transTd.setAttribute('title', String(pTitle));
                                             if (transDiv !== transTd) {
-                                                transDiv.setAttribute('data-provenance', rProv);
-                                                transDiv.setAttribute('title', pTitle);
+                                                transDiv.setAttribute('data-provenance', String(rProv));
+                                                transDiv.setAttribute('title', String(pTitle));
                                             }
                                         }
                                     }
@@ -2849,38 +2801,13 @@
                 }
             };
 
+        /** @param {HTMLElement} el @param {string} text */
         function setCellText(el, text) {
             if (!el) return;
             el.innerHTML = text ? String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
         }
 
         window.AppView = {
-            renderSourceText: function(globalStage) {
-                var container = document.getElementById('source-container');
-                if (!container) return false;
-                var pendingNode = container.querySelector('[data-pending="true"]');
-                if (window.AppState.sourceText === null && !pendingNode) return false;
-                var hasSpans = container.querySelector('span.word') !== null;
-                var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
-                var tempDiv = document.createElement('div');
-                tempDiv.innerHTML = window.AppState.sourceText || "";
-                var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\s+/g, ' ');
-
-                // Do not destroy perfectly good span.word tags if the text hasn't changed
-                if (hasSpans && !pendingNode && currentText === newText) {
-                    return false;
-                }
-
-                var forceUpdate = (globalStage === 'finished' || globalStage === 'translated' || globalStage === 'translated_lemmas' || window.AppState.isFinished);
-                if (pendingNode || currentText !== newText || (forceUpdate && !hasSpans)) {
-                    container.innerHTML = window.AppState.sourceText || "";
-                    if (typeof tokenSpans !== 'undefined') {
-                        tokenSpans = [];
-                    }
-                    return true;
-                }
-                return false;
-            },
             renderTranslatedText: function(globalStage) {
                 var container = document.getElementById('translation-container');
                 if (!container) return false;
@@ -2904,7 +2831,7 @@
                     return false;
                 }
 
-                var pendingNode = container.querySelector('[data-pending="true"]') || container.querySelector('.skeleton-loader') || container.classList.contains('skeleton-loader');
+                var pendingNode = /** @type {HTMLElement|null} */ (container.querySelector('[data-pending="true"]')) || /** @type {HTMLElement|null} */ (container.querySelector('.skeleton-loader')) || container.classList.contains('skeleton-loader');
                 var isFailed = (window.AppState && (window.AppState.textTranslationFailed || window.AppState.textTranslationStatus === 'failed'));
                 if (window.AppState.translatedText === null && !pendingNode && !isFailed) return false;
                 var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
@@ -2915,6 +2842,7 @@
                 var forceUpdate = (isTerm || globalStage === 'translated' || globalStage === 'translated_text');
 
                 function applyTextProvenance() {
+                    if (!container) throw new Error('Missing translation container');
                     var effProv = (window.AppState ? (window.AppState.textProvenance || window.AppState.text_provenance || window.AppState.provenance) : null) || container.getAttribute('data-provenance');
                     if (!effProv) {
                         var provScript = document.getElementById('sentence-provenance');
@@ -2929,14 +2857,14 @@
                         effProv = 'live:' + (baseProv || 'google');
                     }
                     if (effProv) {
-                        container.setAttribute('data-provenance', effProv);
+                        container.setAttribute('data-provenance', String(effProv));
                         var pTitle = formatProvenanceTooltip(effProv);
                         if (pTitle) {
-                            container.setAttribute('title', pTitle);
-                            var words = container.querySelectorAll('span.word, div');
+                            container.setAttribute('title', String(pTitle));
+                            var words = /** @type {NodeListOf<HTMLElement>} */ (container.querySelectorAll('span.word, div'));
                             for (var i = 0; i < words.length; i++) {
-                                words[i].setAttribute('data-provenance', effProv);
-                                words[i].setAttribute('title', pTitle);
+                                words[i].setAttribute('data-provenance', String(effProv));
+                                words[i].setAttribute('title', String(pTitle));
                             }
                         }
                     }
@@ -3004,21 +2932,22 @@
                 }
                 return false;
             },
-            renderRow: function(rowId, globalStage) {
+            renderRow: /** @param {Desk.RowId} rowId @param {string=} globalStage */ function(rowId, globalStage) {
+                /** @type {string|undefined} */ var targetVal;
                 var updated = false;
                 var rowData = window.AppState.rows[rowId];
                 if (!rowData) return false;
                 var tr = null;
                 if (rowData.token_order !== undefined && rowData.token_order !== null && String(rowData.token_order) !== "") {
-                    tr = document.querySelector('tr[data-token-order="' + rowData.token_order + '"]');
+                    tr = /** @type {HTMLElement|null} */ (document.querySelector('tr[data-token-order="' + rowData.token_order + '"]'));
                 } else {
-                    tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
+                    tr = /** @type {HTMLElement|null} */ (document.querySelector('tr[data-row-id="' + rowId + '"]'));
                 }
                 if (!tr) {
-                    tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
+                    tr = /** @type {HTMLElement|null} */ (document.querySelector('tr[data-row-id="' + rowId + '"]'));
                 }
                 if (!tr) {
-                    var allTrs = document.querySelectorAll('tr[data-all-row-ids]');
+                    var allTrs = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('tr[data-all-row-ids]'));
                     for (var at = 0; at < allTrs.length; at++) {
                         var parts = (allTrs[at].getAttribute('data-all-row-ids') || '').split(',').map(function(s) { return s.trim(); });
                         if (parts.indexOf(String(rowId)) !== -1) {
@@ -3029,26 +2958,26 @@
                 }
                 if (!tr) return false;
                 var tds = tr.getElementsByTagName('td');
-                var infCell = tr.querySelector('td.col-inflected, td[data-col="WordSourceInflectedForm"]') || (tds.length >= 5 ? tds[0] : null);
-                var lemCell = tr.querySelector('td.col-lemma, td[data-col="WordSource"]') || (tds.length >= 5 ? tds[1] : (tds.length > 0 ? tds[0] : null));
-                var transTd = tr.querySelector('td.col-translation, td[data-col="WordDestination"]') || (tds.length >= 3 ? tds[2] : (tds.length > 1 ? tds[1] : null));
-                var ipaCell = tr.querySelector('td.col-ipa, td[data-col="WordSourceIpaAI"], td[data-col="WordSourceIpa"]') || (tds.length > 3 ? tds[3] : null);
-                var morphCell = tr.querySelector('td.col-morphology, td[data-col="WordSourceMorphologyAI"], td[data-col="WordSourceMorphology"]') || (tds.length > 4 ? tds[4] : null);
+                var infCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-inflected, td[data-col="WordSourceInflectedForm"]')) || (tds.length >= 5 ? tds[0] : null);
+                var lemCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-lemma, td[data-col="WordSource"]')) || (tds.length >= 5 ? tds[1] : (tds.length > 0 ? tds[0] : null));
+                var transTd = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-translation, td[data-col="WordDestination"]')) || (tds.length >= 3 ? tds[2] : (tds.length > 1 ? tds[1] : null));
+                var ipaCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-ipa, td[data-col="WordSourceIpaAI"], td[data-col="WordSourceIpa"]')) || (tds.length > 3 ? tds[3] : null);
+                var morphCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-morphology, td[data-col="WordSourceMorphologyAI"], td[data-col="WordSourceMorphology"]')) || (tds.length > 4 ? tds[4] : null);
                 if (tds.length >= 1) {
                     if (infCell && !infCell.classList.contains('dirty') && rowData.hasOwnProperty('inflected') && rowData.inflected !== undefined && rowData.inflected !== "") {
-                        var div = infCell.querySelector('.scrollable-cell');
+                        var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (infCell.querySelector('.scrollable-cell'));
                         var val = rowData.inflected || "";
                         var oldVal = div ? (div.textContent || div.innerText) : (infCell.classList.contains('editing') ? null : (infCell.textContent || infCell.innerText));
                         var existingTitle = infCell.getAttribute('data-orig-title') || infCell.getAttribute('title') || (div ? (div.getAttribute('data-orig-title') || div.getAttribute('title')) : '');
-                        var sentText = rowData.sentence_source || rowData.SentenceSource || (window.AppState ? window.AppState.sourceText : "") || (document.getElementById('source-container') ? document.getElementById('source-container').textContent : "");
-                        var infTip = rowData.inflected_tooltip || ((oldVal === val && existingTitle) ? existingTitle : formatInflectedTooltip(sentText, val, rowData.token_order || rowId, rowData.lemma || ''));
+                        var sentText = rowData.sentence_source || rowData.SentenceSource || (window.AppState ? window.AppState.sourceText : "") || (document.getElementById('source-container') ? requireElement('source-container').textContent : "");
+                        var infTip = rowData.inflected_tooltip || ((oldVal === val && existingTitle) ? existingTitle : formatInflectedTooltip(sentText || '', val, rowData.token_order || rowId, rowData.lemma || ''));
                         var unrolledHtml = val ? String(val).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
-                        infCell.setAttribute('data-orig-html', unrolledHtml);
+                        infCell.setAttribute('data-orig-html', String(unrolledHtml));
                         if (infTip) {
-                            infCell.setAttribute('data-orig-title', infTip);
-                            if (div && div !== infCell) div.setAttribute('data-orig-title', infTip);
-                            infCell.setAttribute('title', infTip);
-                            if (div) div.setAttribute('title', infTip);
+                            infCell.setAttribute('data-orig-title', String(infTip));
+                            if (div && div !== infCell) div.setAttribute('data-orig-title', String(infTip));
+                            infCell.setAttribute('title', String(infTip));
+                            if (div) div.setAttribute('title', String(infTip));
                         } else {
                             infCell.removeAttribute('data-orig-title');
                             if (div && div !== infCell) div.removeAttribute('data-orig-title');
@@ -3062,7 +2991,7 @@
                         }
                     }
                     if (lemCell && !lemCell.classList.contains('dirty') && rowData.hasOwnProperty('lemma') && rowData.lemma !== undefined) {
-                        var div = lemCell.querySelector('.scrollable-cell');
+                        var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (lemCell.querySelector('.scrollable-cell'));
                         var val = rowData.lemma || "";
                         if (globalStage === 'translated_lemmas' || globalStage === 'translated' || globalStage === 'finished') {
                             if (div) setCellText(div, val);
@@ -3078,26 +3007,26 @@
                         }
                         var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
                         var rawG = rowData.gender !== undefined ? rowData.gender : (rowData.WordSourceGender || "");
-                        var curPosCell = tr.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]');
+                        var curPosCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]'));
                         var rawPos = rowData.pos !== undefined ? rowData.pos : (rowData.WordSourcePos !== undefined ? rowData.WordSourcePos : (curPosCell ? (curPosCell.textContent || curPosCell.innerText || "").trim() : ""));
                         var lemTip = formatLemmaTooltip(val, rawG, activeLang, rawPos);
                         if (lemTip) {
-                            lemCell.setAttribute('title', lemTip);
-                            if (div && div !== lemCell) div.setAttribute('title', lemTip);
+                            lemCell.setAttribute('title', String(lemTip));
+                            if (div && div !== lemCell) div.setAttribute('title', String(lemTip));
                         } else {
                             lemCell.removeAttribute('title');
                             if (div && div !== lemCell) div.removeAttribute('title');
                         }
-                        var curGenderCell = tr.querySelector('td.col-gender, td[data-col="WordSourceGender"]');
+                        var curGenderCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-gender, td[data-col="WordSourceGender"]'));
                         if (curGenderCell) {
                             var curGenVal = rawG || (curGenderCell.textContent || curGenderCell.innerText || "").trim();
                             var curProv = rowData.provenance || rowData._provenance || rowData.transProvenance;
                             if (!curProv) {
-                                var curTransCell = tr.querySelector('td.col-translation, td[data-col="WordDestination"]');
-                                if (curTransCell) curProv = curTransCell.getAttribute('data-provenance');
+                                var curTransCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-translation, td[data-col="WordDestination"]'));
+                                if (curTransCell) curProv = curTransCell.getAttribute('data-provenance') || undefined;
                             }
                             var updatedGenTip = formatGenderTooltip(curGenVal, val, curProv);
-                            if (updatedGenTip) curGenderCell.setAttribute('title', updatedGenTip);
+                            if (updatedGenTip) curGenderCell.setAttribute('title', String(updatedGenTip));
                             else curGenderCell.removeAttribute('title');
                         }
                     }
@@ -3113,33 +3042,34 @@
                             }
                         }
                     }
+                    /** @param {string} effectiveVal */
                     function applyCellProvenance(effectiveVal) {
                         if (!transTd) return;
-                        var existingProv = transTd.getAttribute('data-provenance') || (transTd.querySelector('.scrollable-cell') ? transTd.querySelector('.scrollable-cell').getAttribute('data-provenance') : null);
+                        var existingProv = transTd.getAttribute('data-provenance') || (/** @type {HTMLElement} */ (transTd.querySelector('.scrollable-cell')) ? /** @type {HTMLElement} */ (transTd.querySelector('.scrollable-cell')).getAttribute('data-provenance') : null);
                         var effProv = rowProv || existingProv || (effectiveVal && effectiveVal.indexOf('skeleton-loader') === -1 ? 'cached:sqlite' : null);
                         var transTip = formatTranslationCellTooltip(effectiveVal, effProv);
                         if (effProv && effectiveVal && effectiveVal.indexOf('skeleton-loader') === -1) {
-                            transTd.setAttribute('data-provenance', effProv);
-                            if (transTip) transTd.setAttribute('title', transTip);
+                            transTd.setAttribute('data-provenance', String(effProv));
+                            if (transTip) transTd.setAttribute('title', String(transTip));
                             else transTd.removeAttribute('title');
-                            var scrollDiv = transTd.querySelector('.scrollable-cell');
+                            var scrollDiv = /** @type {HTMLElement|null} */ (transTd.querySelector('.scrollable-cell'));
                             if (scrollDiv) {
-                                scrollDiv.setAttribute('data-provenance', effProv);
-                                if (transTip) scrollDiv.setAttribute('title', transTip);
+                                scrollDiv.setAttribute('data-provenance', String(effProv));
+                                if (transTip) scrollDiv.setAttribute('title', String(transTip));
                                 else scrollDiv.removeAttribute('title');
                             }
                         } else if (transTip) {
                             transTd.removeAttribute('data-provenance');
-                            transTd.setAttribute('title', transTip);
-                            var scrollDiv = transTd.querySelector('.scrollable-cell');
+                            transTd.setAttribute('title', String(transTip));
+                            var scrollDiv = /** @type {HTMLElement|null} */ (transTd.querySelector('.scrollable-cell'));
                             if (scrollDiv) {
                                 scrollDiv.removeAttribute('data-provenance');
-                                scrollDiv.setAttribute('title', transTip);
+                                scrollDiv.setAttribute('title', String(transTip));
                             }
                         } else {
                             transTd.removeAttribute('data-provenance');
                             transTd.removeAttribute('title');
-                            var scrollDiv = transTd.querySelector('.scrollable-cell');
+                            var scrollDiv = /** @type {HTMLElement|null} */ (transTd.querySelector('.scrollable-cell'));
                             if (scrollDiv) {
                                 scrollDiv.removeAttribute('data-provenance');
                                 scrollDiv.removeAttribute('title');
@@ -3147,7 +3077,7 @@
                         }
                     }
                     if (transTd && !transTd.classList.contains('dirty') && hasTransProp) {
-                        var div = transTd.querySelector('.scrollable-cell') || transTd;
+                        var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (transTd.querySelector('.scrollable-cell')) || transTd;
                         var val = (rowData.trans !== undefined && rowData.trans !== "") ? rowData.trans : ((rowData.WordDestination !== undefined && rowData.WordDestination !== "") ? rowData.WordDestination : ((rowData.word_translation !== undefined) ? rowData.word_translation : (rowData.trans || "")));
                         var allRowIdsAttr = tr.getAttribute('data-all-row-ids');
                         if (allRowIdsAttr) {
@@ -3173,13 +3103,13 @@
                                 }
                             }
                         }
-                        var hasSkeleton = div.querySelector('.skeleton-loader') !== null;
+                        var hasSkeleton = /** @type {HTMLElement|null} */ (div.querySelector('.skeleton-loader')) !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (val !== "" || globalStage === 'translated' || globalStage === 'translated_words' || globalStage === 'translated_lemmas' || isTerm) {
                             var oldVal = transTd.classList.contains('editing') ? null : (div.textContent || div.innerText);
-                            var targetVal = val;
+                            targetVal = val;
                             if (isTerm && targetVal === "" && window.AppState.lastError && oldVal && oldVal.indexOf('skeleton-loader') === -1) {
                                 targetVal = oldVal;
                             }
@@ -3210,11 +3140,11 @@
                             var unrolledTrans = ((typeof targetVal !== 'undefined' && targetVal !== undefined) ? targetVal : val) || "";
                             if (unrolledTrans && unrolledTrans.indexOf('skeleton-loader') === -1) {
                                 var unrolledTransHtml = unrolledTrans ? String(unrolledTrans).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
-                                transTd.setAttribute('data-orig-html', unrolledTransHtml);
+                                transTd.setAttribute('data-orig-html', String(unrolledTransHtml));
                                 var curTransTip = transTd.getAttribute('title') || (div ? div.getAttribute('title') : '');
                                 if (curTransTip) {
-                                    transTd.setAttribute('data-orig-title', curTransTip);
-                                    if (div && div !== transTd) div.setAttribute('data-orig-title', curTransTip);
+                                    transTd.setAttribute('data-orig-title', String(curTransTip));
+                                    if (div && div !== transTd) div.setAttribute('data-orig-title', String(curTransTip));
                                 } else {
                                     transTd.removeAttribute('data-orig-title');
                                     if (div && div !== transTd) div.removeAttribute('data-orig-title');
@@ -3222,24 +3152,24 @@
                             }
                         }
                     } else if (transTd && !transTd.classList.contains('dirty') && !transTd.classList.contains('editing')) {
-                        var div = transTd.querySelector('.scrollable-cell') || transTd;
+                        var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (transTd.querySelector('.scrollable-cell')) || transTd;
                         var curText = (div.textContent || div.innerText || '').trim();
-                        if (curText && curText !== '...' && curText !== 'Loading...' && !div.querySelector('.skeleton-loader')) {
+                        if (curText && curText !== '...' && curText !== 'Loading...' && !/** @type {HTMLElement|null} */ (div.querySelector('.skeleton-loader'))) {
                             applyCellProvenance(curText);
                         }
                     }
                     if (ipaCell && !ipaCell.classList.contains('dirty') && rowData.hasOwnProperty('ipa') && rowData.ipa !== undefined) {
-                        var div = ipaCell.querySelector('.scrollable-cell') || ipaCell;
+                        var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (ipaCell.querySelector('.scrollable-cell')) || ipaCell;
                         var val = rowData.ipa || "";
-                        var hasSkeleton = div.querySelector('.skeleton-loader') !== null;
+                        var hasSkeleton = /** @type {HTMLElement|null} */ (div.querySelector('.skeleton-loader')) !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (globalStage === 'translated_words' || isTerm) {
                             if (!ipaCell.classList.contains('editing')) setCellText(div, val);
                             if (val && val.indexOf('skeleton-loader') === -1) {
-                                ipaCell.setAttribute('title', val);
-                                if (div && div !== ipaCell) div.setAttribute('title', val);
+                                ipaCell.setAttribute('title', String(val));
+                                if (div && div !== ipaCell) div.setAttribute('title', String(val));
                             } else {
                                 ipaCell.removeAttribute('title');
                                 if (div && div !== ipaCell) div.removeAttribute('title');
@@ -3250,8 +3180,8 @@
                             if (oldVal !== val || hasSkeleton) {
                                 if (!ipaCell.classList.contains('editing')) setCellText(div, val);
                                 if (val.indexOf('skeleton-loader') === -1) {
-                                    ipaCell.setAttribute('title', val);
-                                    if (div && div !== ipaCell) div.setAttribute('title', val);
+                                    ipaCell.setAttribute('title', String(val));
+                                    if (div && div !== ipaCell) div.setAttribute('title', String(val));
                                 } else {
                                     ipaCell.removeAttribute('title');
                                     if (div && div !== ipaCell) div.removeAttribute('title');
@@ -3264,17 +3194,17 @@
                         }
                     }
                     if (morphCell && !morphCell.classList.contains('dirty') && (rowData.hasOwnProperty('morph') || rowData.hasOwnProperty('morphology') || rowData.hasOwnProperty('WordSourceMorphologyAI')) && (rowData.morph !== undefined || rowData.morphology !== undefined || rowData.WordSourceMorphologyAI !== undefined)) {
-                        var div = morphCell.querySelector('.scrollable-cell') || morphCell;
+                        var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (morphCell.querySelector('.scrollable-cell')) || morphCell;
                         var val = (rowData.morph !== undefined && rowData.morph !== "") ? rowData.morph : ((rowData.morphology !== undefined && rowData.morphology !== "") ? rowData.morphology : (rowData.WordSourceMorphologyAI || ""));
-                        var hasSkeleton = div.querySelector('.skeleton-loader') !== null;
+                        var hasSkeleton = /** @type {HTMLElement|null} */ (div.querySelector('.skeleton-loader')) !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (globalStage === 'translated_words' || isTerm) {
                             if (!morphCell.classList.contains('editing')) div.innerHTML = val;
                             if (val && val.indexOf('skeleton-loader') === -1) {
-                                morphCell.setAttribute('title', val);
-                                if (div && div !== morphCell) div.setAttribute('title', val);
+                                morphCell.setAttribute('title', String(val));
+                                if (div && div !== morphCell) div.setAttribute('title', String(val));
                             } else {
                                 morphCell.removeAttribute('title');
                                 if (div && div !== morphCell) div.removeAttribute('title');
@@ -3285,8 +3215,8 @@
                             if (oldVal !== val || hasSkeleton) {
                                 if (!morphCell.classList.contains('editing')) div.innerHTML = val;
                                 if (val.indexOf('skeleton-loader') === -1) {
-                                    morphCell.setAttribute('title', val);
-                                    if (div && div !== morphCell) div.setAttribute('title', val);
+                                    morphCell.setAttribute('title', String(val));
+                                    if (div && div !== morphCell) div.setAttribute('title', String(val));
                                 } else {
                                     morphCell.removeAttribute('title');
                                     if (div && div !== morphCell) div.removeAttribute('title');
@@ -3299,9 +3229,9 @@
                         }
                         if (val && val.indexOf('skeleton-loader') === -1) {
                             var unrolledMorphHtml = val ? String(val).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
-                            morphCell.setAttribute('data-orig-html', unrolledMorphHtml);
-                            morphCell.setAttribute('data-orig-title', val);
-                            if (div && div !== morphCell) div.setAttribute('data-orig-title', val);
+                            morphCell.setAttribute('data-orig-html', String(unrolledMorphHtml));
+                            morphCell.setAttribute('data-orig-title', String(val));
+                            if (div && div !== morphCell) div.setAttribute('data-orig-title', String(val));
                         } else {
                             morphCell.removeAttribute('data-orig-html');
                             morphCell.removeAttribute('data-orig-title');
@@ -3312,9 +3242,9 @@
                         for (var class_name in rowData.classifications) {
                             if (rowData.classifications.hasOwnProperty(class_name)) {
                                 var val = rowData.classifications[class_name] || "";
-                                var cell = tr.querySelector('td[data-col="' + class_name + '"]');
+                                var cell = /** @type {HTMLElement|null} */ (tr.querySelector('td[data-col="' + class_name + '"]'));
                                 if (cell) {
-                                    var div = cell.querySelector('.scrollable-cell');
+                                    var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (cell.querySelector('.scrollable-cell'));
                                     var displayVal = val;
                                     var spanClass = "";
                                     if (val.indexOf(':') !== -1) {
@@ -3334,7 +3264,7 @@
                                     }
                                     var clsTip = formatClassificationTooltip(val, class_name);
                                     if (clsTip) {
-                                        cell.setAttribute('title', clsTip);
+                                        cell.setAttribute('title', String(clsTip));
                                     }
                                 }
                             }
@@ -3342,15 +3272,15 @@
                     }
                     var hasPosProp = rowData.hasOwnProperty('pos') || rowData.hasOwnProperty('WordSourcePOS');
                     if (hasPosProp) {
-                        var posCell = tr.querySelector('td.col-pos, td[data-col="WordSourcePOS"]');
+                        var posCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-pos, td[data-col="WordSourcePOS"]'));
                         if (posCell && !posCell.classList.contains('dirty')) {
-                            var div = posCell.querySelector('.scrollable-cell') || posCell;
+                            var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (posCell.querySelector('.scrollable-cell')) || posCell;
                             var rawPos = (rowData.pos !== undefined && rowData.pos !== null) ? rowData.pos : (rowData.WordSourcePOS || "");
                             var normPos = rawPos;
                             if (typeof rawPos === 'string') {
                                 var pClean = rawPos.trim();
                                 var pUpper = pClean.toUpperCase();
-                                var posMap = {
+                                var /** @type {Record<string,string>} */ posMap = {
                                     "NOUN": "n.", "PROPN": "n.", "VERB": "v.", "AUX": "v.", "ADJ": "adj.",
                                     "ADV": "adv.", "ADP": "prep.", "PREP": "prep.", "PRON": "pron.",
                                     "CCONJ": "conj.", "SCONJ": "conj.", "CONJ": "conj.", "NUM": "num.",
@@ -3373,13 +3303,13 @@
                             }
                             var posTip = formatPosTooltip(rawPos || normPos);
                             if (posTip) {
-                                posCell.setAttribute('title', posTip);
+                                posCell.setAttribute('title', String(posTip));
                             }
                             var unrolledPosHtml = normPos ? String(normPos).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
-                            posCell.setAttribute('data-orig-html', unrolledPosHtml);
+                            posCell.setAttribute('data-orig-html', String(unrolledPosHtml));
                             if (posTip) {
-                                posCell.setAttribute('data-orig-title', posTip);
-                                if (div && div !== posCell) div.setAttribute('data-orig-title', posTip);
+                                posCell.setAttribute('data-orig-title', String(posTip));
+                                if (div && div !== posCell) div.setAttribute('data-orig-title', String(posTip));
                             } else {
                                 posCell.removeAttribute('data-orig-title');
                                 if (div && div !== posCell) div.removeAttribute('data-orig-title');
@@ -3388,9 +3318,9 @@
                     }
                     var hasGenderProp = rowData.hasOwnProperty('gender') || rowData.hasOwnProperty('WordSourceGender');
                     if (hasGenderProp) {
-                        var genderCell = tr.querySelector('td.col-gender, td[data-col="WordSourceGender"]');
+                        var genderCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-gender, td[data-col="WordSourceGender"]'));
                         if (genderCell && !genderCell.classList.contains('dirty')) {
-                            var div = genderCell.querySelector('.scrollable-cell') || genderCell;
+                            var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (genderCell.querySelector('.scrollable-cell')) || genderCell;
                             var rawGender = (rowData.gender !== undefined && rowData.gender !== null) ? rowData.gender : (rowData.WordSourceGender || "");
                             var targetGenderHtml = formatGenderBadge(rawGender);
                             var oldGenderHtml = div.innerHTML;
@@ -3400,17 +3330,17 @@
                             }
                             var rowLemma = (rowData.lemma !== undefined && rowData.lemma !== null) ? rowData.lemma : (rowData.WordSource || "");
                             if (!rowLemma) {
-                                var lemmaCell = tr.querySelector('td.col-lemma, td[data-col="WordSource"]');
+                                var lemmaCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-lemma, td[data-col="WordSource"]'));
                                 if (lemmaCell) {
-                                    var lemDiv = lemmaCell.querySelector('.scrollable-cell') || lemmaCell;
+                                    var lemDiv = /** @type {HTMLElement|null} */ (lemmaCell.querySelector('.scrollable-cell')) || lemmaCell;
                                     rowLemma = (lemDiv.textContent || lemDiv.innerText || '').trim();
                                 }
                             }
                             var effProv = rowData.provenance || rowData._provenance || rowData.transProvenance;
                             if (!effProv) {
-                                var transCell = tr.querySelector('td.col-translation, td[data-col="WordDestination"]');
+                                var transCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-translation, td[data-col="WordDestination"]'));
                                 if (transCell) {
-                                    effProv = transCell.getAttribute('data-provenance') || (transCell.querySelector('[data-provenance]') ? transCell.querySelector('[data-provenance]').getAttribute('data-provenance') : null);
+                                    effProv = transCell.getAttribute('data-provenance') || (/** @type {HTMLElement} */ (transCell.querySelector('[data-provenance]')) ? /** @type {HTMLElement} */ (transCell.querySelector('[data-provenance]')).getAttribute('data-provenance') : null) || undefined;
                                 }
                             }
                             if (!effProv && rowData.token_order !== undefined && rowData.token_order !== null && window.AppState && window.AppState.rows) {
@@ -3425,7 +3355,7 @@
                             }
                             var genTip = formatGenderTooltip(rawGender, rowLemma, effProv);
                             if (genTip) {
-                                genderCell.setAttribute('title', genTip);
+                                genderCell.setAttribute('title', String(genTip));
                             } else {
                                 genderCell.removeAttribute('title');
                             }
@@ -3446,7 +3376,10 @@
         window.receiveUpdate = function(data) {
             window.reserveTextRegions(false);
             if (window.AppStore) window.AppStore.applyDeltas(data);
-            else window.AppState.applyDeltas(data);
+            else {
+                if (!window.AppState.applyDeltas) throw new Error('Required delta merger is unavailable');
+                window.AppState.applyDeltas(data);
+            }
         };
 
         try {
@@ -3456,14 +3389,14 @@
                 window.AppState.textProvenance = initialSentenceProv;
                 var tcInit = document.getElementById('translation-container');
                 if (tcInit) {
-                    tcInit.setAttribute('data-provenance', initialSentenceProv);
+                    tcInit.setAttribute('data-provenance', String(initialSentenceProv));
                     var initProvTitle = formatProvenanceTooltip(initialSentenceProv);
                     if (initProvTitle) {
-                        tcInit.setAttribute('title', initProvTitle);
-                        var words = tcInit.querySelectorAll('span.word, div');
+                        tcInit.setAttribute('title', String(initProvTitle));
+                        var words = /** @type {NodeListOf<HTMLElement>} */ (tcInit.querySelectorAll('span.word, div'));
                         for (var i = 0; i < words.length; i++) {
-                            words[i].setAttribute('data-provenance', initialSentenceProv);
-                            words[i].setAttribute('title', initProvTitle);
+                            words[i].setAttribute('data-provenance', String(initialSentenceProv));
+                            words[i].setAttribute('title', String(initProvTitle));
                         }
                     }
                 }
@@ -3471,12 +3404,12 @@
         } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
 
         try {
-            var initRows = document.querySelectorAll('tr[data-row-id]');
+            var initRows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('tr[data-row-id]'));
             for (var ir = 0; ir < initRows.length; ir++) {
                 var rEl = initRows[ir];
                 var rId = rEl.getAttribute('data-row-id');
                 var tOrd = rEl.getAttribute('data-token-order');
-                var transTd = rEl.querySelector('td.col-translation, td[data-col="WordDestination"]');
+                var transTd = /** @type {HTMLElement|null} */ (rEl.querySelector('td.col-translation, td[data-col="WordDestination"]'));
                 var rProv = transTd ? transTd.getAttribute('data-provenance') : null;
                 if (rProv) {
                     if (rId) {
@@ -3491,7 +3424,7 @@
             }
         } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
 
-        var _cachedSentenceCards = null;
+        /** @type {Desk.Card[]|null} */ var _cachedSentenceCards = null;
         function getCardModels() {
             if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
                 var c = window.WorkspaceTabs.getCards();
@@ -3517,7 +3450,7 @@
         window.getCardModels = getCardModels;
 
         function countPendingSkeletons() {
-            var domCount = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+            var domCount = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('.skeleton-loader, [data-pending="true"]')).length;
             var cards = getCardModels();
             if (!cards || cards.length === 0) {
                 return domCount;
@@ -3529,9 +3462,9 @@
             } else if (window._kwActiveTabSeq !== undefined && window._kwActiveTabSeq !== null) {
                 activeSeq = window._kwActiveTabSeq;
             } else {
-                var activeChip = document.querySelector('.kw-tab-chip.active');
+                var activeChip = /** @type {HTMLElement|null} */ (document.querySelector('.kw-tab-chip.active'));
                 if (activeChip) {
-                    var parsed = parseInt(activeChip.getAttribute('data-tab-seq'), 10);
+                    var parsed = parseInt(String(activeChip.getAttribute('data-tab-seq')), 10);
                     if (!isNaN(parsed)) activeSeq = parsed;
                 }
             }
@@ -3539,11 +3472,11 @@
                 activeSeq = (cards[0].seq_num !== undefined) ? cards[0].seq_num : 1;
             }
 
-            var isFinished = !!(window.AppState && (window.AppState.isFinished === true || window.AppState.stage === 'finished' || (window.AppState.status && (window.AppState.status.isFinished === true || window.AppState.status === 'finished'))));
+            var isFinished = !!(window.AppState && (window.AppState.isFinished === true || window.AppState.stage === 'finished' || (window.AppState.status && ((typeof window.AppState.status === 'object' && window.AppState.status.isFinished === true) || window.AppState.status === 'finished'))));
             var isFailed = !!(window.AppState && (window.AppState.textTranslationFailed || window.AppState.textTranslationStatus === 'failed'));
 
             var tc = document.getElementById('translation-container');
-            var tcHasSkel = !!(tc && (tc.classList.contains('skeleton-loader') || tc.getAttribute('data-pending') === 'true' || tc.querySelector('.skeleton-loader, [data-pending="true"]')));
+            var tcHasSkel = !!(tc && (tc.classList.contains('skeleton-loader') || tc.getAttribute('data-pending') === 'true' || /** @type {HTMLElement|null} */ (tc.querySelector('.skeleton-loader, [data-pending="true"]'))));
 
             for (var i = 0; i < cards.length; i++) {
                 var card = cards[i];
@@ -3572,6 +3505,7 @@
         }
         window.countPendingSkeletons = countPendingSkeletons;
 
+        /** @param {string} mode */
         function normalizeCardSkeletons(mode) {
             var cards = getCardModels();
             if (cards && cards.length > 0) {
@@ -3588,7 +3522,7 @@
                                 var tOrdStr = String(word.token_order !== undefined && word.token_order !== null ? word.token_order : rIdStr);
                                 var appRow = (window.AppState && window.AppState.rows) ? ((tOrdStr && window.AppState.rows[tOrdStr]) || (rIdStr && window.AppState.rows[rIdStr])) : null;
                                 var resolvedTrans = appRow ? (appRow.trans !== undefined && appRow.trans !== "" ? appRow.trans : (appRow.WordDestination !== undefined && appRow.WordDestination !== "" ? appRow.WordDestination : (appRow.word_translation || ''))) : '';
-                                if (resolvedTrans && resolvedTrans.indexOf('skeleton-loader') === -1 && resolvedTrans !== '[FAILED]') {
+                                if (appRow && resolvedTrans && resolvedTrans.indexOf('skeleton-loader') === -1 && resolvedTrans !== '[FAILED]') {
                                     word.translation = resolvedTrans;
                                     if (appRow.lemma) word.lemma = appRow.lemma;
                                     if (appRow.ipa) word.ipa = appRow.ipa;
@@ -3620,7 +3554,8 @@
         window.normalizeCardSkeletons = normalizeCardSkeletons;
 
         var _lastEnsureRestartTime = 0;
-        var _ensureDebounceTimer = null;
+        /** @type {number|null} */ var _ensureDebounceTimer = null;
+        /** @param {string} reason */
         function ensureWatchdogActive(reason) {
             var isWebMode = (window.location.protocol !== 'file:') || (document.body && document.body.getAttribute('data-web-mode') === 'true');
             var sessZidEl = document.getElementById('session-zid');
@@ -3630,7 +3565,7 @@
                 curZid = params.get('session_zid') || params.get('zid') || "";
             }
             if (!curZid && document.body && document.body.getAttribute('data-zid')) {
-                curZid = document.body.getAttribute('data-zid');
+                curZid = document.body.getAttribute('data-zid') || '';
             }
             if (!isWebMode || !curZid) return;
 
@@ -3649,7 +3584,7 @@
             var pending = (typeof window.countPendingSkeletons === 'function') ? window.countPendingSkeletons() : 0;
             if (pending === 0) return;
 
-            var isFinished = !!(window.AppState && (window.AppState.isFinished === true || window.AppState.stage === 'finished' || (window.AppState.status && (window.AppState.status.isFinished === true || window.AppState.status === 'finished'))));
+            var isFinished = !!(window.AppState && (window.AppState.isFinished === true || window.AppState.stage === 'finished' || (window.AppState.status && ((typeof window.AppState.status === 'object' && window.AppState.status.isFinished === true) || window.AppState.status === 'finished'))));
             if (isFinished) {
                 if (typeof window.normalizeCardSkeletons === 'function') {
                     window.normalizeCardSkeletons('finished');
@@ -3696,7 +3631,7 @@
                 curZid = params.get('session_zid') || params.get('zid') || "";
             }
             if (!curZid && document.body && document.body.getAttribute('data-zid')) {
-                curZid = document.body.getAttribute('data-zid');
+                curZid = document.body.getAttribute('data-zid') || '';
             }
 
             var hasSkeletons = countPendingSkeletons() > 0;
@@ -3781,7 +3716,7 @@
                     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
                         return;
                     }
-                    var pendings = document.querySelectorAll('.skeleton-loader, [data-pending="true"]');
+                    var pendings = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('.skeleton-loader, [data-pending="true"]'));
                     if (pendings.length > 0) {
                         for (var i = 0; i < pendings.length; i++) {
                             var el = pendings[i];
@@ -3835,7 +3770,7 @@
                         var cTimeoutId = cController ? setTimeout(function() {
                             try { if (cController) cController.abort(); } catch(e) { console.debug("[AbortController] Abort failed:", e); }
                         }, 4000) : null;
-                        var cOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
+                        var /** @type {RequestInit} */ cOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
                         if (cController) cOpts.signal = cController.signal;
 
                         fetch(statusUrl, cOpts)
@@ -3954,9 +3889,9 @@
                     var statusUrl = "/session/status?zid=" + encodeURIComponent(curZid);
                     var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
                     var timeoutId = controller ? setTimeout(function() {
-                        try { controller.abort(); } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
+                        try { if (controller) controller.abort(); } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
                     }, 4000) : null;
-                    var fetchOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
+                    var /** @type {RequestInit} */ fetchOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
                     if (controller) {
                         fetchOpts.signal = controller.signal;
                     }
@@ -4029,7 +3964,7 @@
                             var rcTimeoutId = rcController ? setTimeout(function() {
                                 try { if (rcController) rcController.abort(); } catch(e) { console.debug("[AbortController] Abort failed:", e); }
                             }, 4000) : null;
-                            var rcOpts = { method: 'GET' };
+                            var /** @type {RequestInit} */ rcOpts = { method: 'GET' };
                             if (rcController) rcOpts.signal = rcController.signal;
 
                             fetch(renderCheckUrl, rcOpts)
@@ -4059,7 +3994,7 @@
                         });
                 };
 
-                var startWatchdogPolling = function(restart) {
+                var startWatchdogPolling = /** @param {boolean=} restart */ function(restart) {
                     if (resolved) return;
                     if (typeof fetch === 'undefined') return;
                     var remaining = countPendingSkeletons();
@@ -4113,7 +4048,7 @@
                 }
 
                 var sseBackoffMs = 1000;
-                var connectSse = function(forceReconnect) {
+                var connectSse = /** @param {boolean=} forceReconnect */ function(forceReconnect) {
                     if (resolved) return;
                     if (typeof EventSource === 'undefined') return;
                     if (window._kwEvtSource) {
@@ -4245,7 +4180,7 @@
                         }
                     });
 
-                    var focusDebounceTimer = null;
+                    /** @type {number|null} */ var focusDebounceTimer = null;
                     window.addEventListener('focus', function() {
                         var remaining = countPendingSkeletons();
                         if (remaining > 0) {
@@ -4281,7 +4216,7 @@
 
         var sourceContainer = document.getElementById('source-container');
         var spans = sourceContainer ? sourceContainer.getElementsByTagName('span') : [];
-        var tokenSpans = [];
+        /** @type {HTMLElement[]} */ var tokenSpans = [];
         for (var i = 0; i < spans.length; i++) {
             var sp = spans[i];
             if (sp.classList.contains('word')) {
@@ -4305,12 +4240,13 @@
             }
         }
 
+        /** @param {Desk.RowId|null|undefined} rowId */
         function findTableRowById(rowId) {
             if (rowId === undefined || rowId === null) return null;
             var rIdStr = String(rowId);
             var rows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
                 ? tableRows
-                : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
+                : /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
             for (var k = 0; k < rows.length; k++) {
                 var tr = rows[k];
                 if (getRowGroupIds(tr).indexOf(rIdStr) !== -1) {
@@ -4320,15 +4256,17 @@
             return null;
         }
 
+        /** @param {HTMLElement|null|undefined} tr */
         function getRowLemma(tr) {
             if (!tr) return '';
-            var lemCell = tr.querySelector('.col-lemma');
-            if (!lemCell) lemCell = tr.querySelector('[data-col="WordSource"]');
+            var lemCell = /** @type {HTMLElement|null} */ (tr.querySelector('.col-lemma'));
+            if (!lemCell) lemCell = /** @type {HTMLElement|null} */ (tr.querySelector('[data-col="WordSource"]'));
             if (!lemCell) return '';
             var txt = (lemCell.textContent || lemCell.innerText || '').trim();
             return txt.toLowerCase();
         }
 
+        /** @param {Desk.RowId|null|undefined} rowId */
         function getLemmaByRowId(rowId) {
             if (rowId === undefined || rowId === null) return '';
             var strId = String(rowId);
@@ -4360,14 +4298,14 @@
         }
 
         function syncSelectionsToCardsAndState() {
-            if (!window.AppState) window.AppState = {};
+            if (!window.AppState) window.AppState = {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
             if (!window.AppState.selectedLemmas) window.AppState.selectedLemmas = {};
             var selMap = window.AppState.selectedLemmas;
 
             // 1. Update current tableRows and selectedRowIdsMap
             var rows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
                 ? tableRows
-                : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
+                : /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
             if (rows && rows.length > 0) {
                 for (var i = 0; i < rows.length; i++) {
                     var r = rows[i];
@@ -4382,23 +4320,74 @@
                 }
             }
 
-            // Only the active card owns this selection command. Other contexts
-            // retain their independent intent and persisted baselines.
-            var card = window.WorkspaceTabs && window.WorkspaceTabs.getActiveCard();
-            if (card) card.selected_ids = Object.keys(selectedRowIdsMap);
+            var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
+            cards.forEach(function(card) {
+                /** @type {string[]} */ var cardSelections = [];
+                card.selected_ids = cardSelections;
+                (card.words || []).forEach(function(word) {
+                    var lemma = String(word.lemma || '').trim().toLowerCase();
+                    if (selMap[lemma]) cardSelections.push(String(word.row_id));
+                });
+            });
         }
 
+        window.applySharedSelection = function(membership) {
+            if (!membership) return;
+            var pending = JSON.parse(window.getDeltas()).some(/** @param {Desk.Delta} delta */ function(delta) { return delta.column === 'DeskSelected'; });
+            if (pending) return;
+            var state = window.AppStore.getState();
+            /** @type {Desk.Membership} */ var membershipProjection = {};
+            state.selectedLemmas = membershipProjection;
+            Object.keys(membership).forEach(function(lemma) {
+                if (membership[lemma]) membershipProjection[lemma] = true;
+            });
+            syncSelectionsToCardsAndState();
+            var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
+            cards.forEach(function(card) {
+                (card.words || []).forEach(function(word) {
+                    word.selected = membership[String(word.lemma || '').trim().toLowerCase()] ? '1' : '0';
+                });
+            });
+            tableRows.forEach(function(row) { initialHighlights[String(row.getAttribute('data-row-id'))] = !!membership[getRowLemma(row)]; });
+            updateRowStyles();
+            updateBidirectionalHighlights();
+            updateToolbarState();
+        };
+
+        if (window.stopSelectionBridge) window.stopSelectionBridge();
+        /** @type {number|null} */ var selectionBridgeTimer = null;
+        window.stopSelectionBridge = function() {
+            if (selectionBridgeTimer !== null) clearInterval(selectionBridgeTimer);
+            selectionBridgeTimer = null;
+        };
+        window.startSelectionBridge = function() {
+            if (selectionBridgeTimer !== null) return;
+            selectionBridgeTimer = setInterval(function() {
+                if (window.__deskInstanceId !== myDeskInstanceId) { window.stopSelectionBridge(); return; }
+                if (!window.ahkCall) return;
+                try {
+                    var response = JSON.parse(window.ahkCall('get_shared_selection', JSON.stringify({session_zid: getSessionZid(), client_id: String(myDeskInstanceId), accept_updates: !window.isDirty()})));
+                    response = response.data || response;
+                    (response.events || []).forEach(/** @param {import('./types.js').UpdatePayload} event */ function(event) { window.receiveUpdate(event); });
+                    if (response.shared_selection) window.applySharedSelection(response.shared_selection);
+                } catch (err) {
+                    console.error('[Selection] Native synchronization failed', err);
+                }
+            }, 200);
+        };
+        addEvent(window, 'pagehide', function() {
+            if (selectionBridgeTimer !== null) clearInterval(selectionBridgeTimer);
+            selectionBridgeTimer = null;
+        });
+
+        /** @param {string} lemma @param {boolean} isSelected */
         function setLemmaSelected(lemma, isSelected) {
             if (!lemma) return;
             var norm = String(lemma).trim().toLowerCase();
             if (!norm) return;
-            if (!window.AppState) window.AppState = {};
+            if (!window.AppState) window.AppState = {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
             if (!window.AppState.selectedLemmas) window.AppState.selectedLemmas = {};
-            if (isSelected) {
-                window.AppState.selectedLemmas[norm] = true;
-            } else {
-                delete window.AppState.selectedLemmas[norm];
-            }
+            window.AppStore.dispatch({type: 'SET_LEMMA_SELECTION', payload: {lemma: norm, selected: isSelected}});
         }
         window.getRowLemma = getRowLemma;
         window.getLemmaByRowId = getLemmaByRowId;
@@ -4407,6 +4396,7 @@
 
         var COMPOUND_JOINER_SET = new Set((window.__CONFIG__ || {}).compound_joiners || "-_.:#@");
 
+        /** @param {string} txt */
         function isJoinerText(txt) {
             if (!txt || txt.length === 0) return false;
             for (var i = 0; i < txt.length; i++) {
@@ -4415,6 +4405,7 @@
             return true;
         }
 
+        /** @param {Node|null} node */
         function isCompoundDelimiterNode(node) {
             if (!node) return false;
             if (node.nodeType === 3) { // Text node
@@ -4422,7 +4413,7 @@
                 return isJoinerText(txt);
             }
             if (node.nodeType === 1) { // Element node (e.g. <span class="sentence-delimiter">-</span>)
-                if (node.classList && node.classList.contains('sentence-delimiter')) {
+                if (/** @type {HTMLElement} */ (node).classList && /** @type {HTMLElement} */ (node).classList.contains('sentence-delimiter')) {
                     var txt = node._origVal !== undefined ? node._origVal : (node.textContent || "");
                     return isJoinerText(txt);
                 }
@@ -4430,6 +4421,7 @@
             return false;
         }
 
+        /** @param {HTMLElement} span */
         function findCompoundSiblingSpans(span) {
             if (!span || !span.classList || !span.classList.contains('word')) return span ? [span] : [];
 
@@ -4437,9 +4429,9 @@
             var startSpan = span;
             var curr = span;
             while (curr) {
-                var prevNode = curr.previousSibling;
+                var prevNode = /** @type {HTMLElement|null} */ (curr.previousSibling);
                 if (isCompoundDelimiterNode(prevNode)) {
-                    var prevSpan = prevNode.previousSibling;
+                    var prevSpan = /** @type {HTMLElement|null} */ ((prevNode && prevNode.previousSibling));
                     if (prevSpan && prevSpan.nodeType === 1 && prevSpan.classList && prevSpan.classList.contains('word')) {
                         startSpan = prevSpan;
                         curr = prevSpan;
@@ -4459,9 +4451,9 @@
             var group = [startSpan];
             curr = startSpan;
             while (curr) {
-                var nextNode = curr.nextSibling;
+                var nextNode = /** @type {HTMLElement|null} */ (curr.nextSibling);
                 if (isCompoundDelimiterNode(nextNode)) {
-                    var nextSpan = nextNode.nextSibling;
+                    var nextSpan = /** @type {HTMLElement|null} */ ((nextNode && nextNode.nextSibling));
                     if (nextSpan && nextSpan.nodeType === 1 && nextSpan.classList && nextSpan.classList.contains('word')) {
                         group.push(nextSpan);
                         curr = nextSpan;
@@ -4484,6 +4476,7 @@
         window.isCompoundDelimiterNode = isCompoundDelimiterNode;
         window.findCompoundSiblingSpans = findCompoundSiblingSpans;
 
+        /** @param {string} pos */
         function isNonVerbalPartOfSpeech(pos) {
             if (!pos) return false;
             var p = String(pos).trim().toLowerCase();
@@ -4501,6 +4494,7 @@
             return false;
         }
 
+        /** @param {HTMLElement} span */
         function getWordPOS(span) {
             if (!span) return "";
             var td = findTokenData(span);
@@ -4509,7 +4503,7 @@
                 for (var i = 0; i < td.row_ids.length; i++) {
                     var tr = findTableRowById(td.row_ids[i]);
                     if (tr) {
-                        var posCell = tr.querySelector('td.col-pos');
+                        var posCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-pos'));
                         if (posCell) {
                             var text = (posCell.textContent || posCell.innerText || "").trim();
                             if (text) return text;
@@ -4521,6 +4515,7 @@
         }
         window.getWordPOS = getWordPOS;
 
+        /** @param {HTMLElement} span */
         function findSeparablePartnerSpans(span) {
             if (!span || !span.classList || !span.classList.contains('word')) return span ? [span] : [];
             var td = findTokenData(span);
@@ -4539,7 +4534,7 @@
                 for (var r = 0; r < td.row_ids.length; r++) {
                     var tr = findTableRowById(td.row_ids[r]);
                     if (tr) {
-                        var infCell = tr.querySelector('td.col-inflected');
+                        var infCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-inflected'));
                         var infText = infCell ? (infCell.textContent || infCell.innerText || '').trim() : '';
                         if (infText.indexOf(' ') !== -1 || infText.indexOf('+') !== -1) {
                             isMultiToken = true;
@@ -4571,7 +4566,7 @@
                     for (var r = 0; r < otd.row_ids.length; r++) {
                         var tr = findTableRowById(otd.row_ids[r]);
                         if (tr) {
-                            var infCell = tr.querySelector('td.col-inflected');
+                            var infCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-inflected'));
                             var infText = infCell ? (infCell.textContent || infCell.innerText || '').trim() : '';
                             if (infText.indexOf(' ') !== -1 || infText.indexOf('+') !== -1) {
                                 otherMulti = true;
@@ -4603,11 +4598,13 @@
             return partners;
         }
 
+        /** @param {HTMLElement} span */
         function findRelatedTokenSpans(span) {
             var sepPartners = findSeparablePartnerSpans(span);
             return sepPartners.length > 0 ? sepPartners : [span];
         }
 
+        /** @param {HTMLElement} tr */
         function getRowGroupIds(tr) {
             if (!tr) return [];
             var ids = [String(tr.getAttribute('data-row-id'))];
@@ -4621,25 +4618,28 @@
             }
             return ids;
         }
+        /** @param {HTMLElement} tr */
         function getExtraRowIds(tr) { return getRowGroupIds(tr).slice(1); }
         window.getRowGroupIds = getRowGroupIds;
         window.getExtraRowIds = getExtraRowIds;
 
         var LEGACY_OVERVIEW_CUTOFF_ZID = '20261002000000';
         function isLegacyOverviewContext() {
-            var isOverviewTab = !!(window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function' && window.WorkspaceTabs.getActiveCard() && window.WorkspaceTabs.getActiveCard().index === 0);
+            var activeCard = window.WorkspaceTabs.getActiveCard();
+            var isOverviewTab = !!(activeCard && activeCard.index === 0);
             var cardZid = '';
-            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function' && window.WorkspaceTabs.getActiveCard() && window.WorkspaceTabs.getActiveCard().zid) {
-                cardZid = String(window.WorkspaceTabs.getActiveCard().zid);
+            if (activeCard && activeCard.zid) {
+                cardZid = String(activeCard.zid);
             } else if (typeof SESSION_ZID !== 'undefined' && SESSION_ZID && SESSION_ZID !== '__SESSION_ZID__') {
                 cardZid = String(SESSION_ZID);
             } else if (window.__CONFIG__ && window.__CONFIG__.zid) {
                 cardZid = String(window.__CONFIG__.zid);
             }
-            return isOverviewTab && (cardZid && cardZid < LEGACY_OVERVIEW_CUTOFF_ZID);
+            return !!(isOverviewTab && cardZid && cardZid < LEGACY_OVERVIEW_CUTOFF_ZID);
         }
         window.isLegacyOverviewContext = isLegacyOverviewContext;
 
+        /** @param {Record<string,boolean>} ctx */
         function decideTokenClickAction(ctx) {
             var isTableSelectedToken = !!(ctx.isRowSelected && !ctx.isRowBackedByActiveToken);
             var shouldDeselect = ctx.hasActiveTokens
@@ -4649,16 +4649,18 @@
         }
         window.decideTokenClickAction = decideTokenClickAction;
 
+        /** @param {HTMLElement|null} span @returns {Desk.Token|null} */
         function findTokenData(span) {
             if (!span) return null;
-            var wordIdx = parseInt(span.getAttribute('data-word-idx') || span.getAttribute('data-order') || span.getAttribute('data-token-order'), 10);
+            var wordIdx = parseInt(String(span.getAttribute('data-word-idx') || span.getAttribute('data-order') || span.getAttribute('data-token-order')), 10);
             var spanText = (span.getAttribute('data-word') || span.textContent || '').trim().toLowerCase();
-            var rawSent = parseInt(span.getAttribute('data-sentence-idx'), 10);
+            var rawSent = parseInt(String(span.getAttribute('data-sentence-idx')), 10);
             var spanSent = isNaN(rawSent) ? null : rawSent;
 
+            /** @param {Desk.Word} wObj @param {Desk.Card} card */
             function resolveSent(wObj, card) {
                 if (spanSent !== null) return spanSent;
-                var w = parseInt(wObj.sentence_idx, 10);
+                var w = parseInt(String(wObj.sentence_idx), 10);
                 if (!isNaN(w)) return w;
                 return (card && card.sentence_idx > 0) ? card.sentence_idx : null;
             }
@@ -4692,7 +4694,7 @@
                 }
                 if (spanText) {
                     var candidates = [];
-                    var seenRowIds = {};
+                    var /** @type {Desk.Membership} */ seenRowIds = {};
                     for (var c = 0; c < cards.length; c++) {
                         var words = cards[c].words || [];
                         for (var w = 0; w < words.length; w++) {
@@ -4723,13 +4725,13 @@
                 }
             }
             if (spanText) {
-                var rows = document.querySelectorAll('#lemma-table tbody tr[data-row-id]');
+                var rows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id]'));
                 var matchedRows = [];
                 for (var r = 0; r < rows.length; r++) {
                     var tr = rows[r];
-                    var rId = parseInt(tr.getAttribute('data-row-id'), 10);
-                    var srcInfCell = tr.querySelector('td[data-col="WordSourceInflectedForm"]');
-                    var srcCell = tr.querySelector('td[data-col="WordSource"]');
+                    var rId = parseInt(String(tr.getAttribute('data-row-id')), 10);
+                    var srcInfCell = /** @type {HTMLElement|null} */ (tr.querySelector('td[data-col="WordSourceInflectedForm"]'));
+                    var srcCell = /** @type {HTMLElement|null} */ (tr.querySelector('td[data-col="WordSource"]'));
                     var t1 = (srcInfCell ? (srcInfCell.textContent || '') : '').trim().toLowerCase();
                     var t2 = (srcCell ? (srcCell.textContent || '') : '').trim().toLowerCase();
                     if (t1 === spanText || t2 === spanText) {
@@ -4752,8 +4754,9 @@
             return null;
         }
 
+        /** @param {Desk.RowId} wordIdx */
         function findTokenDataByVisualIdx(wordIdx) {
-            wordIdx = parseInt(wordIdx, 10);
+            wordIdx = parseInt(String(wordIdx), 10);
             for (var i = 0; i < tokenMap.length; i++) {
                 if (tokenMap[i].visual_idx === wordIdx) {
                     return tokenMap[i];
@@ -4762,9 +4765,10 @@
             return null;
         }
 
+        /** @param {number} visualIdx */
         function isTokenInActiveSelections(visualIdx) {
             if (!window.AppState || !window.AppState.activeTokenSelections) return false;
-            visualIdx = parseInt(visualIdx, 10);
+            visualIdx = parseInt(String(visualIdx), 10);
             for (var i = 0; i < window.AppState.activeTokenSelections.length; i++) {
                 if (window.AppState.activeTokenSelections[i].visual_idx === visualIdx) {
                     return true;
@@ -4773,24 +4777,25 @@
             return false;
         }
 
+        /** @param {string} rowIdStr @param {Desk.Membership} excludedVisualIdxsMap */
         function isRowStillNeededByOtherActiveTokens(rowIdStr, excludedVisualIdxsMap) {
             if (!window.AppState || !window.AppState.activeTokenSelections) return false;
-            var targetRowIdInt = parseInt(rowIdStr, 10);
+            var targetRowIdInt = parseInt(String(rowIdStr), 10);
 
-            var relevantRowIds = {};
+            var /** @type {Desk.Membership} */ relevantRowIds = {};
             relevantRowIds[String(rowIdStr)] = true;
             if (!isNaN(targetRowIdInt)) relevantRowIds[String(targetRowIdInt)] = true;
 
             var rows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
                 ? tableRows
-                : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
+                : /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
             if (rows && rows.length > 0) {
                 for (var i = 0; i < rows.length; i++) {
                     var tr = rows[i];
                     var trGroup = getRowGroupIds(tr);
                     var containsTarget = false;
                     for (var g = 0; g < trGroup.length; g++) {
-                        if (trGroup[g] === String(rowIdStr) || (!isNaN(targetRowIdInt) && parseInt(trGroup[g], 10) === targetRowIdInt)) {
+                        if (trGroup[g] === String(rowIdStr) || (!isNaN(targetRowIdInt) && parseInt(String(trGroup[g]), 10) === targetRowIdInt)) {
                             containsTarget = true;
                             break;
                         }
@@ -4805,10 +4810,10 @@
 
             for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
                 var item = window.AppState.activeTokenSelections[a];
-                if (excludedVisualIdxsMap && excludedVisualIdxsMap[item.visual_idx]) continue;
-                var td = findTokenDataByVisualIdx ? findTokenDataByVisualIdx(item.visual_idx) : null;
+                if (excludedVisualIdxsMap && excludedVisualIdxsMap[String(item.visual_idx)]) continue;
+                var td = findTokenDataByVisualIdx ? findTokenDataByVisualIdx(Number(item.visual_idx)) : null;
                 if (!td) {
-                    var s = document.querySelector('span[data-word-idx="' + item.visual_idx + '"]');
+                    var s = /** @type {HTMLElement|null} */ (document.querySelector('span[data-word-idx="' + item.visual_idx + '"]'));
                     if (s) td = findTokenData(s);
                 }
                 var atomics = td ? ((td.atomic_row_ids !== undefined) ? td.atomic_row_ids : (td.row_ids || [])) : [];
@@ -4822,16 +4827,17 @@
         }
         window.isRowStillNeededByOtherActiveTokens = isRowStillNeededByOtherActiveTokens;
 
+        /** @param {string} lemmaStr @param {Desk.Membership} excludedVisualIdxsMap */
         function isLemmaStillNeededByOtherActiveTokens(lemmaStr, excludedVisualIdxsMap) {
             if (!lemmaStr || !window.AppState || !window.AppState.activeTokenSelections) return false;
             var normLemma = String(lemmaStr).trim().toLowerCase();
             if (!normLemma) return false;
             for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
                 var item = window.AppState.activeTokenSelections[a];
-                if (excludedVisualIdxsMap && excludedVisualIdxsMap[item.visual_idx]) continue;
-                var td = findTokenDataByVisualIdx ? findTokenDataByVisualIdx(item.visual_idx) : null;
+                if (excludedVisualIdxsMap && excludedVisualIdxsMap[String(item.visual_idx)]) continue;
+                var td = findTokenDataByVisualIdx ? findTokenDataByVisualIdx(Number(item.visual_idx)) : null;
                 if (!td) {
-                    var s = document.querySelector('span[data-word-idx="' + item.visual_idx + '"]');
+                    var s = /** @type {HTMLElement|null} */ (document.querySelector('span[data-word-idx="' + item.visual_idx + '"]'));
                     if (s) td = findTokenData(s);
                 }
                 if (td) {
@@ -4872,7 +4878,7 @@
                 if (raw) {
                     var items = JSON.parse(raw);
                     if (Array.isArray(items) && items.length > 0) {
-                        if (!window.AppState) window.AppState = {};
+                        if (!window.AppState) window.AppState = {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
                         window.AppState.activeTokenSelections = items;
                         if (!window.AppState.selectedLemmas) window.AppState.selectedLemmas = {};
                         for (var i = 0; i < items.length; i++) {
@@ -4913,6 +4919,7 @@
             saveActiveTokensToStorage();
         }
 
+        /** @param {Desk.RowId} rowId @param {string} lemma */
         function pruneActiveTokensByRowOrLemma(rowId, lemma) {
             if (!window.AppState || !window.AppState.activeTokenSelections || window.AppState.activeTokenSelections.length === 0) return;
             var rStr = (rowId !== undefined && rowId !== null) ? String(rowId) : null;
@@ -4933,15 +4940,16 @@
         }
         window.pruneActiveTokensByRowOrLemma = pruneActiveTokensByRowOrLemma;
 
+        /** @param {HTMLElement} span */
         function addTokenToActiveSelections(span) {
-            if (!window.AppState) window.AppState = {};
+            if (!window.AppState) window.AppState = {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
             if (!window.AppState.activeTokenSelections) window.AppState.activeTokenSelections = [];
             var relatedSpans = findRelatedTokenSpans(span);
             for (var i = 0; i < relatedSpans.length; i++) {
                 var s = relatedSpans[i];
                 var td = findTokenData(s);
-                var vIdx = td ? td.visual_idx : parseInt(s.getAttribute('data-word-idx'), 10);
-                if (isNaN(vIdx)) continue;
+                var vIdx = td ? td.visual_idx : parseInt(String(s.getAttribute('data-word-idx')), 10);
+                if (isNaN(Number(vIdx))) continue;
                 var exists = false;
                 for (var j = 0; j < window.AppState.activeTokenSelections.length; j++) {
                     if (window.AppState.activeTokenSelections[j].visual_idx === vIdx) {
@@ -4950,18 +4958,18 @@
                     }
                 }
                 if (!exists) {
-                    var sIdx = (td && td.sentence_idx !== undefined && !isNaN(td.sentence_idx)) ? td.sentence_idx : null;
+                    var sIdx = (td && td.sentence_idx !== undefined && !isNaN(Number(td.sentence_idx))) ? td.sentence_idx : null;
                     if (sIdx === null) {
                         var chunkEl = (s.closest && s.closest('.kw-sentence-chunk, [data-sentence-idx]')) || s.parentElement;
                         if (chunkEl && chunkEl.getAttribute) {
-                            var cSent = parseInt(chunkEl.getAttribute('data-sentence-idx'), 10);
+                            var cSent = parseInt(String(chunkEl.getAttribute('data-sentence-idx')), 10);
                             if (!isNaN(cSent)) sIdx = cSent;
                         }
                     }
                     if (sIdx === null) {
                         var sAttr = s.getAttribute('data-sentence-idx');
                         if (sAttr) {
-                            var sNum = parseInt(sAttr, 10);
+                            var sNum = parseInt(String(sAttr), 10);
                             if (!isNaN(sNum)) sIdx = sNum;
                         }
                     }
@@ -4986,18 +4994,19 @@
             saveActiveTokensToStorage();
         }
 
+        /** @param {HTMLElement} span */
         function removeTokenFromActiveSelections(span) {
             if (!window.AppState || !window.AppState.activeTokenSelections) return;
             var relatedSpans = findRelatedTokenSpans(span);
-            var vIdxsToRemove = {};
+            var /** @type {Desk.Membership} */ vIdxsToRemove = {};
             for (var i = 0; i < relatedSpans.length; i++) {
                 var s = relatedSpans[i];
                 var td = findTokenData(s);
-                var vIdx = td ? td.visual_idx : parseInt(s.getAttribute('data-word-idx'), 10);
-                if (!isNaN(vIdx)) vIdxsToRemove[vIdx] = true;
+                var vIdx = td ? td.visual_idx : parseInt(String(s.getAttribute('data-word-idx')), 10);
+                if (!isNaN(Number(vIdx))) vIdxsToRemove[String(vIdx)] = true;
             }
             window.AppState.activeTokenSelections = window.AppState.activeTokenSelections.filter(function(item) {
-                return !vIdxsToRemove[item.visual_idx];
+                return !vIdxsToRemove[String(item.visual_idx)];
             });
             saveActiveTokensToStorage();
         }
@@ -5010,6 +5019,7 @@
         window.saveActiveTokensToStorage = saveActiveTokensToStorage;
         window.restoreActiveTokensFromStorage = restoreActiveTokensFromStorage;
 
+        /** @param {HTMLElement} span */
         function getRawRowTranslations(span) {
             var tokenData = findTokenData(span);
             if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
@@ -5023,7 +5033,7 @@
                     var tds = tr.getElementsByTagName('td');
                     for (var m = 0; m < tds.length; m++) {
                         if (tds[m].getAttribute('data-col') === 'WordDestination') {
-                            if (tds[m].querySelector('.skeleton-loader') || tds[m].querySelector('[data-pending="true"]') || tds[m].classList.contains('skeleton-loader')) {
+                            if (/** @type {HTMLElement|null} */ (tds[m].querySelector('.skeleton-loader')) || /** @type {HTMLElement|null} */ (tds[m].querySelector('[data-pending="true"]')) || tds[m].classList.contains('skeleton-loader')) {
                                 continue;
                             }
                             var trans = tds[m].textContent || tds[m].innerText || "";
@@ -5041,6 +5051,7 @@
             return translations;
         }
 
+        /** @param {string} lemma @param {string} spanClean */
         function isMatchingSubTokenLemma(lemma, spanClean) {
             if (!lemma || !spanClean) return false;
             var l = lemma.toLowerCase().trim();
@@ -5056,6 +5067,7 @@
             return false;
         }
 
+        /** @param {HTMLElement} span @param {HTMLElement[]} group */
         function getSpanSpecificTranslation(span, group) {
             if (!group) group = findCompoundSiblingSpans(span);
             var tokenData = findTokenData(span);
@@ -5096,7 +5108,7 @@
                     if (col === '{lemma_col_name}' || col === 'WordSource') {
                         lemma = (tds[m].textContent || tds[m].innerText || "").trim();
                     } else if (col === 'WordDestination') {
-                        if (tds[m].querySelector('.skeleton-loader') || tds[m].querySelector('[data-pending="true"]') || tds[m].classList.contains('skeleton-loader')) {
+                        if (/** @type {HTMLElement|null} */ (tds[m].querySelector('.skeleton-loader')) || /** @type {HTMLElement|null} */ (tds[m].querySelector('[data-pending="true"]')) || tds[m].classList.contains('skeleton-loader')) {
                             trans = "";
                         } else {
                             var tStr = (tds[m].textContent || tds[m].innerText || "").trim();
@@ -5177,6 +5189,7 @@
             return raw.join(' ');
         }
 
+        /** @param {HTMLElement} span */
         function getWordTranslation(span) {
             var group = findCompoundSiblingSpans(span);
             if (group.length > 1) {
@@ -5188,6 +5201,7 @@
             return raw.join(' ');
         }
 
+        /** @param {HTMLElement} span @param {boolean} toTranslation @param {boolean=} forceCompound */
         function flipWord(span, toTranslation, forceCompound) {
             if (!span) return;
             var group = findCompoundSiblingSpans(span);
@@ -5228,7 +5242,7 @@
             for (var i = 0; i < targets.length; i++) {
                 var s = targets[i];
                 if (!s.getAttribute('data-original-text')) {
-                    s.setAttribute('data-original-text', s.textContent || s.innerText || "");
+                    s.setAttribute('data-original-text', String(s.textContent || s.innerText || ""));
                 }
                 var isFlipped = s.classList.contains('flipped');
 
@@ -5254,7 +5268,7 @@
             // Manage delimiters between sibling spans in the compound group
             for (var j = 0; j < group.length - 1; j++) {
                 var currSpan = group[j];
-                var nextSpan = group[j + 1];
+                var nextSpan = /** @type {HTMLElement|null} */ (group[j + 1]);
                 var delimNode = currSpan.nextSibling;
                 if (delimNode && isCompoundDelimiterNode(delimNode)) {
                     if (delimNode._origVal === undefined) {
@@ -5276,6 +5290,7 @@
         var audioAnkiTtsCli = ((window.__CONFIG__ && window.__CONFIG__.audio_anki_tts_cli) || "");
         var audioPythonExe = ((window.__CONFIG__ && window.__CONFIG__.audio_python_exe) || "");
 
+        /** @param {string} text @returns {string} */
         function sanitizeSpokenText(text) {
             if (!text) return "";
             var s = String(text);
@@ -5297,6 +5312,7 @@
             return s.replace(/\s+/g, ' ').trim();
         }
 
+        /** @param {string} text @param {string} lang */
         function playAudio(text, lang) {
             if (!text || !lang) return;
             var clean = sanitizeSpokenText(text);
@@ -5308,7 +5324,7 @@
                     window.ahkCall('play', audioPythonExe + "\\n" + audioAnkiTtsCli + "\\n" + lang + "\\n" + escapedText);
                 } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             } else if (typeof fetch === 'function') {
-                var headers = { 'Content-Type': 'application/json' };
+                var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
                 if (typeof getApiToken === 'function') {
                     var tok = getApiToken();
                     if (tok) {
@@ -5328,6 +5344,7 @@
         }
         window.playAudio = playAudio;
 
+        /** @param {HTMLElement} tr @param {string} sourceMode */
         function getTableRowWordsToPlay(tr, sourceMode) {
             if (!tr) return "";
             var tds = tr.getElementsByTagName('td');
@@ -5346,6 +5363,7 @@
             return sanitizeSpokenText(textToPlay);
         }
 
+        /** @param {string} rawInflection @param {string} tokenText */
         function getCleanConstituentInflection(rawInflection, tokenText) {
             if (!rawInflection) return "";
             var parts = rawInflection.split(',');
@@ -5363,6 +5381,7 @@
             return parts[0];
         }
 
+        /** @param {HTMLElement} span @param {string} sourceMode @param {HTMLElement[]} group */
         function getSpanSpecificSpokenWord(span, sourceMode, group) {
             if (!span) return "";
             var spanClean = (span.getAttribute('data-lower-clean') || span.getAttribute('data-original-text') || span.textContent || "").trim().toLowerCase();
@@ -5442,9 +5461,10 @@
             }
         }
 
+        /** @param {HTMLElement} s @param {string} sourceMode @param {string=} chainMode */
         function getSingleTokenWordsToPlay(s, sourceMode, chainMode) {
             if (!s) return "";
-            var words = [];
+            /** @type {string[]} */ var words = [];
             var tokenData = findTokenData(s);
             var spanClean = (s.getAttribute('data-lower-clean') || s.getAttribute('data-original-text') || s.textContent || "").trim().toLowerCase();
             var spanText = (s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
@@ -5562,12 +5582,13 @@
             return words.join(delim);
         }
 
+        /** @param {HTMLElement} targetSpan @param {string} sourceMode */
         function getCompoundWordsToPlay(targetSpan, sourceMode) {
             if (!targetSpan) return "";
             var group = findCompoundSiblingSpans(targetSpan);
             if (!group || group.length === 0) group = [targetSpan];
 
-            var words = [];
+            /** @type {string[]} */ var words = [];
             for (var i = 0; i < group.length; i++) {
                 var s = group[i];
                 var term = getSingleTokenWordsToPlay(s, sourceMode);
@@ -5578,10 +5599,12 @@
             return words.join(' ');
         }
 
+        /** @param {HTMLElement} span */
         function getWordLemma(span) {
             return getSingleTokenWordsToPlay(span, 'lemma');
         }
 
+        /** @param {HTMLElement} span */
         function getWordInflectedForm(span) {
             return getSingleTokenWordsToPlay(span, 'inflection');
         }
@@ -5594,13 +5617,14 @@
         window.getWordLemma = getWordLemma;
         window.getWordInflectedForm = getWordInflectedForm;
 
+        /** @param {HTMLElement} span */
         function wireTokenSpan(span) {
             if (!span || span.__kw_token_instance === myDeskInstanceId) return;
             span.__kw_token_instance = myDeskInstanceId;
                 addEvent(span, 'mousedown', function(e) {
                     if (window.__selectableTextMode) return;
                     if (window.__deskInstanceId && myDeskInstanceId !== window.__deskInstanceId) return;
-                    e = e || window.event;
+                    e = /** @type {MouseEvent} */ (e || window.event);
 
                     if (e.button === 0) { // LMB
                         var lt = document.getElementById('lemma-table');
@@ -5651,7 +5675,7 @@
                             }
                         }
 
-                        var isInActiveSelections = (clickedTokenData && isTokenInActiveSelections(clickedTokenData.visual_idx));
+                        var isInActiveSelections = (clickedTokenData && isTokenInActiveSelections(Number(clickedTokenData.visual_idx)));
                         var hasActiveTokens = (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
 
                         var isRowSelected = false;
@@ -5687,7 +5711,7 @@
                                 if (wl) clickedLemma = String(wl).trim().toLowerCase();
                             }
 
-                            var targetMergedRowIds = {};
+                            var /** @type {Desk.Membership} */ targetMergedRowIds = {};
                             for (var t = 0; t < targetRowIds.length; t++) {
                                 targetMergedRowIds[String(targetRowIds[t])] = true;
                             }
@@ -5716,7 +5740,7 @@
                                 }
                                 var itemRowIds = activeItem.row_ids;
                                 if (!itemRowIds) {
-                                    var atd = (typeof findTokenDataByVisualIdx === 'function') ? findTokenDataByVisualIdx(activeItem.visual_idx) : null;
+                                    var atd = (typeof findTokenDataByVisualIdx === 'function') ? findTokenDataByVisualIdx(Number(activeItem.visual_idx)) : null;
                                     if (atd) {
                                         itemRowIds = (atd.atomic_row_ids !== undefined) ? atd.atomic_row_ids : (atd.row_ids || []);
                                     } else if (activeItem.atomic_id !== null && activeItem.atomic_id !== undefined) {
@@ -5793,17 +5817,17 @@
                         }
 
                         var relatedSpans = findRelatedTokenSpans(span);
-                        var vIdxsToRemove = {};
+                        var /** @type {Desk.Membership} */ vIdxsToRemove = {};
                         for (var i = 0; i < relatedSpans.length; i++) {
                             var rSpan = relatedSpans[i];
                             var rTd = findTokenData(rSpan);
-                            var rvIdx = rTd ? rTd.visual_idx : parseInt(rSpan.getAttribute('data-word-idx'), 10);
-                            if (!isNaN(rvIdx)) vIdxsToRemove[rvIdx] = true;
+                            var rvIdx = rTd ? rTd.visual_idx : parseInt(String(rSpan.getAttribute('data-word-idx')), 10);
+                            if (!isNaN(Number(rvIdx))) vIdxsToRemove[String(rvIdx)] = true;
                         }
 
                         var currentTableRows = (tableRows && tableRows.length > 0)
                             ? tableRows
-                            : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
+                            : /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
                         for (var j = 0; j < targetRowIds.length; j++) {
                             var tid = String(targetRowIds[j]);
                             if (tokenDragMode) {
@@ -5888,7 +5912,7 @@
                 addEvent(span, 'mouseover', function(e) {
                     if (window.__selectableTextMode) return;
                     if (window.__deskInstanceId && myDeskInstanceId !== window.__deskInstanceId) return;
-                    e = e || window.event;
+                    e = /** @type {MouseEvent} */ (e || window.event);
                     if (isTokenDragSelecting) {
                         if (e.buttons !== undefined && (e.buttons & 1) === 0) {
                             isTokenDragSelecting = false;
@@ -6015,8 +6039,8 @@
                         for (var k = 0; k < tokenSpans.length; k++) {
                             var s = tokenSpans[k];
                             var inRange = (k >= minIdx && k <= maxIdx);
-                            var shouldFlip = inRange ? rmbFlipMode : initialFlippedMap[k];
-                            flipWord(s, shouldFlip, false);
+                            var shouldFlip = inRange ? rmbFlipMode : (initialFlippedMap && initialFlippedMap[k]);
+                            flipWord(s, !!shouldFlip, false);
                         }
                     }
                 });
@@ -6041,14 +6065,14 @@
         if (sourceContainer) {
             addEvent(sourceContainer, 'contextmenu', function(e) {
                 if (window.__selectableTextMode) return;
-                e = e || window.event;
+                e = /** @type {MouseEvent} */ (e || window.event);
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 return false;
             });
         }
 
         var lemmaTable = document.getElementById('lemma-table');
-    var tableRows = [];
+    /** @type {HTMLElement[]} */ var tableRows = [];
     function detectHasHighlightCol() {
         if (window.__CONFIG__ && window.__CONFIG__.has_highlight_col !== undefined) {
             return !!(window.__CONFIG__.has_highlight_col === true || window.__CONFIG__.has_highlight_col === 'true');
@@ -6097,11 +6121,12 @@
     }
     var hasHighlightCol = detectHasHighlightCol();
 
+    /** @param {HTMLElement} row */
     function wireTableRowEvents(row) {
         addEvent(row, 'mousedown', function(e) {
             if (window.__selectableTextMode) return;
-            e = e || window.event;
-            var target = e.target || e.srcElement;
+            e = /** @type {MouseEvent} */ (e || window.event);
+            var target = /** @type {HTMLElement|null} */ (e.target || e.srcElement);
             if (target && target.tagName === 'INPUT') {
                 return;
             }
@@ -6115,7 +6140,7 @@
                 }
             }
             var rowIdStr = String(row.getAttribute('data-row-id'));
-            var rowId = parseInt(rowIdStr, 10);
+            var rowId = parseInt(String(rowIdStr), 10);
             var constituentIds = getRowGroupIds(row);
 
             var rowVisualIdx = -1;
@@ -6246,7 +6271,7 @@
                 notifyAHKSelection();
             } else if (e.button === 2) { // RMB
                 if (audioRmbPlay) {
-                    var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
+                    var sourceLang = (requireElement('session-lang').textContent || requireElement('session-lang').innerText || 'en').trim();
                     var textToPlay = getTableRowWordsToPlay(row, audioLmbSource);
                     if (textToPlay) {
                         playAudio(textToPlay, sourceLang);
@@ -6254,14 +6279,14 @@
                 }
             }
 
-            e = e || window.event;
+            e = /** @type {MouseEvent} */ (e || window.event);
             if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
             return false;
         });
 
         addEvent(row, 'mouseover', function(e) {
             if (window.__selectableTextMode) return;
-            e = e || window.event;
+            e = /** @type {MouseEvent} */ (e || window.event);
             var lt = document.getElementById('lemma-table');
             var isFilterActive = lt && lt.classList.contains('kw-filter-selected-only');
 
@@ -6292,7 +6317,7 @@
                     }
                     dragOccurred = true;
                 }
-                var rowId = parseInt(row.getAttribute('data-row-id'), 10);
+                var rowId = parseInt(String(row.getAttribute('data-row-id')), 10);
                 dragLastRowId = rowId;
 
                 var currentVisualIdx = -1;
@@ -6376,7 +6401,7 @@
 
     function rebindTableRows() {
         var hasCardsElement = !!document.getElementById('sentence-cards');
-        var isContainerMode = !!(document.getElementById('delivery-mode') && (document.getElementById('delivery-mode').textContent || '').trim() === 'container');
+        var isContainerMode = !!(document.getElementById('delivery-mode') && (requireElement('delivery-mode').textContent || '').trim() === 'container');
         var cardsList = (hasCardsElement || isContainerMode) && (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function')
             ? window.WorkspaceTabs.getCards()
             : null;
@@ -6387,7 +6412,8 @@
             }
         }
         selectedRowIdsMap = {};
-        window.AppState.selectedLemmas = {};
+        var sharedState = window.AppStore.getState();
+        sharedState.selectedLemmas = sharedState.selectedLemmas || {};
         if (typeof restoreActiveTokensFromStorage === 'function') restoreActiveTokensFromStorage();
         var lt = document.getElementById('lemma-table');
         tableRows = [];
@@ -6436,9 +6462,10 @@
     window.rebindTableRows = rebindTableRows;
     rebindTableRows();
 
+    /** @param {MouseEvent} e */
     function handleMouseUp(e) {
             if (window.__deskInstanceId && myDeskInstanceId !== window.__deskInstanceId) return;
-            e = e || window.event;
+            e = /** @type {MouseEvent} */ (e || window.event);
             var lt = document.getElementById('lemma-table');
             if (lt) {
                 lt.classList.remove('kw-table-dragging');
@@ -6456,7 +6483,7 @@
 
                 if (isDragSelecting && audioLmbPlay) {
                     if (dragSelectMode) {
-                        var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
+                        var sourceLang = (requireElement('session-lang').textContent || requireElement('session-lang').innerText || 'en').trim();
                         if (!dragOccurred && !isShiftClick) {
                             var targetRow = mousedownTargetRow;
                             if (targetRow) {
@@ -6515,7 +6542,7 @@
                                 }
                             }
                             if (dragWords.length > 0) {
-                                var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
+                                var sourceLang = (requireElement('session-lang').textContent || requireElement('session-lang').innerText || 'en').trim();
                                 if (audioLmbChainMode === 'separate' || audioLmbChainMode === 'per_word') {
                                     playAudio(dragWords.join(' ||| '), sourceLang);
                                 } else {
@@ -6531,7 +6558,7 @@
                         if (targetSpan) {
                             var singleText = getSingleTokenWordsToPlay(targetSpan, audioLmbSource, audioLmbChainMode);
                             if (singleText) {
-                                var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
+                                var sourceLang = (requireElement('session-lang').textContent || requireElement('session-lang').innerText || 'en').trim();
                                 playAudio(singleText, sourceLang);
                             }
                         }
@@ -6539,7 +6566,7 @@
                 } else if (isRmbDragFlipping && rmbFlipMode && audioRmbPlay && tokenDragStartIdx !== -1) {
                     var minIdx = (tokenDragLastIdx !== -1) ? Math.min(tokenDragStartIdx, tokenDragLastIdx) : tokenDragStartIdx;
                     var maxIdx = (tokenDragLastIdx !== -1) ? Math.max(tokenDragStartIdx, tokenDragLastIdx) : tokenDragStartIdx;
-                    var targetLang = (document.getElementById('session-target-lang').textContent || document.getElementById('session-target-lang').innerText || 'ru').trim();
+                    var targetLang = (requireElement('session-target-lang').textContent || requireElement('session-target-lang').innerText || 'ru').trim();
 
                     if (dragOccurred && minIdx !== maxIdx) {
                         var dragTranslations = [];
@@ -6633,19 +6660,19 @@
         addEvent(document, 'contextmenu', function(e) {
             if (window.__selectableTextMode) return;
             if (justFinishedDrag) {
-                e = e || window.event;
+                e = /** @type {MouseEvent} */ (e || window.event);
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 return false;
             }
         });
 
         addEvent(document, 'keydown', function(e) {
-            e = e || window.event;
+            e = /** @type {KeyboardEvent} */ (e || window.event);
             var keyCode = e.keyCode || e.which;
             var isSaveKey = (keyCode === 83 || (e.key && (e.key.toLowerCase() === 's' || e.key.toLowerCase() === 'ы')) || e.code === 'KeyS');
             if ((e.ctrlKey || e.metaKey) && isSaveKey) { // Ctrl+S
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-                var saveBtn = document.getElementById('kw-btn-save');
+                var saveBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-save'));
                 if (saveBtn && !saveBtn.disabled) {
                     saveBtn.click();
                 } else if (typeof window.onSaveClick === 'function') {
@@ -6656,7 +6683,7 @@
 
             if (keyCode === 116 || e.key === 'F5') { // F5 -> update
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-                var updateBtn = document.getElementById('kw-btn-update');
+                var updateBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-update'));
                 if (updateBtn && !updateBtn.disabled) {
                     updateBtn.click();
                 } else if (typeof window.onUpdateClick === 'function') {
@@ -6747,7 +6774,7 @@
 
                 var currentVisIdx = -1;
                 for (var v = 0; v < visibleRows.length; v++) {
-                    var vRowId = parseInt(visibleRows[v].getAttribute('data-row-id'), 10);
+                    var vRowId = parseInt(String(visibleRows[v].getAttribute('data-row-id')), 10);
                     if (vRowId === focusedRowId) {
                         currentVisIdx = v;
                         break;
@@ -6767,7 +6794,7 @@
 
                 var nextRow = visibleRows[nextVisIdx];
                 if (nextRow) {
-                    focusedRowId = parseInt(nextRow.getAttribute('data-row-id'), 10);
+                    focusedRowId = parseInt(String(nextRow.getAttribute('data-row-id')), 10);
                     updateRowFocus();
                 }
             } else if (keyCode === 46) { // Delete
@@ -6779,8 +6806,8 @@
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (focusedRowId !== null) {
                     var fRow = (typeof findTableRowById === 'function') ? findTableRowById(focusedRowId) : ((focusedRowId >= 0 && focusedRowId < tableRows.length) ? tableRows[focusedRowId] : null);
-                    var fRowId = fRow ? fRow.getAttribute('data-row-id') : String(focusedRowId);
-                    var cIds = (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards) ? getRowGroupIds(fRow) : [fRowId];
+                    var fRowId = (fRow && fRow.getAttribute('data-row-id')) || String(focusedRowId);
+                    var cIds = (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards) ? (fRow ? getRowGroupIds(fRow) : [fRowId]) : [fRowId];
                     var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(fRowId);
                     for (var c = 0; c < cIds.length; c++) {
                         if (isCurrentlySelected) {
@@ -6795,21 +6822,21 @@
                         pruneActiveTokensByRowOrLemma(fRowId, fLem);
                     }
                     syncSelectionsToCardsAndState();
-                    lastClickedRowId = isCurrentlySelected ? null : parseInt(fRowId, 10);
+                    lastClickedRowId = isCurrentlySelected ? null : parseInt(String(fRowId), 10);
                     updateRowStyles();
                     updateBidirectionalHighlights();
                     notifyAHKSelection();
                 }
             } else if (keyCode === 113) { // F2
                 var cellToEdit = null;
-                if (lastHoveredCell) {
-                    var rId = parseInt(lastHoveredCell.parentElement.getAttribute('data-row-id'));
+                if (lastHoveredCell && lastHoveredCell.parentElement) {
+                    var rId = parseInt(String(lastHoveredCell.parentElement.getAttribute('data-row-id')));
                     if (rId === focusedRowId) {
                         cellToEdit = lastHoveredCell;
                     }
                 }
-                if (!cellToEdit && lastClickedCell) {
-                    var rId = parseInt(lastClickedCell.parentElement.getAttribute('data-row-id'));
+                if (!cellToEdit && lastClickedCell && lastClickedCell.parentElement) {
+                    var rId = parseInt(String(lastClickedCell.parentElement.getAttribute('data-row-id')));
                     if (rId === focusedRowId) {
                         cellToEdit = lastClickedCell;
                     }
@@ -6817,7 +6844,7 @@
                 if (!cellToEdit && focusedRowId !== null) {
                     var activeRow = null;
                     for (var k = 0; k < tableRows.length; k++) {
-                        if (tableRows[k].getAttribute('data-row-id') == focusedRowId) {
+                        if (tableRows[k].getAttribute('data-row-id') === String(focusedRowId)) {
                             activeRow = tableRows[k];
                             break;
                         }
@@ -6869,6 +6896,7 @@
             if (window.forceRepaint) window.forceRepaint();
         };
 
+        /** @param {Desk.RowId} rowId @param {boolean=} forceState */
         function toggleRowSelection(rowId, forceState) {
             var rIdStr = String(rowId);
             var lem = getLemmaByRowId(rowId);
@@ -6909,7 +6937,7 @@
             }
 
             if (!lt) return;
-            var tbody = lt.querySelector('tbody');
+            var tbody = /** @type {HTMLElement|null} */ (lt.querySelector('tbody'));
             if (!tbody) return;
 
             var isFilterActive = !!(window.AppState && window.AppState.filterSelectedOnly);
@@ -6921,7 +6949,7 @@
                 return;
             }
 
-            var selectedRows = tbody.querySelectorAll('tr[data-selected="1"]');
+            var selectedRows = /** @type {NodeListOf<HTMLElement>} */ (tbody.querySelectorAll('tr[data-selected="1"]'));
             if (selectedRows.length === 0) {
                 if (!emptyRow) {
                     emptyRow = document.createElement('tr');
@@ -7002,7 +7030,7 @@
                 }
                 var isAnyDragging = isDragSelecting || isTokenDragSelecting;
                 if (!isAnyDragging) {
-                    row.setAttribute('data-filter-hidden', isSel ? '0' : '1');
+                    row.setAttribute('data-filter-hidden', String(isSel ? '0' : '1'));
                 }
             }
             if (typeof updateToolbarState === 'function') {
@@ -7017,7 +7045,7 @@
         function updateRowFocus() {
             for (var i = 0; i < tableRows.length; i++) {
                 var row = tableRows[i];
-                var rowId = parseInt(row.getAttribute('data-row-id'), 10);
+                var rowId = parseInt(String(row.getAttribute('data-row-id')), 10);
                 if (rowId === focusedRowId) {
                     row.style.outline = '1px solid #58a6ff';
                     row.classList.add('focused-row');
@@ -7031,11 +7059,12 @@
             }
         }
 
+        /** @param {HTMLElement} tr */
         function applyOccurrenceRow(tr) {
             if (!tr || !tr.hasAttribute('data-occ')) return;
             var sels = (window.AppState && window.AppState.activeTokenSelections) ? window.AppState.activeTokenSelections : [];
-            var cellMap = { 'col-inflected': 'form', 'col-translation': 'trans', 'col-morphology': 'morph', 'col-pos': 'pos' };
-            var posNameMap = {
+            var /** @type {Record<string,string>} */ cellMap = { 'col-inflected': 'form', 'col-translation': 'trans', 'col-morphology': 'morph', 'col-pos': 'pos' };
+            var /** @type {Record<string,string>} */ posNameMap = {
                 'art.': 'Article',
                 'pron.': 'Pronoun',
                 'det.': 'Determiner',
@@ -7047,7 +7076,7 @@
                 'conj.': 'Conjunction'
             };
             var occ = null;
-            try { occ = JSON.parse(tr.getAttribute('data-occ')); } catch (e) { occ = null; }
+            try { occ = JSON.parse(tr.getAttribute('data-occ') || 'null'); } catch (e) { occ = null; }
             var picked = [];
             if (occ) {
                 var keys = [];
@@ -7055,25 +7084,25 @@
                     var k = String(sels[s].visual_idx);
                     if (occ.hasOwnProperty(k) && keys.indexOf(k) === -1) keys.push(k);
                 }
-                keys.sort(function(a, b) { return parseInt(a, 10) - parseInt(b, 10); });
+                keys.sort(function(a, b) { return parseInt(String(a), 10) - parseInt(String(b), 10); });
                 for (var q = 0; q < keys.length; q++) picked.push(occ[keys[q]]);
             }
             for (var cls in cellMap) {
                 if (!cellMap.hasOwnProperty(cls)) continue;
-                var td = tr.querySelector('td.' + cls);
+                var td = /** @type {HTMLElement|null} */ (tr.querySelector('td.' + cls));
                 if (!td) continue;
-                var cell = td.querySelector('.scrollable-cell') || td;
-                if (!td.hasAttribute('data-orig-html')) td.setAttribute('data-orig-html', cell.innerHTML);
-                if (!td.hasAttribute('data-orig-title')) td.setAttribute('data-orig-title', td.getAttribute('title') || '');
-                if (cell !== td && !cell.hasAttribute('data-orig-title')) cell.setAttribute('data-orig-title', cell.getAttribute('title') || '');
+                var cell = /** @type {HTMLElement|null} */ (td.querySelector('.scrollable-cell')) || td;
+                if (!td.hasAttribute('data-orig-html')) td.setAttribute('data-orig-html', String(cell.innerHTML));
+                if (!td.hasAttribute('data-orig-title')) td.setAttribute('data-orig-title', String(td.getAttribute('title') || ''));
+                if (cell !== td && !cell.hasAttribute('data-orig-title')) cell.setAttribute('data-orig-title', String(cell.getAttribute('title') || ''));
 
                 if (picked.length === 0) {
-                    if (cell.innerHTML !== td.getAttribute('data-orig-html')) cell.innerHTML = td.getAttribute('data-orig-html');
+                    if (cell.innerHTML !== td.getAttribute('data-orig-html')) cell.innerHTML = td.getAttribute('data-orig-html') || '';
                     var origTdTitle = td.getAttribute('data-orig-title');
-                    if (origTdTitle) td.setAttribute('title', origTdTitle); else td.removeAttribute('title');
+                    if (origTdTitle) td.setAttribute('title', String(origTdTitle)); else td.removeAttribute('title');
                     if (cell !== td) {
                         var origCellTitle = cell.getAttribute('data-orig-title');
-                        if (origCellTitle) cell.setAttribute('title', origCellTitle); else cell.removeAttribute('title');
+                        if (origCellTitle) cell.setAttribute('title', String(origCellTitle)); else cell.removeAttribute('title');
                     }
                     continue;
                 }
@@ -7083,12 +7112,12 @@
                     if (v && vals.indexOf(v) === -1) vals.push(v);
                 }
                 if (vals.length === 0) {
-                    cell.innerHTML = td.getAttribute('data-orig-html');
+                    cell.innerHTML = td.getAttribute('data-orig-html') || '';
                     var origTdTitle = td.getAttribute('data-orig-title');
-                    if (origTdTitle) td.setAttribute('title', origTdTitle); else td.removeAttribute('title');
+                    if (origTdTitle) td.setAttribute('title', String(origTdTitle)); else td.removeAttribute('title');
                     if (cell !== td) {
                         var origCellTitle = cell.getAttribute('data-orig-title');
-                        if (origCellTitle) cell.setAttribute('title', origCellTitle); else cell.removeAttribute('title');
+                        if (origCellTitle) cell.setAttribute('title', String(origCellTitle)); else cell.removeAttribute('title');
                     }
                 } else {
                     var newTooltip = '';
@@ -7140,8 +7169,8 @@
                     }
 
                     if (newTooltip) {
-                        td.setAttribute('title', newTooltip);
-                        if (cell !== td) cell.setAttribute('title', newTooltip);
+                        td.setAttribute('title', String(newTooltip));
+                        if (cell !== td) cell.setAttribute('title', String(newTooltip));
                     }
                 }
             }
@@ -7149,7 +7178,7 @@
         window.applyOccurrenceRow = applyOccurrenceRow;
 
         function applyOccurrenceView() {
-            var rows = document.querySelectorAll('tr[data-occ]');
+            var rows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('tr[data-occ]'));
             for (var r = 0; r < rows.length; r++) {
                 applyOccurrenceRow(rows[r]);
             }
@@ -7158,7 +7187,7 @@
 
         function updateBidirectionalHighlights() {
             try { applyOccurrenceView(); } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-            var tokByVidx = {}, spanByVidx = {}, sentByRowId = {};
+            var /** @type {Record<string,Desk.Token|null>} */ tokByVidx = {}, /** @type {Record<string,HTMLElement|null>} */ spanByVidx = {}, /** @type {Record<string,number|undefined>} */ sentByRowId = {};
             for (var m = 0; m < tokenMap.length; m++) {
                 var t = tokenMap[m];
                 tokByVidx[String(t.visual_idx)] = t;
@@ -7170,7 +7199,7 @@
                 }
             }
             for (var i = 0; i < tokenSpans.length; i++) {
-                var span = tokenSpans[i];
+                var /** @type {HTMLElement|null} */ span = tokenSpans[i];
                 var sk = String(span.getAttribute('data-word-idx'));
                 if (!spanByVidx.hasOwnProperty(sk)) spanByVidx[sk] = span;
                 try {
@@ -7186,24 +7215,24 @@
             var isSameLemmaOn = !!(window.AppState && window.AppState.highlightSameLemma);
 
             var selLemmas = (window.AppState && window.AppState.selectedLemmas) ? window.AppState.selectedLemmas : {};
-            var activeTargetRowIds = {};
-            var primaryTargetRowIds = {};
-            for (var rId in selectedRowIdsMap) {
+            var /** @type {Desk.Membership} */ activeTargetRowIds = {};
+            var /** @type {Desk.Membership} */ primaryTargetRowIds = {};
+            for (var /** @type {Desk.RowId} */ rId in selectedRowIdsMap) {
                 if (!selectedRowIdsMap.hasOwnProperty(rId)) continue;
-                var rowId = parseInt(rId, 10);
+                var rowId = parseInt(String(rId), 10);
                 if (!isNaN(rowId)) {
                     activeTargetRowIds[rowId] = true;
                 }
             }
             var curTableRows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
                 ? tableRows
-                : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
+                : /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
             for (var i = 0; i < curTableRows.length; i++) {
                 var tr = curTableRows[i];
                 var trId = String(tr.getAttribute('data-row-id'));
                 var trSelected = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
                 if (trSelected) {
-                    var trIdInt = parseInt(trId, 10);
+                    var trIdInt = parseInt(String(trId), 10);
                     var primarySentIdx = null;
                     if (!isNaN(trIdInt)) {
                         activeTargetRowIds[trIdInt] = true;
@@ -7212,7 +7241,7 @@
                     }
                     var extraIds = getExtraRowIds(tr);
                     for (var p = 0; p < extraIds.length; p++) {
-                        var pInt = parseInt(extraIds[p], 10);
+                        var pInt = parseInt(String(extraIds[p]), 10);
                         if (!isNaN(pInt)) {
                             activeTargetRowIds[pInt] = true;
                             var pSentIdx = sentByRowId.hasOwnProperty(String(pInt)) ? sentByRowId[String(pInt)] : null;
@@ -7224,16 +7253,16 @@
                 }
             }
             if (lastClickedRowId !== null && lastClickedRowId !== undefined) {
-                var lcInt = parseInt(lastClickedRowId, 10);
+                var lcInt = parseInt(String(lastClickedRowId), 10);
                 if (!isNaN(lcInt) && activeTargetRowIds.hasOwnProperty(lcInt)) {
                     primaryTargetRowIds[lcInt] = true;
                 }
             }
 
-            var activeVisualIdxs = {};
-            var activeLemmas = {};
-            var activeTokenRowIds = {};
-            var isCompoundRow = function(rVal, tokObj) {
+            var /** @type {Desk.Membership} */ activeVisualIdxs = {};
+            var /** @type {Desk.Membership} */ activeLemmas = {};
+            var /** @type {Desk.Membership} */ activeTokenRowIds = {};
+            var isCompoundRow = /** @param {Desk.RowId} rVal @param {Desk.Token|null} tokObj */ function(rVal, tokObj) {
                 if (!tokObj) return false;
                 var cRows = tokObj.compound_row_ids;
                 if (cRows && cRows.length > 0) {
@@ -7245,18 +7274,18 @@
                 return false;
             };
             if (hasActiveTokens) {
-                var addLem = function(lVal) {
+                var addLem = /** @param {string} lVal */ function(lVal) {
                     if (lVal) {
                         var c = String(lVal).trim().toLowerCase();
                         if (c) activeLemmas[c] = true;
                     }
                 };
-                var markActiveRow = function(rVal) {
+                var markActiveRow = /** @param {Desk.RowId} rVal */ function(rVal) {
                     if (rVal !== undefined && rVal !== null) {
                         activeTokenRowIds[String(rVal)] = true;
                     }
                 };
-                var addRowLem = function(rVal) {
+                var addRowLem = /** @param {Desk.RowId} rVal */ function(rVal) {
                     if (rVal !== undefined && rVal !== null) {
                         var rStr = String(rVal);
                         activeTokenRowIds[rStr] = true;
@@ -7286,7 +7315,7 @@
                     var vTok = tokByVidx[String(item.visual_idx)];
                     if (item.row_ids) {
                         for (var r = 0; r < item.row_ids.length; r++) {
-                            var rId = item.row_ids[r];
+                            var rId = String(item.row_ids[r]);
                             markActiveRow(rId);
                             if (!isCompoundRow(rId, item) && !isCompoundRow(rId, vTok)) {
                                 var rL = (typeof getLemmaByRowId === 'function') ? getLemmaByRowId(rId) : '';
@@ -7313,7 +7342,7 @@
                         }
                         if (vTok.row_ids) {
                             for (var r = 0; r < vTok.row_ids.length; r++) {
-                                var rId = vTok.row_ids[r];
+                                var rId = String(vTok.row_ids[r]);
                                 markActiveRow(rId);
                                 if (!isCompoundRow(rId, item) && !isCompoundRow(rId, vTok)) {
                                     var rL = (typeof getLemmaByRowId === 'function') ? getLemmaByRowId(rId) : '';
@@ -7346,7 +7375,7 @@
             for (var i = 0; i < tokenMap.length; i++) {
                 var token = tokenMap[i];
                 var isOrphanSelected = (typeof selectedOrphanWordIdxsMap !== 'undefined' && selectedOrphanWordIdxsMap && selectedOrphanWordIdxsMap.hasOwnProperty(String(token.visual_idx)));
-                var tokRowIds = [];
+                var /** @type {Desk.RowId[]} */ tokRowIds = [];
                 if (token.atomic_row_ids && token.atomic_row_ids.length > 0) {
                     for (var tri = 0; tri < token.atomic_row_ids.length; tri++) {
                         tokRowIds.push(token.atomic_row_ids[tri]);
@@ -7392,7 +7421,7 @@
                 } else {
                     for (var tri = 0; tri < tokRowIds.length; tri++) {
                         var trid = tokRowIds[tri];
-                        if (selectedRowIdsMap.hasOwnProperty(String(trid)) || activeTargetRowIds.hasOwnProperty(parseInt(trid, 10))) {
+                        if (selectedRowIdsMap.hasOwnProperty(String(trid)) || activeTargetRowIds.hasOwnProperty(parseInt(String(trid), 10))) {
                             isTokenRowSelected = true;
                             break;
                         }
@@ -7444,7 +7473,7 @@
                                             atClean = (aSpan.getAttribute('data-lower-clean') || aSpan.textContent || '').trim().toLowerCase();
                                         }
                                         if (tokClean && atClean && tokClean === atClean) {
-                                            var aTd = (typeof findTokenDataByVisualIdx === 'function') ? findTokenDataByVisualIdx(atItem.visual_idx) : null;
+                                            var aTd = (typeof findTokenDataByVisualIdx === 'function') ? findTokenDataByVisualIdx(Number(atItem.visual_idx)) : null;
                                             var tGrp = (tSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(tSpan) : null;
                                             var aGrp = (aSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(aSpan) : null;
                                             var hasCompoundContext = (token.compound_row_ids && token.compound_row_ids.length > 0) ||
@@ -7511,7 +7540,7 @@
                 }
 
                 if (!hasMatchingRow && selLemmas) {
-                    var tokRowIds = (token.atomic_row_ids && token.atomic_row_ids.length > 0)
+                    var /** @type {Desk.RowId[]} */ tokRowIds = (token.atomic_row_ids && token.atomic_row_ids.length > 0)
                         ? token.atomic_row_ids
                         : (token.row_ids || []);
                     for (var r = 0; r < tokRowIds.length; r++) {
@@ -7528,7 +7557,7 @@
                 }
 
                 if (hasMatchingRow) {
-                    var span = spanByVidx[String(token.visual_idx)] || null;
+                    var /** @type {HTMLElement|null} */ span = spanByVidx[String(token.visual_idx)] || null;
                     if (span) {
                         try {
                             if (isDirectRowMatch || isTargetedActiveTokenMatch) {
@@ -7560,8 +7589,8 @@
             }
 
             if (selLemmas && isLegacyOverview) {
-                for (var k = 0; k < tokenSpans.length; k++) {
-                    var s = tokenSpans[k];
+                for (var highlightSpanIndex = 0; highlightSpanIndex < tokenSpans.length; highlightSpanIndex++) {
+                    var s = tokenSpans[highlightSpanIndex];
                     var sLem = (getWordLemma(s) || '').trim().toLowerCase();
                     if (sLem && selLemmas[sLem]) {
                         try {
@@ -7576,8 +7605,8 @@
             }
 
             if (hasActiveTokens && isSameLemmaOn) {
-                for (var k = 0; k < tokenSpans.length; k++) {
-                    var s = tokenSpans[k];
+                for (var highlightSpanIndex = 0; highlightSpanIndex < tokenSpans.length; highlightSpanIndex++) {
+                    var s = tokenSpans[highlightSpanIndex];
                     var vIdxStr = String(s.getAttribute('data-word-idx'));
                     if (activeVisualIdxs[vIdxStr]) continue;
                     if (s.classList.contains('highlight-orange-active') || s.classList.contains('highlight-purple-active')) continue;
@@ -7593,9 +7622,9 @@
                             var tdRows = (td.atomic_row_ids && td.atomic_row_ids.length > 0)
                                 ? td.atomic_row_ids
                                 : (td.row_ids || []).filter(function(r) { return !isCompoundRow(r, td); });
-                            for (var tr = 0; tr < tdRows.length; tr++) {
+                            for (var highlightRowIndex = 0; highlightRowIndex < tdRows.length; highlightRowIndex++) {
                                 if (typeof getLemmaByRowId === 'function') {
-                                    var tdLem = getLemmaByRowId(tdRows[tr]);
+                                    var tdLem = getLemmaByRowId(tdRows[highlightRowIndex]);
                                     if (tdLem && activeLemmas[String(tdLem).trim().toLowerCase()]) {
                                         sMatchesLemma = true;
                                         break;
@@ -7624,6 +7653,7 @@
         }
         window.updateBidirectionalHighlights = updateBidirectionalHighlights;
 
+        /** @param {boolean=} extractTokenOrders */
         function getSelectedRowsArray(extractTokenOrders) {
             if (extractTokenOrders) {
                 return getSelectedTokenOrdersArray();
@@ -7631,17 +7661,17 @@
             var arr = [];
             for (var k in selectedRowIdsMap) {
                 if (selectedRowIdsMap.hasOwnProperty(k)) {
-                    var num = parseInt(k, 10);
+                    var num = parseInt(String(k), 10);
                     if (!isNaN(num) && arr.indexOf(num) === -1) {
                         arr.push(num);
                     }
                 }
             }
-            var selRows = document.querySelectorAll('#lemma-table tbody tr.kw-row-selected, #lemma-table tbody tr.selected, #lemma-table tbody tr[data-selected="1"]');
+            var selRows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr.kw-row-selected, #lemma-table tbody tr.selected, #lemma-table tbody tr[data-selected="1"]'));
             for (var r = 0; r < selRows.length; r++) {
                 var rId = selRows[r].getAttribute('data-row-id');
                 if (rId !== null && rId !== '') {
-                    var num = parseInt(rId, 10);
+                    var num = parseInt(String(rId), 10);
                     if (!isNaN(num) && arr.indexOf(num) === -1) {
                         arr.push(num);
                     }
@@ -7654,16 +7684,16 @@
             var arr = [];
             for (var k in selectedRowIdsMap) {
                 if (selectedRowIdsMap.hasOwnProperty(k)) {
-                    var tr = document.querySelector('tr[data-row-id="' + k + '"]');
+                    var tr = /** @type {HTMLElement|null} */ (document.querySelector('tr[data-row-id="' + k + '"]'));
                     if (tr) {
                         var tOrd = tr.getAttribute('data-token-order');
                         if (tOrd !== null && tOrd !== undefined && tOrd !== '') {
-                            var parsed = parseInt(tOrd, 10);
+                            var parsed = parseInt(String(tOrd), 10);
                             arr.push(!isNaN(parsed) ? parsed : tOrd);
                             continue;
                         }
                     }
-                    var kNum = parseInt(k, 10);
+                    var kNum = parseInt(String(k), 10);
                     arr.push(!isNaN(kNum) ? kNum : k);
                 }
             }
@@ -7695,18 +7725,20 @@
         }
         window.notifyAHKSelection = notifyAHKSelection;
 
+        /** @param {HTMLElement} cell */
         function makeEditable(cell) {
             if (cell.getElementsByTagName('input').length > 0) return;
 
-            var scrollDiv = cell.querySelector('.scrollable-cell');
+            var scrollDiv = /** @type {HTMLElement|null} */ (cell.querySelector('.scrollable-cell'));
             var originalValue = scrollDiv ? (scrollDiv.textContent || scrollDiv.innerText) : (cell.textContent || cell.innerText || "");
             var colName = cell.getAttribute('data-col');
             var trParent = cell.parentElement;
+            if (!trParent || !colName) throw new Error('Editable cell requires a row and column');
             var rowId = trParent.getAttribute('data-row-id');
             var tokenOrder = trParent.getAttribute('data-token-order');
-            var tokenOrderVal = (tokenOrder !== null && tokenOrder !== '') ? parseInt(tokenOrder, 10) : parseInt(rowId, 10);
+            var tokenOrderVal = (tokenOrder !== null && tokenOrder !== '') ? parseInt(String(tokenOrder), 10) : parseInt(String(rowId), 10);
             var sentenceIdx = trParent.getAttribute('data-sentence-idx');
-            var sentIdxVal = (sentenceIdx !== null && sentenceIdx !== '') ? parseInt(sentenceIdx, 10) : 1;
+            var sentIdxVal = (sentenceIdx !== null && sentenceIdx !== '') ? parseInt(String(sentenceIdx), 10) : 1;
 
             var input = document.createElement('input');
             input.type = 'text';
@@ -7740,34 +7772,34 @@
                     var curProv = cell.getAttribute('data-provenance');
                     var origTip = formatTranslationCellTooltip(originalValue, curProv);
                     if (origTip) {
-                        cell.setAttribute('title', origTip);
-                        div.setAttribute('title', origTip);
+                        cell.setAttribute('title', String(origTip));
+                        div.setAttribute('title', String(origTip));
                     } else {
                         cell.removeAttribute('title');
                         div.removeAttribute('title');
                     }
                 } else if (colName === 'WordSource' || cell.classList.contains('col-lemma')) {
-                    var curGenCell = trParent ? trParent.querySelector('td.col-gender, td[data-col="WordSourceGender"], td[data-col="gender"]') : null;
+                    var curGenCell = trParent ? /** @type {HTMLElement|null} */ (trParent.querySelector('td.col-gender, td[data-col="WordSourceGender"], td[data-col="gender"]')) : null;
                     var curGen = curGenCell ? (curGenCell.textContent || curGenCell.innerText || "").trim() : "";
-                    var curPosCell = trParent ? trParent.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]') : null;
+                    var curPosCell = trParent ? /** @type {HTMLElement|null} */ (trParent.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]')) : null;
                     var curPos = curPosCell ? (curPosCell.textContent || curPosCell.innerText || "").trim() : "";
                     var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
                     var origTip = formatLemmaTooltip(originalValue, curGen, activeLang, curPos);
                     if (origTip) {
-                        cell.setAttribute('title', origTip);
-                        div.setAttribute('title', origTip);
+                        cell.setAttribute('title', String(origTip));
+                        div.setAttribute('title', String(origTip));
                     } else {
                         cell.removeAttribute('title');
                         div.removeAttribute('title');
                     }
                 } else if (colName === 'WordSourceInflectedForm' || cell.classList.contains('col-inflected')) {
-                    var lemCell = trParent ? trParent.querySelector('td.col-lemma, td[data-col="WordSource"]') : null;
+                    var lemCell = trParent ? /** @type {HTMLElement|null} */ (trParent.querySelector('td.col-lemma, td[data-col="WordSource"]')) : null;
                     var lemVal = lemCell ? (lemCell.textContent || lemCell.innerText || "").trim() : "";
                     var cardSentenceText = (window.AppState ? window.AppState.sourceText : '') || '';
                     var origTip = formatInflectedTooltip(cardSentenceText, originalValue, tokenOrderVal, lemVal);
                     if (origTip) {
-                        cell.setAttribute('title', origTip);
-                        div.setAttribute('title', origTip);
+                        cell.setAttribute('title', String(origTip));
+                        div.setAttribute('title', String(origTip));
                     } else {
                         cell.removeAttribute('title');
                         div.removeAttribute('title');
@@ -7790,34 +7822,34 @@
                     var curProv = cell.getAttribute('data-provenance');
                     var newTip = formatTranslationCellTooltip(newValue, curProv);
                     if (newTip) {
-                        cell.setAttribute('title', newTip);
-                        div.setAttribute('title', newTip);
+                        cell.setAttribute('title', String(newTip));
+                        div.setAttribute('title', String(newTip));
                     } else {
                         cell.removeAttribute('title');
                         div.removeAttribute('title');
                     }
                 } else if (colName === 'WordSource' || cell.classList.contains('col-lemma')) {
-                    var curGenCell = trParent ? trParent.querySelector('td.col-gender, td[data-col="WordSourceGender"], td[data-col="gender"]') : null;
+                    var curGenCell = trParent ? /** @type {HTMLElement|null} */ (trParent.querySelector('td.col-gender, td[data-col="WordSourceGender"], td[data-col="gender"]')) : null;
                     var curGen = curGenCell ? (curGenCell.textContent || curGenCell.innerText || "").trim() : "";
-                    var curPosCell = trParent ? trParent.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]') : null;
+                    var curPosCell = trParent ? /** @type {HTMLElement|null} */ (trParent.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]')) : null;
                     var curPos = curPosCell ? (curPosCell.textContent || curPosCell.innerText || "").trim() : "";
                     var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
                     var newTip = formatLemmaTooltip(newValue, curGen, activeLang, curPos);
                     if (newTip) {
-                        cell.setAttribute('title', newTip);
-                        div.setAttribute('title', newTip);
+                        cell.setAttribute('title', String(newTip));
+                        div.setAttribute('title', String(newTip));
                     } else {
                         cell.removeAttribute('title');
                         div.removeAttribute('title');
                     }
                 } else if (colName === 'WordSourceInflectedForm' || cell.classList.contains('col-inflected')) {
-                    var lemCell = trParent ? trParent.querySelector('td.col-lemma, td[data-col="WordSource"]') : null;
+                    var lemCell = trParent ? /** @type {HTMLElement|null} */ (trParent.querySelector('td.col-lemma, td[data-col="WordSource"]')) : null;
                     var lemVal = lemCell ? (lemCell.textContent || lemCell.innerText || "").trim() : "";
                     var cardSentenceText = (window.AppState ? window.AppState.sourceText : '') || '';
                     var newTip = formatInflectedTooltip(cardSentenceText, newValue, tokenOrderVal, lemVal);
                     if (newTip) {
-                        cell.setAttribute('title', newTip);
-                        div.setAttribute('title', newTip);
+                        cell.setAttribute('title', String(newTip));
+                        div.setAttribute('title', String(newTip));
                     } else {
                         cell.removeAttribute('title');
                         div.removeAttribute('title');
@@ -7826,12 +7858,12 @@
                 cell.appendChild(div);
                 cell.classList.remove('editing');
                 if (newValue !== originalValue) {
-                    var action = {
+                    var /** @type {Desk.HistoryAction} */ action = {
                         type: 'edit',
-                        rowId: parseInt(rowId, 10),
+                        rowId: parseInt(String(rowId), 10),
                         tokenOrder: tokenOrderVal,
                         sentenceIdx: sentIdxVal,
-                        column: colName,
+                        column: String(colName),
                         oldValue: originalValue,
                         newValue: newValue,
                         cell: cell
@@ -7846,7 +7878,7 @@
             window.commitActiveEdit = commit;
 
             addEvent(input, 'keydown', function(e) {
-                e = e || window.event;
+                e = /** @type {KeyboardEvent} */ (e || window.event);
                 var keyCode = e.keyCode;
                 if (e.ctrlKey && keyCode === 65) { // Ctrl+A
                     if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
@@ -7913,7 +7945,7 @@
         };
 
         window.deleteSelectedRows = function() {
-            var selected = getSelectedRowsArray();
+            /** @type {Desk.RowId[]} */ var selected = getSelectedRowsArray();
             if (selected.length === 0) return;
             var tOrders = [];
             var sIndices = [];
@@ -7922,18 +7954,18 @@
                 var tOrd = rId;
                 var sIdx = 1;
                 for (var k = 0; k < tableRows.length; k++) {
-                    if (parseInt(tableRows[k].getAttribute('data-row-id'), 10) === rId) {
+                    if (parseInt(String(tableRows[k].getAttribute('data-row-id')), 10) === rId) {
                         var toAttr = tableRows[k].getAttribute('data-token-order');
-                        if (toAttr !== null && toAttr !== '') tOrd = parseInt(toAttr, 10);
+                        if (toAttr !== null && toAttr !== '') tOrd = parseInt(String(toAttr), 10);
                         var siAttr = tableRows[k].getAttribute('data-sentence-idx');
-                        if (siAttr !== null && siAttr !== '') sIdx = parseInt(siAttr, 10);
+                        if (siAttr !== null && siAttr !== '') sIdx = parseInt(String(siAttr), 10);
                         break;
                     }
                 }
                 tOrders.push(tOrd);
                 sIndices.push(sIdx);
             }
-            var action = {
+            var /** @type {Desk.HistoryAction} */ action = {
                 type: 'delete',
                 rowIds: selected,
                 tokenOrders: tOrders,
@@ -7945,24 +7977,39 @@
             if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
         };
 
+        /** @param {Desk.HistoryAction} action */
         function pushHistory(action) {
+            recordUserIntent(action, true, true);
             historyStack.splice(historyIndex + 1);
             historyStack.push(action);
             historyIndex++;
         }
 
+        /** @param {Desk.EditAction} action @param {string} value */
+        function projectEditedValue(action, value) {
+            action.cell.innerHTML = '';
+            var div = document.createElement('div');
+            div.className = 'scrollable-cell';
+            div.textContent = value;
+            action.cell.appendChild(div);
+            if (action.column === 'WordDestination') {
+                var title = formatTranslationCellTooltip(value, action.cell.getAttribute('data-provenance'));
+                action.cell.setAttribute('title', String(title));
+                div.setAttribute('title', String(title));
+            }
+        }
+
+        /** @param {Desk.HistoryAction} action */
         function applyAction(action) {
+            recordUserIntent(action, true, false);
             if (action.type === 'edit') {
-                action.cell.innerHTML = '';
-                var div = document.createElement('div');
-                div.className = 'scrollable-cell';
-                div.appendChild(document.createTextNode(action.newValue));
-                action.cell.appendChild(div);
+                projectEditedValue(action, action.newValue);
             } else if (action.type === 'delete') {
                 for (var j = 0; j < action.rowIds.length; j++) {
                     var rId = action.rowIds[j];
                     for (var i = 0; i < tableRows.length; i++) {
-                        if (parseInt(tableRows[i].getAttribute('data-row-id')) === rId) {
+                        if (parseInt(String(tableRows[i].getAttribute('data-row-id'))) === rId) {
+                            tableRows[i].setAttribute('data-deleted', 'true');
                             tableRows[i].style.display = 'none';
                             break;
                         }
@@ -7972,18 +8019,17 @@
             }
         }
 
+        /** @param {Desk.HistoryAction} action */
         function revertAction(action) {
+            recordUserIntent(action, false, false);
             if (action.type === 'edit') {
-                action.cell.innerHTML = '';
-                var div = document.createElement('div');
-                div.className = 'scrollable-cell';
-                div.appendChild(document.createTextNode(action.oldValue));
-                action.cell.appendChild(div);
+                projectEditedValue(action, action.oldValue);
             } else if (action.type === 'delete') {
                 for (var j = 0; j < action.rowIds.length; j++) {
                     var rId = action.rowIds[j];
                     for (var i = 0; i < tableRows.length; i++) {
-                        if (parseInt(tableRows[i].getAttribute('data-row-id')) === rId) {
+                        if (parseInt(String(tableRows[i].getAttribute('data-row-id'))) === rId) {
+                            tableRows[i].removeAttribute('data-deleted');
                             tableRows[i].style.display = '';
                             break;
                         }
@@ -8010,81 +8056,80 @@
             if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
         };
 
+        /** @param {Desk.Delta} delta */
+        function deltaIdentity(delta) {
+            return [delta.sentence_idx, delta.token_order, delta.column].join(':');
+        }
+
+        /** @param {Desk.HistoryAction} action */
+        function historyValues(action) {
+            if (action.type === 'edit') return [{row_id: action.rowId, token_order: action.tokenOrder,
+                sentence_idx: action.sentenceIdx, column: action.column, value: action.newValue, original: action.oldValue, element: action.cell}];
+            return action.rowIds.map(function(id, index) {
+                return {row_id: id, token_order: action.tokenOrders[index], sentence_idx: action.sentenceIndices[index],
+                    column: '_delete', value: true, original: false,
+                    element: /** @type {HTMLElement|null} */ (document.querySelector('#lemma-table tr[data-row-id="' + id + '"]'))};
+            });
+        }
+
+        /** @param {Desk.HistoryAction} action @param {boolean} forward @param {boolean} newAction */
+        function recordUserIntent(action, forward, newAction) {
+            historyValues(action).forEach(function(value) {
+                var key = deltaIdentity(value);
+                var baseline = acknowledgedValues[key];
+                if (!baseline) {
+                    var descriptor = {row_id: value.row_id, token_order: value.token_order, sentence_idx: value.sentence_idx, column: value.column, value: value.value};
+                    baseline = {value: value.original, current: value.original, delta: descriptor};
+                    acknowledgedValues[key] = baseline;
+                }
+                if (newAction && baseline.current === baseline.value) baseline.value = value.original;
+                baseline.current = forward ? value.value : value.original;
+            });
+        }
+
+        /** @param {Desk.Delta[]} snapshot @param {Desk.SaveResponse|null|undefined} response */
+        function acknowledgeValues(snapshot, response) {
+            snapshot.forEach(function(delta) {
+                if (delta.column !== 'DeskSelected') acknowledgedValues[deltaIdentity(delta)].value = delta.value;
+            });
+            var restored = (response && response.deleted_rows) || [];
+            restored.forEach(function(item) {
+                var key = deltaIdentity(item);
+                if (acknowledgedValues[key]) acknowledgedValues[key].delta.restore = item.restore;
+            });
+            acknowledgeSelections(snapshot);
+            rebuildDeltas();
+        }
+
+        /** @param {Desk.Delta} delta */
+        function markDirtyDelta(delta) {
+            if (delta.column === '_delete') return;
+            var row = /** @type {HTMLElement|null} */ (document.querySelector('#lemma-table tr[data-row-id="' + delta.row_id + '"]'));
+            if (!row) return;
+            var cell = /** @type {HTMLElement|null} */ (row.querySelector('td[data-col="' + delta.column + '"]'));
+            if (cell) cell.classList.add('dirty');
+        }
+
+        function notifyDirtyState() {
+            if (window.ahkCall) {
+                try { window.ahkCall('dirty', deltas.length > 0 ? 'true' : 'false'); }
+                catch (err) { console.error('[Save] Native dirty-state notification failed', err); }
+            }
+            updateToolbarState();
+            window.forceRepaint();
+        }
+
         function rebuildDeltas() {
             deltas = [];
-            var tds = document.getElementsByTagName('td');
-            for (var k = 0; k < tds.length; k++) {
-                tds[k].classList.remove('dirty');
-            }
-
-            for (var i = 0; i <= historyIndex; i++) {
-                var action = historyStack[i];
-                if (action.type === 'edit') {
-                    var found = false;
-                    for (var k = 0; k < deltas.length; k++) {
-                        if (deltas[k].row_id === action.rowId && deltas[k].column === action.column) {
-                            deltas[k].value = action.newValue;
-                            deltas[k].token_order = action.tokenOrder;
-                            deltas[k].sentence_idx = action.sentenceIdx;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        deltas.push({
-                            row_id: action.rowId,
-                            token_order: action.tokenOrder,
-                            sentence_idx: action.sentenceIdx,
-                            column: action.column,
-                            value: action.newValue
-                        });
-                    }
-                } else if (action.type === 'delete') {
-                    for (var j = 0; j < action.rowIds.length; j++) {
-                        var rId = action.rowIds[j];
-                        var tOrd = (action.tokenOrders && action.tokenOrders[j] !== undefined) ? action.tokenOrders[j] : rId;
-                        var sIdx = (action.sentenceIndices && action.sentenceIndices[j] !== undefined) ? action.sentenceIndices[j] : 1;
-                        deltas.push({
-                            row_id: rId,
-                            token_order: tOrd,
-                            sentence_idx: sIdx,
-                            column: '_delete',
-                            value: true
-                        });
-                    }
-                }
-            }
-
-            for (var k = 0; k < deltas.length; k++) {
-                var d = deltas[k];
-                if (d.column !== '_delete') {
-                    for (var j = 0; j < tableRows.length; j++) {
-                        if (parseInt(tableRows[j].getAttribute('data-row-id')) === d.row_id) {
-                            var tdst = tableRows[j].getElementsByTagName('td');
-                            for (var m = 0; m < tdst.length; m++) {
-                                if (tdst[m].getAttribute('data-col') === d.column) {
-                                    if (!tdst[m].classList.contains('dirty')) {
-                                        tdst[m].classList.add('dirty');
-                                    }
-                                    break;
-                                }
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (window.ahkCall) {
-                try {
-                    window.ahkCall('dirty', deltas.length > 0 ? 'true' : 'false');
-                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-            }
-
-            if (typeof updateToolbarState === 'function') updateToolbarState();
-
-            // Force MSHTML repaint/reflow after undo/redo
-            if (window.forceRepaint) window.forceRepaint();
+            Array.prototype.forEach.call(/** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table td.dirty')), function(cell) {
+                cell.classList.remove('dirty');
+            });
+            Object.keys(acknowledgedValues).forEach(function(key) {
+                var baseline = acknowledgedValues[key];
+                if (baseline.current !== baseline.value) deltas.push(Object.assign({}, baseline.delta, {value: baseline.current}));
+            });
+            deltas.forEach(markDirtyDelta);
+            notifyDirtyState();
         }
 
         window.getDeltas = function() {
@@ -8103,10 +8148,10 @@
                                 if (selectedRowIdsMap.hasOwnProperty(sk)) activeC.selected_ids.push(sk);
                             }
                         }
-                        var seenWordDeltas = {};
+                        var /** @type {Desk.Membership} */ seenWordDeltas = {};
                         for (var c = 0; c < wCards.length; c++) {
                             var card = wCards[c];
-                            var curSelMap = {};
+                            var /** @type {Desk.Membership} */ curSelMap = {};
                             if (card.selected_ids) {
                                 for (var s = 0; s < card.selected_ids.length; s++) curSelMap[String(card.selected_ids[s])] = true;
                             }
@@ -8116,13 +8161,13 @@
                                     var rIdStr = String(cw.row_id);
                                     var isCur = curSelMap.hasOwnProperty(rIdStr);
                                     var isInit = (cw.selected === '1' || cw.selected === 1);
-                                    var sIdxVal = (cw.sentence_idx !== undefined && cw.sentence_idx !== null && String(cw.sentence_idx) !== '') ? parseInt(cw.sentence_idx, 10) : (card.sentence_idx !== undefined ? card.sentence_idx : 1);
+                                    var sIdxVal = (cw.sentence_idx !== undefined && cw.sentence_idx !== null && String(cw.sentence_idx) !== '') ? parseInt(String(cw.sentence_idx), 10) : (card.sentence_idx !== undefined ? card.sentence_idx : 1);
                                     var deltaKey = sIdxVal + '_' + rIdStr;
                                     if (isCur !== isInit && !seenWordDeltas[deltaKey]) {
                                         seenWordDeltas[deltaKey] = true;
-                                        var tOrdVal = (cw.token_order !== undefined && cw.token_order !== null && String(cw.token_order) !== '') ? parseInt(cw.token_order, 10) : parseInt(rIdStr, 10);
+                                        var tOrdVal = (cw.token_order !== undefined && cw.token_order !== null && String(cw.token_order) !== '') ? parseInt(String(cw.token_order), 10) : parseInt(String(rIdStr), 10);
                                         mergedDeltas.push({
-                                            row_id: parseInt(rIdStr, 10),
+                                            row_id: parseInt(String(rIdStr), 10),
                                             token_order: tOrdVal,
                                             sentence_idx: sIdxVal,
                                             column: 'DeskSelected',
@@ -8139,14 +8184,14 @@
                     var row = tableRows[i];
                     var rowIdStr = String(row.getAttribute('data-row-id'));
                     var tOrdStr = row.getAttribute('data-token-order');
-                    var tOrdVal = (tOrdStr !== null && tOrdStr !== '') ? parseInt(tOrdStr, 10) : parseInt(rowIdStr, 10);
+                    var tOrdVal = (tOrdStr !== null && tOrdStr !== '') ? parseInt(String(tOrdStr), 10) : parseInt(String(rowIdStr), 10);
                     var sIdxStr = row.getAttribute('data-sentence-idx');
-                    var sIdxVal = (sIdxStr !== null && sIdxStr !== '') ? parseInt(sIdxStr, 10) : 1;
+                    var sIdxVal = (sIdxStr !== null && sIdxStr !== '') ? parseInt(String(sIdxStr), 10) : 1;
                     var currentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr);
                     var initiallySelected = initialHighlights[rowIdStr] || false;
                     if (currentlySelected !== initiallySelected) {
                         mergedDeltas.push({
-                            row_id: parseInt(rowIdStr, 10),
+                            row_id: parseInt(String(rowIdStr), 10),
                             token_order: tOrdVal,
                             sentence_idx: sIdxVal,
                             column: 'DeskSelected',
@@ -8159,6 +8204,7 @@
         };
 
         window.clearDirty = function() {
+            acknowledgedValues = {};
             historyStack = [];
             historyIndex = -1;
             deltas = [];
@@ -8175,7 +8221,7 @@
                         }
                         for (var c = 0; c < wCards.length; c++) {
                             var card = wCards[c];
-                            var curSelMap = {};
+                            var /** @type {Desk.Membership} */ curSelMap = {};
                             if (card.selected_ids) {
                                 for (var s = 0; s < card.selected_ids.length; s++) curSelMap[String(card.selected_ids[s])] = true;
                             }
@@ -8223,7 +8269,7 @@
                         }
                         for (var c = 0; c < wCards.length; c++) {
                             var card = wCards[c];
-                            var curSelMap = {};
+                            var /** @type {Desk.Membership} */ curSelMap = {};
                             if (card.selected_ids) {
                                 for (var s = 0; s < card.selected_ids.length; s++) curSelMap[String(card.selected_ids[s])] = true;
                             }
@@ -8255,21 +8301,21 @@
 
         window.editFocusedCell = function() {
             var cellToEdit = null;
-            if (lastHoveredCell) {
-                var rId = parseInt(lastHoveredCell.parentElement.getAttribute('data-row-id'));
+            if (lastHoveredCell && lastHoveredCell.parentElement) {
+                var rId = parseInt(String(lastHoveredCell.parentElement.getAttribute('data-row-id')));
                 if (rId === focusedRowId) {
                     cellToEdit = lastHoveredCell;
                 }
             }
-            if (!cellToEdit && lastClickedCell) {
-                var rId = parseInt(lastClickedCell.parentElement.getAttribute('data-row-id'));
+            if (!cellToEdit && lastClickedCell && lastClickedCell.parentElement) {
+                var rId = parseInt(String(lastClickedCell.parentElement.getAttribute('data-row-id')));
                 if (rId === focusedRowId) {
                     cellToEdit = lastClickedCell;
                 }
             }
             if (!cellToEdit && focusedRowId !== null) {
                 for (var k = 0; k < tableRows.length; k++) {
-                    if (tableRows[k].getAttribute('data-row-id') == focusedRowId) {
+                    if (tableRows[k].getAttribute('data-row-id') === String(focusedRowId)) {
                         var tds = tableRows[k].getElementsByTagName('td');
                         for (var j = 0; j < tds.length; j++) {
                             if (tds[j].classList.contains('editable')) {
@@ -8288,7 +8334,7 @@
         };
 
         window.selectAllInActiveEdit = function() {
-            var el = document.activeElement;
+            var el = /** @type {HTMLInputElement|null} */ (document.activeElement);
             if (el && el.tagName === 'INPUT') {
                 el.select();
             }
@@ -8298,7 +8344,7 @@
             if (typeof tableRows === 'undefined' || !tableRows || tableRows.length === 0) {
                 var lt = document.getElementById('lemma-table');
                 if (lt) {
-                    var trs = lt.querySelectorAll('tbody tr[data-row-id]');
+                    var trs = /** @type {NodeListOf<HTMLElement>} */ (lt.querySelectorAll('tbody tr[data-row-id]'));
                     var fresh = [];
                     for (var r = 0; r < trs.length; r++) fresh.push(trs[r]);
                     tableRows = fresh;
@@ -8327,21 +8373,22 @@
         };
 
         function updateToolbarState() {
-            var saveBtn = document.getElementById('kw-btn-save');
+            var saveBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-save'));
             if (saveBtn) {
                 saveBtn.disabled = (typeof window.isDirty === 'function') ? !window.isDirty() : true;
             }
         }
         window.updateToolbarState = updateToolbarState;
 
+        /** @param {HTMLButtonElement|null} btn @param {boolean} isLoading @param {string} loadingText @param {string} defaultText */
         function setButtonLoading(btn, isLoading, loadingText, defaultText) {
             if (typeof btn === 'string') {
-                btn = document.getElementById(btn);
+                btn = /** @type {HTMLButtonElement|null} */ (document.getElementById(btn));
             }
             if (!btn) return;
             if (isLoading) {
                 if (!btn.hasAttribute('data-default-text')) {
-                    btn.setAttribute('data-default-text', defaultText || btn.textContent || btn.innerText || "");
+                    btn.setAttribute('data-default-text', String(defaultText || btn.textContent || btn.innerText || ""));
                 }
                 btn.disabled = true;
                 btn.textContent = loadingText || "Loading...";
@@ -8379,6 +8426,7 @@
         }
         window.setButtonLoading = setButtonLoading;
 
+        /** @param {Desk.ErrorResponse|Error|string|null|undefined} resObj @param {string=} fallback */
         function formatErrorWithTrace(resObj, fallback) {
             fallback = fallback || "Operation failed";
             if (!resObj) return fallback;
@@ -8489,11 +8537,11 @@
             }
             if (!zidVal && window.AppState) {
                 if (window.AppState.bootstrap && window.AppState.bootstrap.session_data && (window.AppState.bootstrap.session_data.session_zid || window.AppState.bootstrap.session_data.zid)) {
-                    zidVal = window.AppState.bootstrap.session_data.session_zid || window.AppState.bootstrap.session_data.zid;
+                    zidVal = window.AppState.bootstrap.session_data.session_zid || window.AppState.bootstrap.session_data.zid || '';
                 } else if (window.AppState.session_data && (window.AppState.session_data.session_zid || window.AppState.session_data.zid)) {
-                    zidVal = window.AppState.session_data.session_zid || window.AppState.session_data.zid;
+                    zidVal = window.AppState.session_data.session_zid || window.AppState.session_data.zid || '';
                 } else if (window.AppState.session_zid || window.AppState.zid) {
-                    zidVal = window.AppState.session_zid || window.AppState.zid;
+                    zidVal = window.AppState.session_zid || window.AppState.zid || '';
                 }
             }
             if (!zidVal) {
@@ -8540,6 +8588,7 @@
         }
         window.getApiToken = getApiToken;
 
+        /** @param {Desk.RowId} rowId @param {HTMLButtonElement} btnElement */
         function retryRow(rowId, btnElement) {
             var curZid = getSessionZid();
             if (!curZid) {
@@ -8551,12 +8600,12 @@
                 return;
             }
 
-            var tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
-            var cellDiv = null;
+            var tr = /** @type {HTMLElement|null} */ (document.querySelector('tr[data-row-id="' + rowId + '"]'));
+            /** @type {HTMLElement|null} */ var cellDiv = null;
             if (tr) {
-                var cell = tr.querySelector('td.col-translation, td[data-col="WordDestination"], td[data-col="word_translation"]') || tr.getElementsByTagName('td')[2];
+                var cell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-translation, td[data-col="WordDestination"], td[data-col="word_translation"]')) || tr.getElementsByTagName('td')[2];
                 if (cell) {
-                    cellDiv = cell.querySelector('.scrollable-cell') || cell;
+                    cellDiv = /** @type {HTMLElement|null} */ (cell.querySelector('.scrollable-cell')) || cell;
                 }
             }
             if (btnElement) {
@@ -8567,21 +8616,21 @@
             }
 
             var token = getApiToken ? getApiToken() : "";
-            var headers = {
+            var /** @type {Record<string,string>} */ headers = {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json'
             };
             if (token) headers['X-API-Token'] = token;
 
-            var retryPayload = {
+            var /** @type {Desk.CommandRequest} */ retryPayload = {
                 session_zid: curZid,
-                row_ids: [parseInt(rowId, 10)]
+                row_ids: [parseInt(String(rowId), 10)]
             };
-            var trElem = document.querySelector('tr[data-row-id="' + rowId + '"]');
+            var trElem = /** @type {HTMLElement|null} */ (document.querySelector('tr[data-row-id="' + rowId + '"]'));
             if (trElem) {
                 var tOrdAttr = trElem.getAttribute('data-token-order');
                 if (tOrdAttr !== null && tOrdAttr !== undefined && tOrdAttr !== '') {
-                    var parsedTOrd = parseInt(tOrdAttr, 10);
+                    var parsedTOrd = parseInt(String(tOrdAttr), 10);
                     retryPayload.token_orders = [!isNaN(parsedTOrd) ? parsedTOrd : tOrdAttr];
                 }
             }
@@ -8615,18 +8664,19 @@
                     cellDiv.innerHTML = '';
                 }
                 if (typeof window.showToast === 'function') {
-                    window.showToast("Retry failed: " + (err.message || String(err)), "error");
+                    window.showToast("Retry failed: " + (err instanceof Error ? err.message : String(err)), "error");
                 }
             });
         }
         window.retryRow = retryRow;
 
+        /** @param {string=} sessionZid */
         function retrySession(sessionZid) {
             var curZid = sessionZid || getSessionZid();
             if (!curZid) return;
             window._kwRetryToastShown = false;
             var token = getApiToken ? getApiToken() : "";
-            var headers = {
+            var /** @type {Record<string,string>} */ headers = {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json'
             };
@@ -8659,7 +8709,7 @@
             })
             .catch(function(err) {
                 if (typeof window.showToast === 'function') {
-                    window.showToast("Retry failed: " + (err.message || String(err)), "error");
+                    window.showToast("Retry failed: " + (err instanceof Error ? err.message : String(err)), "error");
                 }
                 if (typeof window.cleanupOrphanSkeletons === 'function') {
                     window.cleanupOrphanSkeletons();
@@ -8669,27 +8719,27 @@
         window.retrySession = retrySession;
 
 
-        var saveState = {phase: 'idle', promise: null};
-        var selectionSaveTimer = null;
-        var nativeSaveSnapshot = null;
+        var /** @type {Desk.SaveState} */ saveState = {phase: 'idle', promise: null};
+        /** @type {number|null} */ var selectionSaveTimer = null;
+        /** @type {{deltas:Desk.Delta[]}|null} */ var nativeSaveSnapshot = null;
 
         window.captureSaveSnapshot = function() {
-            nativeSaveSnapshot = {deltas: JSON.parse(window.getDeltas()), history: historyStack.slice(0, historyIndex + 1)};
+            if (nativeSaveSnapshot) throw new Error('A native save is already pending');
+            nativeSaveSnapshot = {deltas: JSON.parse(window.getDeltas())};
             return JSON.stringify(nativeSaveSnapshot.deltas);
         };
-        window.acknowledgeSaveSnapshot = function(serialized) {
+        window.abortSaveSnapshot = function() { nativeSaveSnapshot = null; };
+        window.acknowledgeSaveSnapshot = function(serialized, response) {
             if (!nativeSaveSnapshot || JSON.stringify(nativeSaveSnapshot.deltas) !== serialized) {
                 throw new Error('Save acknowledgment does not match the submitted snapshot');
             }
-            acknowledgeSelections(nativeSaveSnapshot.deltas);
-            var submitted = nativeSaveSnapshot.history;
-            historyStack = historyStack.filter(function(action) { return submitted.indexOf(action) === -1; });
-            historyIndex = historyStack.length - 1;
+            var acknowledgment = response ? JSON.parse(response) : null;
+            acknowledgeValues(nativeSaveSnapshot.deltas, acknowledgment && (acknowledgment.data || acknowledgment));
             nativeSaveSnapshot = null;
-            rebuildDeltas();
             return window.isDirty();
         };
 
+        /** @param {Desk.Delta[]} snapshot */
         function acknowledgeSelections(snapshot) {
             var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
             snapshot.filter(function(d) { return d.column === 'DeskSelected'; }).forEach(function(d) {
@@ -8705,14 +8755,16 @@
             });
         }
 
-        function saveSnapshot(snapshot, submittedHistory) {
+        /** @param {Desk.Delta[]} snapshot */
+        function saveSnapshot(snapshot) {
             var token = getApiToken();
-            var headers = {'Content-Type': 'application/json'};
+            var /** @type {Record<string,string>} */ headers = {'Content-Type': 'application/json'};
             if (token) headers['X-API-Token'] = token;
             var body = JSON.stringify({session_zid: getSessionZid(), language: getSessionLang(), token: token, deltas: snapshot});
             var request;
             if (window.ahkCall && (document.documentMode || typeof fetch === 'undefined')) {
                 request = Promise.resolve().then(function() {
+                    if (!window.ahkCall) throw new Error('Native bridge is no longer attached');
                     var data = JSON.parse(window.ahkCall('persist_selection', body));
                     return {ok: data.ok !== false && !data.error, json: function() { return Promise.resolve(data); }};
                 });
@@ -8725,34 +8777,29 @@
             return request.then(function(res) {
                 return res.json().then(function(data) {
                     if (!res.ok || !(data.ok || data.status === 'success')) throw new Error(formatErrorWithTrace(data, 'Save failed'));
-                    acknowledgeSelections(snapshot);
-                    historyStack = historyStack.filter(function(action) { return submittedHistory.indexOf(action) === -1; });
-                    historyIndex = historyStack.length - 1;
-                    rebuildDeltas();
+                    acknowledgeValues(snapshot, data.data || data);
                 });
             });
         }
 
+        /** @param {boolean} selectionOnly @returns {Promise<void>} */
         function persistPending(selectionOnly) {
             if (saveState.phase === 'saving') {
                 return saveState.promise.then(function() { return persistPending(selectionOnly); });
             }
-            var snapshot = JSON.parse(window.getDeltas());
+            var /** @type {Desk.Delta[]} */ snapshot = JSON.parse(window.getDeltas());
             if (selectionOnly) snapshot = snapshot.filter(function(d) { return d.column === 'DeskSelected'; });
             if (!snapshot.length) return Promise.resolve();
             if (!getSessionZid()) return Promise.reject(new Error('Session ZID missing'));
-            var submitted = selectionOnly ? [] : historyStack.slice(0, historyIndex + 1);
-            var button = document.getElementById('kw-btn-save');
+            var button = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-save'));
             setButtonLoading(button, true, 'Saving...', 'Save (Ctrl+S)');
-            saveState.phase = 'saving';
-            saveState.promise = Promise.resolve().then(function() {
-                return saveSnapshot(snapshot, submitted);
+            saveState = {phase: 'saving', promise: Promise.resolve().then(function() {
+                return saveSnapshot(snapshot);
             }).finally(function() {
-                saveState.phase = 'idle';
-                saveState.promise = null;
+                saveState = {phase: 'idle', promise: null};
                 setButtonLoading(button, false, '', 'Save (Ctrl+S)');
                 updateToolbarState();
-            });
+            })};
             return saveState.promise.then(function() {
                 // Acknowledgment may expose a newer reversal of a submitted value.
                 if (selectionOnly) return persistPending(true);
@@ -8786,7 +8833,7 @@
             });
         };
 
-        var autoSaveDebounceTimer = null;
+        /** @type {number|null} */ var autoSaveDebounceTimer = null;
         window.triggerAutoSaveOnEdit = function() {
             var uiCfg = window.__CONFIG__ || {};
             if (!uiCfg.auto_save_on_edit) return;
@@ -8820,9 +8867,9 @@
             if (!deltasJson || deltasJson.length === 0) return;
 
             var tok = (typeof getApiToken === 'function') ? getApiToken() : '';
-            var headers = { 'Content-Type': 'application/json' };
+            var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
-            var bodyPayload = {
+            var /** @type {Desk.CommandRequest} */ bodyPayload = {
                 session_zid: sZid,
                 deltas: deltasJson,
                 language: (typeof getSessionLang === 'function') ? getSessionLang() : ''
@@ -8865,20 +8912,20 @@
                 else if (window.location && window.location.reload) window.location.reload();
                 return;
             }
-            var updateBtn = document.getElementById('kw-btn-update');
+            var updateBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-update'));
             setButtonLoading(updateBtn, true, "Updating...", "Update");
 
             var tok = getApiToken();
-            var headers = { 'Accept': 'application/json' };
+            var /** @type {Record<string,string>} */ headers = { 'Accept': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
-            var postHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+            var /** @type {Record<string,string>} */ postHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
             if (tok) postHeaders['X-API-Token'] = tok;
 
             // Check if sentence translation or any lemma translation is missing or in error/skeleton state
             var tc = document.getElementById('translation-container');
             var tcText = tc ? (tc.textContent || tc.innerText || "").trim() : "";
             var needsRetext = false;
-            if (!tcText || tcText === 'Loading' || tcText === 'Loading translation' || tcText === 'Processed' || tcText.indexOf('...') !== -1 || (tc && (tc.classList.contains('skeleton-loader') || tc.querySelector('.skeleton-loader')))) {
+            if (!tcText || tcText === 'Loading' || tcText === 'Loading translation' || tcText === 'Processed' || tcText.indexOf('...') !== -1 || (tc && (tc.classList.contains('skeleton-loader') || /** @type {HTMLElement|null} */ (tc.querySelector('.skeleton-loader'))))) {
                 needsRetext = true;
             }
             if (window.AppState && (!window.AppState.translatedText || window.AppState.translatedText.trim() === '')) {
@@ -8886,18 +8933,18 @@
             }
 
             var untranslatedRowIds = [];
-            var allRows = document.querySelectorAll('#lemma-table tbody tr[data-row-id]');
+            var allRows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id]'));
             for (var r = 0; r < allRows.length; r++) {
                 var rowEl = allRows[r];
                 var rId = rowEl.getAttribute('data-row-id') || rowEl.getAttribute('data-token-order');
-                var transTd = rowEl.querySelector('td[data-col="WordDestination"]') || rowEl.querySelector('.col-translation');
+                var transTd = /** @type {HTMLElement|null} */ (rowEl.querySelector('td[data-col="WordDestination"]')) || /** @type {HTMLElement|null} */ (rowEl.querySelector('.col-translation'));
                 if (!transTd) {
                     var tds = rowEl.getElementsByTagName('td');
                     if (tds.length >= 3) transTd = tds[2];
                 }
-                var transCell = transTd ? (transTd.querySelector('.scrollable-cell') || transTd) : null;
+                var transCell = transTd ? (/** @type {HTMLElement|null} */ (transTd.querySelector('.scrollable-cell')) || transTd) : null;
                 var transContent = transCell ? (transCell.textContent || transCell.innerText || "").trim() : "";
-                if (!transContent || transContent === 'Loading' || transContent.indexOf('...') !== -1 || (transCell && (transCell.classList.contains('skeleton-loader') || transCell.querySelector('.skeleton-loader')))) {
+                if (!transContent || transContent === 'Loading' || transContent.indexOf('...') !== -1 || (transCell && (transCell.classList.contains('skeleton-loader') || /** @type {HTMLElement|null} */ (transCell.querySelector('.skeleton-loader'))))) {
                     if (rId !== null && rId !== undefined) {
                         untranslatedRowIds.push(rId);
                     }
@@ -8906,7 +8953,7 @@
 
             var actions = [];
             if (needsRetext) {
-                var retextBody = { session_zid: sZid, language: getSessionLang() };
+                var /** @type {Desk.CommandRequest} */ retextBody = { session_zid: sZid, language: getSessionLang() };
                 if (tok) retextBody.token = tok;
                 actions.push(
                     fetch('/session/retext', {
@@ -8917,7 +8964,7 @@
                 );
             }
             if (untranslatedRowIds.length > 0) {
-                var rewordBody = { session_zid: sZid, row_ids: untranslatedRowIds, language: getSessionLang() };
+                var /** @type {Desk.CommandRequest} */ rewordBody = { session_zid: sZid, row_ids: untranslatedRowIds, language: getSessionLang() };
                 if (tok) rewordBody.token = tok;
                 actions.push(
                     fetch('/session/reword', {
@@ -8983,14 +9030,14 @@
                 window.showToast("Session ZID missing.", "error");
                 return;
             }
-            var retextBtn = document.getElementById('kw-btn-retext');
+            var retextBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-retext'));
             setButtonLoading(retextBtn, true, "Retexting...", "Re-text");
 
             window.showToast("Retexting session...", "info");
             var tok = getApiToken();
-            var headers = { 'Content-Type': 'application/json' };
+            var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
-            var bodyPayload = {
+            var /** @type {Desk.CommandRequest} */ bodyPayload = {
                 session_zid: sZid,
                 language: getSessionLang()
             };
@@ -9117,7 +9164,7 @@
                     if (isTrSel) {
                         var grp = getRowGroupIds(tr);
                         for (var p = 0; p < grp.length; p++) {
-                            var pInt = parseInt(grp[p], 10);
+                            var pInt = parseInt(String(grp[p]), 10);
                             if (!isNaN(pInt) && tableSelectedRows.indexOf(pInt) === -1) tableSelectedRows.push(pInt);
                         }
                     }
@@ -9126,7 +9173,7 @@
             if (tableSelectedRows.length === 0) {
                 var selArr = (typeof getSelectedRowsArray === 'function') ? getSelectedRowsArray() : [];
                 for (var s = 0; s < selArr.length; s++) {
-                    var sInt = parseInt(selArr[s], 10);
+                    var sInt = parseInt(String(selArr[s]), 10);
                     if (!isNaN(sInt) && tableSelectedRows.indexOf(sInt) === -1) tableSelectedRows.push(sInt);
                 }
             }
@@ -9143,11 +9190,11 @@
                             ? item.row_ids
                             : ((item.atomic_id !== undefined && item.atomic_id !== null) ? [item.atomic_id] : []));
                     if (itemRowIds.length === 0 && item.visual_idx !== undefined && item.visual_idx !== null) {
-                        var td = findTokenDataByVisualIdx(item.visual_idx);
+                        var td = findTokenDataByVisualIdx(Number(item.visual_idx));
                         itemRowIds = td ? (td.atomic_row_ids || td.row_ids || []) : [];
                     }
                     for (var rIdx = 0; rIdx < itemRowIds.length; rIdx++) {
-                        var rInt = parseInt(itemRowIds[rIdx], 10);
+                        var rInt = parseInt(String(itemRowIds[rIdx]), 10);
                         if (!isNaN(rInt)) {
                             if (activeTokenRows.indexOf(rInt) === -1) activeTokenRows.push(rInt);
                             if (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(String(rInt))) {
@@ -9188,7 +9235,7 @@
                         if (isTrSel) {
                             var grp = getRowGroupIds(tr);
                             for (var p = 0; p < grp.length; p++) {
-                                var pInt = parseInt(grp[p], 10);
+                                var pInt = parseInt(String(grp[p]), 10);
                                 if (!isNaN(pInt) && rows.indexOf(pInt) === -1) rows.push(pInt);
                             }
                         }
@@ -9212,12 +9259,12 @@
                 window.showToast("Session ZID missing.", "error");
                 return;
             }
-            var rewordBtn = document.getElementById('kw-btn-reword');
+            var rewordBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-reword'));
             setButtonLoading(rewordBtn, true, "Rewording...", "Re-word");
 
             window.showToast("Re-wording " + (tokenOrders.length || rows.length) + " rows...", "info");
             var tok = getApiToken();
-            var headers = { 'Content-Type': 'application/json' };
+            var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
             var actCard = (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function')
                 ? window.WorkspaceTabs.getActiveCard()
@@ -9225,7 +9272,7 @@
             var curSentIdx = (actCard && actCard.sentence_idx !== undefined && actCard.sentence_idx !== null)
                 ? actCard.sentence_idx
                 : 0;
-            var bodyPayload = {
+            var /** @type {Desk.CommandRequest} */ bodyPayload = {
                 session_zid: sZid,
                 row_ids: rows,
                 token_orders: tokenOrders,
@@ -9281,7 +9328,7 @@
                     if (isTrSel) {
                         var grp = getRowGroupIds(tr);
                         for (var p = 0; p < grp.length; p++) {
-                            var pInt = parseInt(grp[p], 10);
+                            var pInt = parseInt(String(grp[p]), 10);
                             if (!isNaN(pInt) && tableSelectedRows.indexOf(pInt) === -1) tableSelectedRows.push(pInt);
                         }
                     }
@@ -9290,7 +9337,7 @@
             if (tableSelectedRows.length === 0) {
                 var selArr = (typeof getSelectedRowsArray === 'function') ? getSelectedRowsArray() : [];
                 for (var s = 0; s < selArr.length; s++) {
-                    var sInt = parseInt(selArr[s], 10);
+                    var sInt = parseInt(String(selArr[s]), 10);
                     if (!isNaN(sInt) && tableSelectedRows.indexOf(sInt) === -1) tableSelectedRows.push(sInt);
                 }
             }
@@ -9307,11 +9354,11 @@
                             ? item.row_ids
                             : ((item.atomic_id !== undefined && item.atomic_id !== null) ? [item.atomic_id] : []));
                     if (itemRowIds.length === 0 && item.visual_idx !== undefined && item.visual_idx !== null) {
-                        var td = findTokenDataByVisualIdx(item.visual_idx);
+                        var td = findTokenDataByVisualIdx(Number(item.visual_idx));
                         itemRowIds = td ? (td.atomic_row_ids || td.row_ids || []) : [];
                     }
                     for (var rIdx = 0; rIdx < itemRowIds.length; rIdx++) {
-                        var rInt = parseInt(itemRowIds[rIdx], 10);
+                        var rInt = parseInt(String(itemRowIds[rIdx]), 10);
                         if (!isNaN(rInt)) {
                             if (activeTokenRows.indexOf(rInt) === -1) activeTokenRows.push(rInt);
                             if (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(String(rInt))) {
@@ -9343,7 +9390,7 @@
                         if (isTrSel) {
                             var grp = getRowGroupIds(tr);
                             for (var p = 0; p < grp.length; p++) {
-                                var pInt = parseInt(grp[p], 10);
+                                var pInt = parseInt(String(grp[p]), 10);
                                 if (!isNaN(pInt) && rows.indexOf(pInt) === -1) rows.push(pInt);
                             }
                         }
@@ -9360,8 +9407,8 @@
                 var activeCard = window.WorkspaceTabs.getActiveCard();
                 var activeSentIdx = (activeCard && activeCard.sentence_idx !== undefined) ? activeCard.sentence_idx : 0;
                 if (activeSentIdx > 0 && activeCard && activeCard.words) {
-                    var cardRowIds = {};
-                    var cardTokenOrders = {};
+                    var /** @type {Desk.Membership} */ cardRowIds = {};
+                    var /** @type {Desk.Membership} */ cardTokenOrders = {};
                     for (var w = 0; w < activeCard.words.length; w++) {
                         var wObj = activeCard.words[w];
                         cardRowIds[String(wObj.row_id)] = true;
@@ -9392,14 +9439,14 @@
                 window.showToast("Session ZID missing.", "error");
                 return;
             }
-            var exportBtn = document.getElementById('kw-btn-export');
+            var exportBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-export'));
             setButtonLoading(exportBtn, true, "Sending...", "Send to Anki");
 
             window.showToast("Exporting to Anki...", "info");
             var tok = getApiToken();
-            var headers = { 'Content-Type': 'application/json' };
+            var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
-            var bodyPayload = {
+            var /** @type {Desk.CommandRequest} */ bodyPayload = {
                 session_zid: sZid,
                 row_ids: rows,
                 selected_row_ids: rows,
@@ -9435,7 +9482,7 @@
         window.onHandToolClick = function() {
             var newMode = !window.__persistentSelectableMode;
             window.setSelectableTextMode(newMode, newMode);
-            var handBtn = document.getElementById('kw-btn-hand-tool');
+            var handBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-hand-tool'));
             if (handBtn) {
                 if (newMode) handBtn.classList.add('active');
                 else handBtn.classList.remove('active');
@@ -9454,7 +9501,7 @@
             window.showToast("Deleted " + rows.length + " rows (Ctrl+Z to undo)", "info", 2000);
         };
 
-        var LANGUAGE_NAME_MAP = {
+        var /** @type {Record<string,string>} */ LANGUAGE_NAME_MAP = {
             "en": "English",
             "de": "German",
             "ru": "Russian",
@@ -9469,6 +9516,7 @@
             "uk": "Ukrainian"
         };
 
+        /** @param {string} code */
         function getLanguageName(code) {
             if (!code) return "";
             return LANGUAGE_NAME_MAP[code.toLowerCase()] || code.toUpperCase();
@@ -9505,7 +9553,7 @@
             if (modal) {
                 modal.style.display = 'flex';
                 window.__langMismatchInfo = info;
-                var yesBtn = document.getElementById('kw-btn-lang-yes');
+                var yesBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-yes'));
                 if (yesBtn) yesBtn.focus();
             }
         };
@@ -9515,17 +9563,19 @@
             if (modal) modal.style.display = 'none';
         };
 
+        /** @param {boolean} loading */
         function setLangModalLoading(loading) {
-            var yesBtn = document.getElementById('kw-btn-lang-yes');
-            var noBtn = document.getElementById('kw-btn-lang-no');
-            var cancelBtn = document.getElementById('kw-btn-lang-cancel');
+            var yesBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-yes'));
+            var noBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-no'));
+            var cancelBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-cancel'));
             if (yesBtn) yesBtn.disabled = !!loading;
             if (noBtn) noBtn.disabled = !!loading;
             if (cancelBtn) cancelBtn.disabled = !!loading;
         }
 
+        /** @param {string|Array<string|Desk.ChildSession>} children */
         function extractChildSessions(children) {
-            var results = [];
+            /** @type {Array<{zid: string, seq_num: string|number}>} */ var results = [];
             if (!children) return results;
             if (typeof children === 'string') {
                 try { children = JSON.parse(children); } catch(e) { console.error('[extractChildSessions] Failed to parse children JSON:', e); return results; }
@@ -9536,12 +9586,14 @@
                 var item = children[i];
                 if (typeof item === 'string') {
                     if (item === '--seq-num' && i + 1 < children.length) {
-                        curSeq = children[i + 1];
+                        var sequenceArgument = children[i + 1];
+                        if (typeof sequenceArgument !== 'string') throw new Error('Invalid child --seq-num argument');
+                        curSeq = sequenceArgument;
                         i++;
                     } else if (item === '--restore' && i + 1 < children.length) {
                         var curTsv = children[i + 1];
                         i++;
-                        if (curTsv) {
+                        if (typeof curTsv === 'string' && curTsv) {
                             var zidMatch = curTsv.match(/(\d{14})/) || curTsv.match(/\d{14}/);
                             var childZid = zidMatch ? (zidMatch[1] || zidMatch[0]) : null;
                             if (childZid) {
@@ -9571,6 +9623,7 @@
             return getDeliveryMode() === 'container' ? 'container' : 'tabs';
         }
 
+        /** @param {Desk.ChildSession[]} children */
         function spawnChildTabs(children) {
             if (getDeliveryMode() === 'container') {
                 return;
@@ -9579,7 +9632,7 @@
             if (!childSessions || childSessions.length === 0) return;
             var tok = getApiToken();
             var tokenQuery = tok ? '&token=' + encodeURIComponent(tok) : '';
-            var urls = [];
+            /** @type {string[]} */ var urls = [];
             for (var i = 0; i < childSessions.length; i++) {
                 var c = childSessions[i];
                 var childUrl = '/session/render?session_zid=' + encodeURIComponent(c.zid) + '&seq_num=' + encodeURIComponent(c.seq_num) + '&bypass_lang_check=true' + tokenQuery;
@@ -9598,9 +9651,9 @@
             };
 
             if (typeof fetch !== 'undefined') {
-                var headers = { 'Content-Type': 'application/json' };
+                var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
                 if (tok) headers['X-API-Token'] = tok;
-                var bodyPayload = { urls: urls, children: childSessions };
+                var /** @type {Desk.CommandRequest} */ bodyPayload = { urls: urls, children: childSessions };
                 if (tok) bodyPayload.token = tok;
                 fetch('/api/v1/spawn-tabs', {
                     method: 'POST',
@@ -9625,7 +9678,7 @@
         /* WorkspaceTabs loaded from WorkspaceTabs.js */
 
         window.onLangYes = function() {
-            var yesBtn = document.getElementById('kw-btn-lang-yes');
+            var yesBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-yes'));
             if (yesBtn && yesBtn.disabled) return;
 
             var info = window.__langMismatchInfo || {};
@@ -9646,7 +9699,7 @@
             var tsvPathEl = document.getElementById('tsv-path');
             if (tsvPathEl) {
                 var fullPath = (tsvPathEl.textContent || tsvPathEl.innerText || '').trim();
-                cardTsv = fullPath.split(/[/\\\\]/).pop();
+                cardTsv = fullPath.split(/[/\\\\]/).pop() || '';
                 if (cardTsv && sZid && detLang) {
                     cardTsv = cardTsv.replace(new RegExp('\\.[a-z]{2}\\.tsv$', 'i'), '.' + detLang + '.tsv');
                 }
@@ -9659,10 +9712,10 @@
             setLangModalLoading(true);
 
             if (typeof fetch !== 'undefined') {
-                var headers = { 'Content-Type': 'application/json' };
+                var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
                 if (tok) headers['X-API-Token'] = tok;
 
-                var langPayload = { language: detLang };
+                var /** @type {Desk.CommandRequest} */ langPayload = { language: detLang };
                 if (tok) langPayload.token = tok;
 
                 fetch('/api/v1/set-language', {
@@ -9673,7 +9726,7 @@
                     console.warn("Failed to synchronize language with controller:", e);
                 });
 
-                var renderPayload = {
+                var /** @type {Desk.CommandRequest} */ renderPayload = {
                     session_zid: sZid,
                     zid: sZid,
                     language: detLang,
@@ -9708,21 +9761,21 @@
                             return;
                         }
                     }
-                    window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang) + '&bypass_lang_check=true' + tokenQuery;
+                    window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang || '') + '&bypass_lang_check=true' + tokenQuery;
                 })
                 .catch(function(err) {
                     setLangModalLoading(false);
-                    window.showToast("Language switch failed: " + (err.message || String(err)), "error");
+                    window.showToast("Language switch failed: " + (err instanceof Error ? err.message : String(err)), "error");
                 });
             } else {
                 setLangModalLoading(false);
                 window.hideLanguageVerificationModal();
-                window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang) + '&bypass_lang_check=true' + tokenQuery;
+                window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang || '') + '&bypass_lang_check=true' + tokenQuery;
             }
         };
 
         window.onLangNo = function() {
-            var noBtn = document.getElementById('kw-btn-lang-no');
+            var noBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-no'));
             if (noBtn && noBtn.disabled) return;
             if (typeof window.hideLanguageVerificationModal === 'function') {
                 window.hideLanguageVerificationModal();
@@ -9742,7 +9795,7 @@
             var tsvPathEl = document.getElementById('tsv-path');
             if (tsvPathEl) {
                 var fullPath = (tsvPathEl.textContent || tsvPathEl.innerText || '').trim();
-                cardTsv = fullPath.split(/[/\\\\]/).pop();
+                cardTsv = fullPath.split(/[/\\\\]/).pop() || '';
             }
             if (!cardTsv && sZid && expLang) {
                 cardTsv = sZid + '.' + expLang + '.tsv';
@@ -9752,10 +9805,10 @@
             setLangModalLoading(true);
 
             if (typeof fetch !== 'undefined') {
-                var headers = { 'Content-Type': 'application/json' };
+                var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
                 if (tok) headers['X-API-Token'] = tok;
 
-                var renderPayload = {
+                var /** @type {Desk.CommandRequest} */ renderPayload = {
                     session_zid: sZid,
                     zid: sZid,
                     language: expLang,
@@ -9797,7 +9850,7 @@
                 })
                 .catch(function(err) {
                     setLangModalLoading(false);
-                    window.showToast("Render failed: " + (err.message || String(err)), "error");
+                    window.showToast("Render failed: " + (err instanceof Error ? err.message : String(err)), "error");
                 });
             } else {
                 setLangModalLoading(false);
@@ -9811,6 +9864,7 @@
             window.showToast("Language verification cancelled.", "info");
         };
 
+        /** @param {boolean} active */
         function setHighlightSameLemma(active) {
             if (window.AppStore) window.AppStore.dispatch({type: 'TOGGLE_HIGHLIGHT_SAME_LEMMA', payload: !!active});
             if (window.AppState) {
@@ -9822,7 +9876,7 @@
             try {
                 localStorage.setItem('kw_highlight_same_lemma', String(!!active));
             } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-            var btn = document.getElementById('kw-btn-same-lemma');
+            var btn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-same-lemma'));
             if (btn) {
                 if (active) {
                     addClass(btn, 'active');
@@ -9853,7 +9907,7 @@
         }
         window.toggleHighlightSameLemma = toggleHighlightSameLemma;
 
-        var btnSameLemma = document.getElementById('kw-btn-same-lemma');
+        var btnSameLemma = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-same-lemma'));
         if (btnSameLemma) {
             if (window.AppState && window.AppState.highlightSameLemma) {
                 addClass(btnSameLemma, 'active');
@@ -9868,6 +9922,7 @@
             }
         }
 
+        /** @param {boolean} active */
         function setFilterSelectedOnly(active) {
             if (window.AppStore) window.AppStore.dispatch({type: 'TOGGLE_FILTER_SELECTED', payload: !!active});
             if (window.AppState) {
@@ -9887,7 +9942,7 @@
                     removeClass(lemmaTable, 'kw-filter-selected-only');
                 }
             }
-            var filterBtn = document.getElementById('kw-btn-filter-selected');
+            var filterBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-filter-selected'));
             if (filterBtn) {
                 if (active) {
                     addClass(filterBtn, 'btn-filter-active');
@@ -9918,7 +9973,7 @@
         }
         window.toggleFilterSelectedOnly = toggleFilterSelectedOnly;
 
-        var btnFilterSelected = document.getElementById('kw-btn-filter-selected');
+        var btnFilterSelected = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-filter-selected'));
         if (btnFilterSelected) {
             if (window.AppState && window.AppState.filterSelectedOnly) {
                 addClass(btnFilterSelected, 'btn-filter-active');
@@ -9941,8 +9996,8 @@
         }
 
         addEvent(document, 'click', function(e) {
-            e = e || window.event;
-            var target = e.target || e.srcElement;
+            e = /** @type {MouseEvent} */ (e || window.event);
+            var target = /** @type {HTMLElement|null} */ (e.target || e.srcElement);
             if (target && (target.id === 'kw-btn-empty-clear-filter' || (target.closest && target.closest('#kw-btn-empty-clear-filter')))) {
                 if (typeof window.setFilterSelectedOnly === 'function') {
                     window.setFilterSelectedOnly(false);
@@ -9957,8 +10012,8 @@
         }
 
         addEvent(document, 'keydown', function(e) {
-            e = e || window.event;
-            var target = e.target || e.srcElement;
+            e = /** @type {KeyboardEvent} */ (e || window.event);
+            var target = /** @type {HTMLElement|null} */ (e.target || e.srcElement);
             var isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
 
             var langModal = document.getElementById('kw-lang-modal');
@@ -9971,11 +10026,11 @@
                 }
                 if (e.key === 'Enter' || e.keyCode === 13) {
                     var focused = document.activeElement;
-                    if (focused === btnLangNo) {
+                    if (focused === document.getElementById('kw-btn-lang-no')) {
                         if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                         window.onLangNo();
                         return false;
-                    } else if (focused === btnLangCancel) {
+                    } else if (focused === document.getElementById('kw-btn-lang-cancel')) {
                         if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                         window.onLangCancel();
                         return false;
@@ -9991,7 +10046,7 @@
             if (!isInput && (e.ctrlKey || e.altKey || e.metaKey)) {
                 var digit = -1;
                 if (e.key >= '1' && e.key <= '9') {
-                    digit = parseInt(e.key, 10);
+                    digit = parseInt(String(e.key), 10);
                 } else if (e.keyCode >= 49 && e.keyCode <= 57) {
                     digit = e.keyCode - 48;
                 }
@@ -10079,13 +10134,13 @@
             }
         }
 
-        ['onUpdateClick', 'onRetextClick', 'onRewordClick', 'onSendToAnkiClick'].forEach(function(name) {
+        /** @type {Array<'onUpdateClick'|'onRetextClick'|'onRewordClick'|'onSendToAnkiClick'>} */ (['onUpdateClick', 'onRetextClick', 'onRewordClick', 'onSendToAnkiClick']).forEach(function(name) {
             var command = window[name];
             if (typeof command !== 'function') return;
             window[name] = function() {
                 var args = arguments;
                 return window.flushPendingSaves().then(function() {
-                    return command.apply(window, args);
+                    return command.apply(window, /** @type {[]} */ (Array.prototype.slice.call(args)));
                 }).catch(function(err) {
                     window.showToast('Save failed; action stopped: ' + formatErrorWithTrace(err, 'Network error'), 'error');
                 });
@@ -10098,7 +10153,7 @@
                 var bData = JSON.parse(bootstrapScript.textContent || bootstrapScript.innerText || '{}');
                 if (bData && typeof bData === 'object') {
                     window.__CONFIG__ = window.__CONFIG__ || bData.ui_config || {};
-                    window.AppState = window.AppState || {};
+                    window.AppState = window.AppState || {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
                     window.AppState.config = window.__CONFIG__;
                     window.AppState.bootstrap = bData;
                     if (bData.sentence_cards) {
@@ -10129,12 +10184,13 @@
         window.reserveTextRegions(true);
     }
 
+    /** @param {WheelEvent} e */
     function handleHorizontalScroll(e) {
-        e = e || window.event;
+        e = /** @type {WheelEvent} */ (e || window.event);
         if (e.shiftKey || e.altKey) {
             var delta = e.wheelDelta ? -e.wheelDelta : (e.detail ? e.detail * 40 : 0);
 
-            var target = e.target || e.srcElement;
+            var target = /** @type {HTMLElement|null} */ (e.target || e.srcElement);
             var scrollCell = null;
             var curr = target;
             while (curr) {
@@ -10142,7 +10198,7 @@
                     scrollCell = curr;
                     break;
                 }
-                curr = curr.parentNode;
+                curr = curr.parentElement;
             }
 
             if (scrollCell) {

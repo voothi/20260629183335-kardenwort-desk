@@ -206,15 +206,15 @@ class TestSqliteAtomicMutations:
         # Check get_overview_selections
         assert adapter.get_overview_selections(session_zid) == {0, 2}
 
-        # Verify constituent sentence words table is NOT touched / polluted
+        # September 28: shared membership updates constituent records.
         words_after = [w["selected"] for w in adapter.db.get_words_by_session(session_zid)]
-        assert words_after == words_before
+        assert words_after == [1, 1, 1]
 
         # Unselect token 0 for overview
         ok3 = adapter.update_word_selection(session_zid, sentence_idx=0, token_order=0, selected=0)
         assert ok3 is True
         assert adapter.get_overview_selections(session_zid) == {2}
-        assert [w["selected"] for w in adapter.db.get_words_by_session(session_zid)] == words_before
+        assert [w["selected"] for w in adapter.db.get_words_by_session(session_zid)] == [0, 1, 1]
 
     def test_sqlite_update_sentence_translation(self, temp_env):
         adapter = SqliteStorageAdapter(

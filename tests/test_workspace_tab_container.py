@@ -1607,7 +1607,7 @@ def test_drag_selection_across_filled_reword_row_in_table_of_lemmas(page, tmp_pa
 def test_cross_tab_selection_isolation_preserves_clean_overview_tab(page, tmp_path):
     """
     Verifies cross-tab selection behavior: selecting words in Tab 2 ('the') and Tab 3 ('on')
-    remains separate from Tab 1 (Overview) upon tab switching, while unselected words remain unselected.
+    synchronizes into Tab 1 (Overview) upon tab switching, while unselected words remain unselected.
     """
     from kardenwort_db import KardenwortDB
     db_path = tmp_path / "test_tab1_clean.db"
@@ -1694,14 +1694,14 @@ def test_cross_tab_selection_isolation_preserves_clean_overview_tab(page, tmp_pa
     tab1.click()
     page.wait_for_selector('#lemma-table tbody tr')
 
-    # Overview keeps its independent empty selection set.
+    # Tab 1 consolidates selections from other tabs: 'the' and 'on' are selected
     tab1_the = page.locator('#lemma-table tbody tr[data-row-id="0"]')
-    assert tab1_the.get_attribute("data-selected") == "0"
-    assert "selected" not in (tab1_the.get_attribute("class") or "")
+    assert tab1_the.get_attribute("data-selected") == "1"
+    assert "selected" in (tab1_the.get_attribute("class") or "")
 
     tab1_on = page.locator('#lemma-table tbody tr[data-row-id="2"]')
-    assert tab1_on.get_attribute("data-selected") == "0"
-    assert "selected" not in (tab1_on.get_attribute("class") or "")
+    assert tab1_on.get_attribute("data-selected") == "1"
+    assert "selected" in (tab1_on.get_attribute("class") or "")
 
     # Unselected words on Tab 1 remain unselected
     tab1_first = page.locator('#lemma-table tbody tr[data-row-id="1"]')
@@ -2014,7 +2014,7 @@ def test_overview_tab_unification_article_pronoun_der(tmp_path):
     assert len(consolidated_word["all_row_ids"]) == 3
 
 
-def test_playwright_cross_tab_selection_isolation(page, tmp_path):
+def test_playwright_cross_tab_selection_synchronization(page, tmp_path):
     """
     Task 4.1: Verify cross-tab selection synchronization between Tab 1 and child sentence tabs.
     Selecting a lemma on Tab 1 (Master Overview) reflects across all child sentence tabs
@@ -2075,9 +2075,9 @@ def test_playwright_cross_tab_selection_isolation(page, tmp_path):
     page.locator('.kw-tab-chip[data-tab-seq="2"]').click()
     page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
 
-    # The child context remains unselected.
+    # On Tab 2: "Haus" should be selected ("1"), "gross" should be unselected ("0")
     haus_row_tab2 = page.locator("#lemma-table tbody tr", has_text="Haus").first
-    assert haus_row_tab2.get_attribute("data-selected") == "0"
+    assert haus_row_tab2.get_attribute("data-selected") == "1"
     gross_row_tab2 = page.locator("#lemma-table tbody tr", has_text="gross").first
     assert gross_row_tab2.get_attribute("data-selected") == "0"
 
@@ -2085,19 +2085,16 @@ def test_playwright_cross_tab_selection_isolation(page, tmp_path):
     page.locator('.kw-tab-chip[data-tab-seq="3"]').click()
     page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
 
-    # The second child also remains independent.
+    # On Tab 3: "Haus" should be selected ("1"), "Katze" should be unselected ("0")
     haus_row_tab3 = page.locator("#lemma-table tbody tr", has_text="Haus").first
-    assert haus_row_tab3.get_attribute("data-selected") == "0"
+    assert haus_row_tab3.get_attribute("data-selected") == "1"
     katze_row_tab3 = page.locator("#lemma-table tbody tr", has_text="Katze").first
     assert katze_row_tab3.get_attribute("data-selected") == "0"
 
 
-    page.locator('.kw-tab-chip[data-tab-seq="1"]').click()
-    assert page.locator("#lemma-table tbody tr", has_text="Haus").first.get_attribute("data-selected") == "1"
-
-def test_playwright_cross_tab_deselection_isolation(page, tmp_path):
+def test_playwright_cross_tab_deselection_global(page, tmp_path):
     """
-    Task 4.2: Verify deselecting a word on Tab 2 leaves the other contexts unchanged.
+    Task 4.2: Verify deselecting a word on Tab 2 unmarks it globally on Tab 1 and Tab 3.
     """
     from kardenwort_db import KardenwortDB
     db_path = tmp_path / "test_cross_tab_desel.db"
@@ -2156,15 +2153,15 @@ def test_playwright_cross_tab_deselection_isolation(page, tmp_path):
     page.locator('.kw-tab-chip[data-tab-seq="3"]').click()
     page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
 
-    # Tab 3 retains its previously selected Haus.
+    # On Tab 3: "Haus" should now be unselected ("0")
     haus_row_tab3 = page.locator("#lemma-table tbody tr", has_text="Haus").first
-    assert haus_row_tab3.get_attribute("data-selected") == "1"
+    assert haus_row_tab3.get_attribute("data-selected") == "0"
 
     # Switch to Tab 1 (Master Overview)
     page.locator('.kw-tab-chip[data-tab-seq="1"]').click()
     page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
 
-    # Overview retains its independent empty selection.
+    # On Tab 1: "Haus" should also be unselected ("0")
     haus_row_tab1 = page.locator("#lemma-table tbody tr", has_text="Haus").first
     assert haus_row_tab1.get_attribute("data-selected") == "0"
 
@@ -2177,19 +2174,17 @@ def test_playwright_cross_tab_deselection_isolation(page, tmp_path):
     page.locator('.kw-tab-chip[data-tab-seq="3"]').click()
     page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
     katze_row_tab3 = page.locator("#lemma-table tbody tr", has_text="Katze").first
-    assert katze_row_tab3.get_attribute("data-selected") == "0"
-
-    # Toggle Katze independently on the child, ending deselected.
-    katze_row_tab3.click()
     assert katze_row_tab3.get_attribute("data-selected") == "1"
+
+    # Deselect "Katze" on Tab 3
     katze_row_tab3.click()
     assert katze_row_tab3.get_attribute("data-selected") == "0"
 
-    # Overview retains its own selected Katze.
+    # Switch back to Tab 1: "Katze" is unselected
     page.locator('.kw-tab-chip[data-tab-seq="1"]').click()
     page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
     katze_row_tab1_back = page.locator("#lemma-table tbody tr", has_text="Katze").first
-    assert katze_row_tab1_back.get_attribute("data-selected") == "1"
+    assert katze_row_tab1_back.get_attribute("data-selected") == "0"
 
 
 def test_playwright_card_scoped_send_to_anki_export(page, tmp_path):

@@ -19,7 +19,7 @@
  */
 
 (function () {
-    /** @type {SessionState} */
+    /** @type {SessionState & {selectedLemmas: Record<string, boolean>}} */
     var state = {
         zid: '',
         session_zid: '',
@@ -81,11 +81,7 @@
     function notify(action) {
         // Legacy commands and components share this authoritative state object.
         listeners.forEach(function (listener) {
-            try {
-                listener(state, action);
-            } catch (err) {
-                console.error('[Store] Error in state listener:', err);
-            }
+            listener(state, action);
         });
     }
 
@@ -137,6 +133,14 @@
                 cfg.highlight_same_lemma = state.highlightSameLemma;
                 cfg.filter_selected_only = state.filterSelectedOnly;
                 initializedSession = sessionKey;
+                break;
+            }
+
+            case 'SET_LEMMA_SELECTION': {
+                var lemma = String(action.payload.lemma).trim().toLowerCase();
+                if (!lemma) throw new Error('Selection requires a lemma');
+                if (action.payload.selected) state.selectedLemmas[lemma] = true;
+                else delete state.selectedLemmas[lemma];
                 break;
             }
 

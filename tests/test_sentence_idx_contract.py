@@ -146,15 +146,15 @@ def test_to_one_based_sentence_map_zero_based_shift():
 
 
 def test_to_one_based_sentence_map_string():
-    main, padded = kardenwort_controller.to_one_based_sentence_map("Hallo")
+    main, padded = kardenwort_controller.to_one_based_sentence_map("Hallo", single_unit=True)
     assert main == {1: "Hallo"}
     assert padded == {}
 
 
 def test_to_one_based_sentence_map_full_text_only():
-    main, padded = kardenwort_controller.to_one_based_sentence_map({"FULL_TEXT": "X"})
-    assert main == {1: "X"}
-    assert padded == {}
+    # Corrected by the accepted integrity contract; metadata is not alignment.
+    with pytest.raises(StructuredError):
+        kardenwort_controller.to_one_based_sentence_map({"FULL_TEXT": "X"})
 
 
 @pytest.mark.parametrize("empty_input", ["", "   ", {}, {"PADDED": {}}])

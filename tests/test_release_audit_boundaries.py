@@ -436,21 +436,22 @@ def test_select_switch_update_delayed_ack_reload_with_sqlite(page, tmp_path, run
         first.fulfill(response=first.fetch())
     page.wait_for_function('window.__heldSaveCount === 2')
     assert not any(request['updating'] for request in status)
-    assert all(delta['sentence_idx'] == 1 for delta in pending[0].request.post_data_json['deltas'])
+    # Shared selection writes overview and child identities (September 28 contract).
+    assert {delta['sentence_idx'] for delta in pending[0].request.post_data_json['deltas']} == {0, 1}
     with page.expect_request('**/session/status?*'):
         second = pending.pop(0)
         second.fulfill(response=second.fetch())
     page.wait_for_function('!isDirty()')
     page.wait_for_function('window.__updateStatusServed === true')
     assert any(request['updating'] for request in status)
-    assert adapter.get_overview_selections(zid) == {1}
+    assert adapter.get_overview_selections(zid) == {0, 1}
     restored = adapter.restore_session(zid)
     source_column = restored['headers'].index('WordSource')
     selected_column = restored['headers'].index('DeskSelected')
-    assert {row[source_column]: row[selected_column] for row in restored['data_rows']} == {'Haus': '1', 'Baum': '0'}
+    assert {row[source_column]: row[selected_column] for row in restored['data_rows']} == {'Haus': '1', 'Baum': '1'}
     page.reload()
     assert page.evaluate('WorkspaceTabs.getActiveCard().sentence_idx') == 1
     assert page.locator('#lemma-table tr[data-row-id="0"]').get_attribute('data-selected') == '1', page.evaluate("WorkspaceTabs.getCards().map(c=>({idx:c.sentence_idx,ids:c.selected_ids,words:c.words.map(w=>({id:w.row_id,selected:w.selected}))}))")
     page.locator('.kw-tab-chip[data-tab-seq="1"]').click()
     assert page.locator('#lemma-table tr[data-row-id="1"]').get_attribute('data-selected') == '1'
-    assert page.locator('#lemma-table tr[data-row-id="0"]').get_attribute('data-selected') == '0'
+    assert page.locator('#lemma-table tr[data-row-id="0"]').get_attribute('data-selected') == '1'

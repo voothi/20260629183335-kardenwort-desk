@@ -58,6 +58,9 @@ SentenceSourceIndex = sentence_index
     config.add_section("storage")
     config.set("storage", "backend", "sqlite")
     config.set("storage", "sqlite_db_path", str(db_path))
+    # Explicit native compatibility sink; SQLite browser sessions are diskless.
+    config.add_section("server")
+    config.set("server", "update_delivery", "desktop_file")
 
     config.add_section("pipeline")
     config.set("pipeline", "text_base_provider", "google")

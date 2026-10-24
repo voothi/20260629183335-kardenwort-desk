@@ -774,11 +774,11 @@ def test_retext_session_backend_normalized_sentences_contract(tmp_path):
         assert "PADDED" not in res["sentences"]
         assert 0 not in res["sentences"]
 
-    # 2. String translation must normalize to 1-indexed dict {1: text}
+    # Accepted alignment contract: a scalar cannot identify two stored units.
     with patch("kardenwort_controller.translate_source_text", return_value="Единый перевод строки."):
-        res_str = arbiter.retext_session(session_zid=session_zid, language="de", text_mode="single")
-        assert res_str["status"] == "success"
-        assert res_str["sentences"] == {1: "Единый перевод строки."}
+        with pytest.raises(kardenwort_desk.StructuredError):
+            arbiter.retext_session(session_zid=session_zid, language="de", text_mode="single")
+
 
 
 def test_persist_retext_updates_isolated_command_execution(tmp_path):

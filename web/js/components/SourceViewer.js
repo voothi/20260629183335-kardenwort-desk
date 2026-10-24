@@ -1,4 +1,5 @@
 // @ts-check
+/// <reference path="../host.d.ts" />
 
 /**
  * @file SourceViewer.js
@@ -21,13 +22,7 @@
         if (w && typeof w.escapeHtml === 'function') {
             return w.escapeHtml(str);
         }
-        if (!str) return '';
-        return String(str)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
+        throw new Error('Required canonical escapeHtml helper is unavailable');
     }
 
     /**
@@ -48,13 +43,19 @@
         container: null,
         /** @type {boolean} */
         _mounted: false,
+        /** @type {(() => void)|null} */
+        _unsubscribe: null,
+        /** @type {EventListener|null} */
+        _contextHandler: null,
 
         /**
          * Mount component to DOM container
          * @param {HTMLElement|string} target
          */
         mount: function (target) {
-            if (this._mounted) return;
+            var next = typeof target === 'string' ? document.querySelector(target) : target;
+            if (this._mounted && this.container === next) return;
+            this.dispose();
             if (typeof target === 'string') {
                 this.container = /** @type {HTMLElement|null} */ (document.querySelector(target));
             } else {
@@ -63,7 +64,41 @@
             if (this.container) {
                 this._mounted = true;
                 this.bindEvents();
+                var self = this;
+                this._unsubscribe = window.AppStore.subscribe(function (state, action) {
+                    if (action && action.type === 'UPDATE_DELTAS') self.project(state, action);
+                });
             }
+        },
+
+        /**
+         * @param {SessionState} state
+         * @param {{payload?: import('../types.js').UpdatePayload}|null} action
+         */
+        project: function (state, action) {
+            var text = state.sourceText;
+            if (text === null || text === undefined || !this.container) return;
+            var pending = this.container.querySelector('[data-pending="true"]');
+            var payload = action && action.payload;
+            if (payload && payload.data) payload = payload.data;
+            if (!pending && !(payload && (payload.source_text || payload.sourceText))) return;
+            var probe = document.createElement('div');
+            probe.innerHTML = text;
+            var clean = /** @param {Node} node */ function (node) { return (node.textContent || '').trim().replace(/\s+/g, ' '); };
+            if (!pending && clean(this.container) === clean(probe)) return;
+            this.container.innerHTML = text;
+            window.tokenizeSource();
+            window.rebindTokenSpans();
+            window.buildLcIndex();
+            window.updateBidirectionalHighlights();
+        },
+
+        dispose: function () {
+            if (this._unsubscribe) this._unsubscribe();
+            this._unsubscribe = null;
+            if (this.container && this._contextHandler) this.container.removeEventListener('contextmenu', this._contextHandler);
+            this._contextHandler = null;
+            this._mounted = false;
         },
 
         /**
@@ -113,7 +148,7 @@
             if (!this.container) return;
             var self = this;
 
-            this.container.addEventListener('contextmenu', function (e) {
+            this._contextHandler = /** @param {Event} e */ function (e) {
                 var target = /** @type {HTMLElement|null} */ (e.target);
                 var span = target && target.closest ? target.closest('#source-container span.word') : null;
                 if (span) {
@@ -132,7 +167,8 @@
                         }
                     }
                 }
-            });
+            };
+            this.container.addEventListener('contextmenu', this._contextHandler);
         }
     };
 
