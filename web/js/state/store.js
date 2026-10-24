@@ -48,6 +48,7 @@
 
     /** @type {Set<StateListener>} */
     var listeners = new Set();
+    /** @type {string|null} */
     var initializedSession = null;
 
     /**
@@ -219,17 +220,25 @@
         }
 
         if (Array.isArray(data.sentence_cards)) {
-            if (!state.sentence_cards.length) state.sentence_cards = data.sentence_cards;
-            else data.sentence_cards.forEach(function(incoming) {
-                var card = state.sentence_cards.find(function(current) { return current.sentence_idx === incoming.sentence_idx; });
-                if (!card) return;
-                ['translated_text', 'translatedText', 'sentence_translation', 'text_provenance'].forEach(function(key) {
-                    if (incoming[key] !== undefined) card[key] = incoming[key];
+            /** @type {Array<any>} */
+            var currentCards = state.sentence_cards || [];
+            if (!currentCards.length) {
+                state.sentence_cards = data.sentence_cards;
+            } else {
+                data.sentence_cards.forEach(/** @param {any} incoming */ function(incoming) {
+                    if (!incoming) return;
+                    var card = currentCards.find(function(current) { return current && current.sentence_idx === incoming.sentence_idx; });
+                    if (!card) return;
+                    ['translated_text', 'translatedText', 'sentence_translation', 'text_provenance'].forEach(function(key) {
+                        if (incoming[key] !== undefined) card[key] = incoming[key];
+                    });
                 });
-            });
+            }
         }
 
-        if (typeof state.applyDeltas === 'function') state.applyDeltas(data);
+        if (typeof state.applyDeltas === 'function') {
+            state.applyDeltas(data);
+        }
         notify({ type: 'UPDATE_DELTAS', payload: payload });
     }
 

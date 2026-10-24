@@ -121,6 +121,7 @@
  * @property {Array<Token>} [activeTokenSelections] - Active word selections
  * @property {number|null} [activeSentenceIdx] - Active sentence index
  * @property {number|null} [activeTabSeq] - Active workspace tab sequence number
+ * @property {function(any): void} [applyDeltas] - Legacy delta merger attached by app.js
  */
 
 if (typeof module !== 'undefined' && module.exports) {
