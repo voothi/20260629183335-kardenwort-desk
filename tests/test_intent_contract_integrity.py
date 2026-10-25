@@ -334,6 +334,11 @@ def test_native_polling_retains_pending_events_and_disposes(running_controller):
     from urllib.request import Request, urlopen
     url, server, adapter = running_controller
     zid='20261024225159'
+    # Membership reads require an authoritative session; queue assertions below
+    # retain their original pending-event/disposal contract.
+    adapter.save_session(session_zid=zid, source_language='de',
+                         headers=['TokenOrder', 'WordSource', 'SentenceSourceIndex'],
+                         data_rows=[['0', 'Haus', '1']])
     def poll(**extra):
         body=dict(session_zid=zid,client_id='headless-native',**extra)
         request=Request(url+'/internal/selection',data=json.dumps(body).encode(),

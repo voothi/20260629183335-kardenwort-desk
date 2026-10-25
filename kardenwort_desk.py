@@ -8,6 +8,7 @@ import configparser
 import csv
 import os
 import re
+import sqlite3
 import subprocess
 import tempfile
 import atexit
@@ -3139,12 +3140,43 @@ def get_deepl_key(config, base_dir):
 # ---------------------------------------------------------------------------
 # Storage Backend Router & Adapters (TSV / SQLite)
 # ---------------------------------------------------------------------------
+def normalize_selection_lemma(lemma):
+    if not isinstance(lemma, str) or not lemma.strip():
+        raise ValueError('Selection membership requires a nonempty lemma')
+    return lemma.strip().lower()
+
+
+def selection_is_selected(value):
+    return str(value).strip().lower() in ('1', 'true')
+
+
+def project_shared_selection(records):
+    """Project selected lemma membership without changing occurrence records."""
+    membership = {}
+    for lemma, selected in records:
+        lemma = normalize_selection_lemma(lemma)
+        membership[lemma] = membership.get(lemma, False) or selection_is_selected(selected)
+    return membership
+
+
 class StorageAdapter:
     """
     Abstract base class for Kardenwort storage backends (TSV flat-files, SQLite database).
     Encapsulates session persistence, caching, row loading/saving, and concurrency synchronization.
     """
     backend_name: str = "base"
+
+    def get_shared_selection(self, session_zid: str, zid: Optional[str] = None) -> Dict[str, bool]:
+        if not isinstance(session_zid, str) or not re.fullmatch(r'[0-9]{14}', session_zid) or session_zid == '00000000000000':
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Selection query requires a valid session ZID')
+        try:
+            return self._read_shared_selection(session_zid, zid=zid)
+        except (OSError, ValueError, IndexError, sqlite3.Error, csv.Error) as error:
+            raise StructuredError(ErrorCode.QUERY_FAILED, 'Unable to read session selection membership',
+                                  {'backend': self.backend_name, 'session_zid': session_zid}) from error
+
+    def _read_shared_selection(self, session_zid, zid=None):
+        raise NotImplementedError
 
     def save_session(
         self,
@@ -3301,6 +3333,19 @@ class TsvStorageAdapter(StorageAdapter):
     def __init__(self, config=None, resolved_paths=None):
         self.config = config
         self.resolved_paths = resolved_paths or {}
+
+    def _read_shared_selection(self, session_zid, zid=None):
+        results_dir = resolve_results_dir(self.resolved_paths, self.config)
+        session = self.restore_session(session_zid, results_dir=results_dir)
+        headers = session['headers']
+        lemma_column, selected_column = self._selection_columns(headers)
+        return project_shared_selection((row[lemma_column], row[selected_column]) for row in session['data_rows'])
+
+    def _selection_columns(self, headers):
+        mapping_path = self.resolved_paths.get('anki_mapping_file')
+        mapping = load_anki_mapping(mapping_path) if mapping_path else None
+        roles = get_role_fields(mapping, headers)
+        return headers.index(roles.get('lemma')), headers.index(roles.get('selected', 'DeskSelected'))
 
     def save_session(
         self,
@@ -3520,7 +3565,7 @@ class SqliteStorageAdapter(StorageAdapter):
     """
     backend_name: str = "sqlite"
 
-    def __init__(self, config=None, resolved_paths=None, db_path=None):
+    def __init__(self, config=None, resolved_paths=None, db_path=None, read_only=False):
         self.config = config
         self.resolved_paths = resolved_paths or {}
         from kardenwort_db import KardenwortDB
@@ -3528,10 +3573,21 @@ class SqliteStorageAdapter(StorageAdapter):
             db_path=db_path or self.resolved_paths.get("sqlite_db_path") or self.resolved_paths.get("db_path"),
             config=config,
             resolved_paths=self.resolved_paths,
+            read_only=read_only,
         )
-        self.db.run_migrations()
-        self._init_db()
+        if not read_only:
+            self.db.run_migrations()
+            self._init_db()
         self._tsv_fallback = TsvStorageAdapter(config=config, resolved_paths=resolved_paths)
+
+    def _read_shared_selection(self, session_zid, zid=None):
+        with self.db.get_connection(read_only=True, zid=zid) as conn:
+            conn.execute('BEGIN')
+            session = conn.execute('SELECT 1 FROM sessions WHERE zid = ? AND deleted_at IS NULL', (session_zid,)).fetchone()
+            if session is None:
+                raise StructuredError(ErrorCode.NOT_FOUND, 'Session selection membership is unavailable')
+            words = conn.execute('SELECT lemma, selected FROM words WHERE session_zid = ?', (session_zid,)).fetchall()
+            return project_shared_selection(words)
 
     def _init_db(self) -> None:
         """
@@ -4513,15 +4569,15 @@ class SqliteStorageAdapter(StorageAdapter):
         zid: Optional[str] = None,
     ) -> bool:
         """Apply normalized-lemma membership to this reading session atomically."""
-        selected_value = int(str(selected).strip().lower() in ('1', 'true'))
+        selected_value = int(selection_is_selected(selected))
         with self.db.get_connection(zid=zid) as conn:
             words = conn.execute("SELECT sentence_index, token_order, lemma FROM words WHERE session_zid = ? ORDER BY sentence_index, token_order",
                                  (session_zid,)).fetchall()
             target = self._selection_target(words, sentence_idx, token_order)
             if target is None:
                 return False
-            lemma = target['lemma'].strip().lower()
-            matching = [word for word in words if word['lemma'].strip().lower() == lemma]
+            lemma = normalize_selection_lemma(target['lemma'])
+            matching = [word for word in words if normalize_selection_lemma(word['lemma']) == lemma]
             conn.executemany("UPDATE words SET selected = ? WHERE session_zid = ? AND sentence_index = ? AND token_order = ?",
                              [(selected_value, session_zid, word['sentence_index'], word['token_order']) for word in matching])
             conn.executemany("INSERT INTO overview_selections(session_zid, token_order, selected) VALUES (?, ?, ?) "
@@ -6151,6 +6207,9 @@ class StorageRouter:
     def get_overview_selections(self, *args, **kwargs):
         return self.adapter.get_overview_selections(*args, **kwargs)
 
+    def get_shared_selection(self, *args, **kwargs):
+        return self.adapter.get_shared_selection(*args, **kwargs)
+
     def update_sentence_translation(self, *args, **kwargs):
         return self.adapter.update_sentence_translation(*args, **kwargs)
 
@@ -6178,23 +6237,25 @@ class StorageRouter:
 _DEFAULT_TSV_ADAPTER = TsvStorageAdapter()
 
 
-def get_storage_adapter(config=None, resolved_paths=None, storage_override=None) -> StorageAdapter:
+def storage_backend_setting(config, resolved_paths):
+    if resolved_paths and "storage_backend" in resolved_paths:
+        return resolved_paths["storage_backend"]
+    if config and hasattr(config, "get"):
+        return config.get(SEC_STORAGE, "backend", fallback="tsv").strip().lower()
+    return "tsv"
+
+
+def get_storage_adapter(config=None, resolved_paths=None, storage_override=None, read_only=False) -> StorageAdapter:
     """
     Factory function returning the active StorageAdapter (TsvStorageAdapter or SqliteStorageAdapter)
     based on CLI override, config.ini [storage] section, or defaults.
     """
-    backend = storage_override
-    if not backend:
-        if resolved_paths and "storage_backend" in resolved_paths:
-            backend = resolved_paths["storage_backend"]
-        elif config and hasattr(config, "get"):
-            backend = config.get(SEC_STORAGE, "backend", fallback="tsv").strip().lower()
-        else:
-            backend = "tsv"
-
+    backend = storage_override or storage_backend_setting(config, resolved_paths)
     backend = (backend or "tsv").strip().lower()
+    if read_only and backend not in ('sqlite', 'tsv'):
+        raise StructuredError(ErrorCode.CONFIGURATION_ERROR, 'Unsupported selection storage backend')
     if backend == "sqlite":
-        return SqliteStorageAdapter(config=config, resolved_paths=resolved_paths)
+        return SqliteStorageAdapter(config=config, resolved_paths=resolved_paths, read_only=read_only)
     return TsvStorageAdapter(config=config, resolved_paths=resolved_paths)
 
 

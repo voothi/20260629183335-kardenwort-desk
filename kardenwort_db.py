@@ -234,10 +234,12 @@ class KardenwortDB:
         resolved_paths: Optional[Dict[str, Any]] = None,
         busy_timeout_ms: int = 5000,
         migrations_dir: Optional[Union[str, Path]] = None,
+        read_only: bool = False,
     ):
         self.config = config
         self.resolved_paths = resolved_paths
         self.busy_timeout_ms = busy_timeout_ms
+        self.read_only = read_only
 
         # Resolve workspace / data root
         workspace_dir = Path(__file__).resolve().parent
@@ -258,7 +260,8 @@ class KardenwortDB:
             self.db_path = (workspace_dir / "data" / "kardenwort.db").resolve()
 
         # Ensure parent data directory exists
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if not read_only:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Resolve migrations directory
         if migrations_dir:
@@ -292,8 +295,11 @@ class KardenwortDB:
                 fallback=config.getfloat("settings", "trace_log_max_mb", fallback=5.0),
             )
 
-        _GLOBAL_DB_LOGGER.set_log_path(results_dir / "db.log", max_mb=max_mb)
-        self.logger = _GLOBAL_DB_LOGGER
+        # Query-only handles must not create diagnostic directories or change
+        # the logger shared by writable application handles.
+        self.logger = DBLogger() if read_only else _GLOBAL_DB_LOGGER
+        if not read_only:
+            self.logger.set_log_path(results_dir / "db.log", max_mb=max_mb)
         self._wal_initialized: bool = False
 
     @property
@@ -312,9 +318,16 @@ class KardenwortDB:
         busy timeout, and foreign keys enabled. Can be used directly or as a context manager.
         """
         start_t = time.perf_counter()
+        if self.read_only and not read_only:
+            raise ValueError('Read-only database does not permit write connections')
+        connect_mode = 'rw' if read_only else 'rwc'
         try:
             conn = sqlite3.connect(
-                str(self.db_path),
+                # Require an existing database. SQLite needs its ordinary WAL
+                # housekeeping access to remove empty sidecars on close; SQL
+                # writes remain prohibited by query_only below.
+                self.db_path.as_uri() + '?mode=' + connect_mode,
+                uri=True,
                 timeout=self.busy_timeout_ms / 1000.0,
                 check_same_thread=False,
                 factory=KardenwortConnection,

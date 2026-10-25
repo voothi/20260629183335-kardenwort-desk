@@ -4619,6 +4619,7 @@
 
         var LEGACY_OVERVIEW_CUTOFF_ZID = '20261002000000';
         function isLegacyOverviewContext() {
+            if (!window.WorkspaceTabs || typeof window.WorkspaceTabs.getActiveCard !== 'function') return false;
             var activeCard = window.WorkspaceTabs.getActiveCard();
             var isOverviewTab = !!(activeCard && activeCard.index === 0);
             var cardZid = '';

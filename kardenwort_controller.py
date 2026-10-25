@@ -3337,12 +3337,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, 'Selection query requires POST')
             body = self._read_json_body()
             self._authenticate_token(body)
+            if not isinstance(body, dict):
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Selection query requires an object')
             session_zid = body.get('session_zid')
             if not session_zid:
                 raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Selection query requires a session')
-            adapter = getattr(self.server.arbiter, 'storage_adapter', None) or get_storage_adapter(self.server.config, self.server.resolved_paths)
-            words = adapter.db.get_words_by_session(session_zid)
-            membership = {word['lemma'].strip().lower(): bool(word['selected']) for word in words}
+            adapter = getattr(self.server.arbiter, 'storage_adapter', None) or get_storage_adapter(
+                self.server.config, self.server.resolved_paths, read_only=True)
+            membership = adapter.get_shared_selection(session_zid)
             events = []
             client_id = body.get('client_id')
             if client_id:
