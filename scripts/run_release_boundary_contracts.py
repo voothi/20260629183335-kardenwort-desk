@@ -91,7 +91,22 @@ def guard_external_databases(checkout):
     guard = '''import json, sys, traceback, urllib.parse
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent
+def forbid_compiler_tooling(event, args):
+    if event not in ('open', 'os.listdir', 'os.scandir', 'subprocess.Popen'):
+        return
+    value = str(args[:2]).lower().replace(chr(92), '/')
+    retired = ('20261024225159-typescript-cache', '20261024225159-type-baseline',
+               '20261024225159-type-analysis.py', '20261025010043-close-types.cjs',
+               'node_modules/typescript', '/tsc.js', '/tsserver.js')
+    executable = Path(str(args[0] or args[1]).split()[0].strip(chr(34))).stem.lower() if event == 'subprocess.Popen' else ''
+    if not any(name in value for name in retired) and executable not in ('tsc', 'tsserver', 'npx', 'npm'):
+        return
+    with (ROOT / 'tooling-guard.jsonl').open('a', encoding='utf8') as stream:
+        stream.write(json.dumps(dict(event=event, target=value)) + '\\n')
+    raise RuntimeError('Isolated verification attempted to use retired compiler tooling')
+
 def guard(event, args):
+    forbid_compiler_tooling(event, args)
     if event != 'sqlite3.connect':
         return
     path = str(args[0])
@@ -192,6 +207,8 @@ def main():
         metadata['native_host_sha256'] = digest(Path(env['KARDENWORT_NATIVE_REPO']) / 'kardenwort-window/kardenwort-window.ahk')
         guard_log = checkout / 'database-guard.jsonl'
         metadata['external_database_attempts'] = [json.loads(line) for line in guard_log.read_text(encoding='utf8').splitlines()] if guard_log.exists() else []
+        tooling_log = checkout / 'tooling-guard.jsonl'
+        metadata['compiler_tooling_attempts'] = [json.loads(line) for line in tooling_log.read_text(encoding='utf8').splitlines()] if tooling_log.exists() else []
     metadata['temporary_checkout_removed'] = not checkout.exists()
     (evidence / (evidence_name + '-execution.json')).write_text(json.dumps(metadata, indent=2), encoding='utf-8')
     print((evidence / (evidence_name + '.log')).read_text(encoding='utf-8').splitlines()[-1])
@@ -200,6 +217,7 @@ def main():
     assert metadata['original_legacy_test_sha256'] == metadata['copied_legacy_test_sha256']
     assert metadata['temporary_checkout_removed']
     assert not metadata['external_database_attempts'], 'Configuration escaped the isolated database boundary'
+    assert not metadata['compiler_tooling_attempts'], 'Verification depends on retired compiler tooling'
     raise SystemExit(result.returncode)
 
 
