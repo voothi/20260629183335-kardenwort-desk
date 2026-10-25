@@ -16,6 +16,10 @@
         return container.getAttribute('data-sentence-idx') || '0';
     }
 
+    function translationIsPending(container) {
+        return container.querySelector('[data-pending="true"]') || container.querySelector('.skeleton-loader') || container.classList.contains('skeleton-loader');
+    }
+
     /**
      * TranslationView component projection
      */
@@ -64,7 +68,7 @@
             if (!container) return false;
             var probe = document.createElement('div');
             probe.innerHTML = html;
-            var pending = container.querySelector('[data-pending="true"], .skeleton-loader') || container.classList.contains('skeleton-loader');
+            var pending = translationIsPending(container);
             if (!pending && this._projectionContext === context && this._projectionHtml === html && container.textContent === probe.textContent) return false;
             container.classList.remove('skeleton-loader');
             container.removeAttribute('data-pending');
@@ -81,7 +85,7 @@
          */
         render: function (state) {
             if (!this.container) return;
-            if (this.container.querySelector('[data-pending="true"], .skeleton-loader') || this.container.classList.contains('skeleton-loader')) return;
+            if (translationIsPending(this.container)) return;
             var text = state.translated_text || state.sentence_translation || '';
             if (!text) return;
             var changed = this.project(compatibilityTranslationHtml(text), translationContext(this.container));

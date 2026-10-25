@@ -1,12 +1,13 @@
 """Run unchanged legacy contracts in a disposable, isolated filesystem checkout."""
 import argparse
 import configparser
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -58,7 +59,7 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def copy_checkout(target):
+def copy_checkout(target, full_suite=False):
     names = subprocess.run(['git', 'ls-files'], cwd=ROOT, text=True, capture_output=True, check=True).stdout.splitlines()
     names.append('tests/test_release_boundary_contracts.py')
     names.append('tests/test_release_membership_reads.py')
@@ -84,6 +85,15 @@ def copy_checkout(target):
     config.set('server', 'enabled', 'false')
     config.set('server', 'port', '0')
     config.set('server', 'controller_port', '0')
+    if full_suite:
+        config.set('server', 'enabled', 'true')
+        # Legacy integration cases require the user's historical session and
+        # native icon assets. Copy fixtures; never run them against live data.
+        (target / 'data').mkdir(exist_ok=True)
+        with closing(sqlite3.connect((ROOT / 'data/kardenwort.db').as_uri() + '?mode=ro', uri=True)) as source:
+            with closing(sqlite3.connect(target / 'data/kardenwort.db')) as destination:
+                source.backup(destination)
+        shutil.copytree(ROOT.parent / '20240411110510-autohotkey/assets/numbers', target / 'assets/numbers')
     with (target / 'config.ini').open('w', encoding='utf-8') as stream:
         config.write(stream)
     (target / 'results').mkdir(exist_ok=True)
@@ -184,7 +194,7 @@ def main():
     assert not scratch.is_junction() and not scratch.is_symlink()
     with temporary_checkout(scratch) as checkout:
         assert checkout.resolve().parent == scratch.resolve()
-        copy_checkout(checkout)
+        copy_checkout(checkout, full_suite=args.suite == 'all')
         guard_external_databases(checkout)
         configure_fixture_browser(checkout)
         selected = {'contracts': CONTRACTS, 'controls': CONTROLS, 'membership': MEMBERSHIP, 'storage': STORAGE, 'convergence': CONVERGENCE, 'watchdog': WATCHDOG, 'ownership': OWNERSHIP, 'update': UPDATE_RECOVERY, 'all': ['tests']}[args.suite]
@@ -195,6 +205,13 @@ def main():
             command.extend(['-k', args.filter])
         env = dict(os.environ, SSLKEYLOGFILE='', KARDENWORT_NATIVE_REPO='U:/voothi/20240411110510-autohotkey',
                    PYTHONPATH=str(checkout))
+        fixture_temp = checkout / 'system-temp'
+        fixture_temp.mkdir()
+        env.update(TEMP=str(fixture_temp), TMP=str(fixture_temp), TMPDIR=str(fixture_temp))
+        if args.suite == 'all':
+            translator = Path(os.environ.get('KARDENWORT_TRANSLATOR_REPO', str(ROOT.parent / '20241122093311-deep-translator')))
+            assert (translator / 'translate_server.py').is_file(), 'Full suite requires the existing translation-service checkout'
+            env['PYTHONPATH'] = os.pathsep.join((str(checkout), str(translator), str(ROOT.parent / '20260209094544-deep-translator')))
         with (evidence / (evidence_name + '.log')).open('w', encoding='utf-8') as log:
             result = subprocess.run(command, cwd=checkout, env=env, stdout=log, stderr=subprocess.STDOUT)
         metadata = dict(command=command, exit_code=result.returncode, isolated_checkout=str(checkout),
@@ -208,6 +225,8 @@ def main():
              'kardenwort_desk.py', 'kardenwort_controller.py', 'kardenwort_events.py', 'scripts/run_release_boundary_contracts.py', 'tests/test_release_save_convergence.py',
              'tests/test_release_component_ownership.py', 'tests/test_release_update_recovery.py')}
         metadata['native_host_sha256'] = digest(Path(env['KARDENWORT_NATIVE_REPO']) / 'kardenwort-window/kardenwort-window.ahk')
+        if args.suite == 'all':
+            metadata['translation_service'] = dict(path=str(translator), sha256=digest(translator / 'translate_server.py'))
         guard_log = checkout / 'database-guard.jsonl'
         metadata['external_database_attempts'] = [json.loads(line) for line in guard_log.read_text(encoding='utf8').splitlines()] if guard_log.exists() else []
         tooling_log = checkout / 'tooling-guard.jsonl'
