@@ -8533,6 +8533,9 @@
             if (typeof window.API_TOKEN !== 'undefined' && window.API_TOKEN) {
                 return window.API_TOKEN;
             }
+            if (window.AppState && window.AppState.bootstrap && window.AppState.bootstrap.session_data && window.AppState.bootstrap.session_data.api_token) {
+                return window.AppState.bootstrap.session_data.api_token;
+            }
             try {
                 var params = new URLSearchParams(window.location.search);
                 var tok = params.get('token') || params.get('api_token') || "";
@@ -8763,10 +8766,12 @@
                     return JSON.parse(window.ahkCall('get_shared_selection', body));
                 });
             } else {
+                var baseUrl = (context.serverUrl || (typeof SERVER_URL !== 'undefined' ? SERVER_URL : '') || (window.location && window.location.origin) || '').replace(/\/+$/, '');
+                var endpoint = (baseUrl ? baseUrl : '') + '/internal/selection';
                 var headers = {'Content-Type': 'application/json'};
                 var token = getApiToken();
                 if (token) headers['X-API-Token'] = token;
-                request = fetch('/internal/selection', {method: 'POST', headers: headers, body: body}).then(function(res) {
+                request = fetch(endpoint, {method: 'POST', headers: headers, body: body}).then(function(res) {
                     if (!res.ok) throw new Error('Selection reconciliation failed with status ' + res.status);
                     return res.json();
                 });
@@ -8779,6 +8784,138 @@
                 throw err;
             });
         }
+
+        function updateSyncFeedback(status, message) {
+            var header = document.getElementById('session-header');
+            var indicator = document.getElementById('sse-status-indicator');
+            if (!indicator) {
+                indicator = document.createElement('span');
+                indicator.id = 'sse-status-indicator';
+                indicator.className = 'kw-sse-status';
+                if (!header) indicator.style.display = 'none';
+                (header || document.body).appendChild(indicator);
+            }
+            if (status) {
+                indicator.setAttribute('data-sync', status);
+            } else {
+                indicator.removeAttribute('data-sync');
+            }
+            if (message) {
+                indicator.setAttribute('data-sync-message', message);
+                indicator.title = message;
+            } else {
+                indicator.removeAttribute('data-sync-message');
+            }
+        }
+
+        /**
+         * Reconcile membership from authoritative backend on persistent stream attachment or reconnect.
+         * Guards against inactive session, unmounted instance, stale connection generation, or racing updates.
+         * @param {{session?: string, connectionId?: number, serverUrl?: string}} [context]
+         * @param {number} [attempt]
+         * @returns {Promise<void>}
+         */
+        function reconcileStreamMembership(context, attempt) {
+            context = context || {};
+            attempt = attempt || 1;
+            var session = context.session || getSessionZid();
+            if (!session) return Promise.resolve();
+
+            // 1. Session and mount guards
+            if (window.__deskInstanceId !== myDeskInstanceId || getSessionZid() !== session) {
+                return Promise.resolve();
+            }
+
+            // 2. Connection generation guard: if initiated for a specific connection, verify it's still current
+            var currentConnId = (window.SSEBridge && typeof window.SSEBridge.getActiveConnectionId === 'function')
+                ? window.SSEBridge.getActiveConnectionId()
+                : 0;
+            if (context.connectionId && currentConnId && context.connectionId !== currentConnId) {
+                return Promise.resolve();
+            }
+
+            // 3. Save barrier: if a save is currently in flight, chain after it completes
+            if (saveState && saveState.promise) {
+                return saveState.promise.then(
+                    function() { return reconcileStreamMembership(context, attempt); },
+                    function() { return reconcileStreamMembership(context, attempt); }
+                );
+            }
+
+            var startRevision = membershipRevision;
+            updateSyncFeedback('syncing', 'Synchronizing membership...');
+
+            var body = JSON.stringify({session_zid: session, accept_updates: false});
+            var request;
+            if (window.ahkCall && (document.documentMode || typeof fetch === 'undefined')) {
+                request = Promise.resolve().then(function() {
+                    return JSON.parse(window.ahkCall('get_shared_selection', body));
+                });
+            } else {
+                var baseUrl = (context.serverUrl || (typeof SERVER_URL !== 'undefined' ? SERVER_URL : '') || (window.location && window.location.origin) || '').replace(/\/+$/, '');
+                var endpoint = (baseUrl ? baseUrl : '') + '/internal/selection';
+                var headers = {'Content-Type': 'application/json'};
+                var token = getApiToken();
+                if (token) headers['X-API-Token'] = token;
+                request = fetch(endpoint, {method: 'POST', headers: headers, body: body}).then(function(res) {
+                    if (!res.ok) throw new Error('Selection reconciliation failed with status ' + res.status);
+                    return res.json();
+                });
+            }
+
+            return request.then(function(response) {
+                // Re-verify session and mount guards
+                if (window.__deskInstanceId !== myDeskInstanceId || getSessionZid() !== session) {
+                    return;
+                }
+                var nowConnId = (window.SSEBridge && typeof window.SSEBridge.getActiveConnectionId === 'function')
+                    ? window.SSEBridge.getActiveConnectionId()
+                    : 0;
+                if (context.connectionId && nowConnId && context.connectionId !== nowConnId) {
+                    return;
+                }
+
+                // If membershipRevision changed while this query was in flight (e.g. newer live event arrived),
+                // an older read must not overwrite the newer state. Bounded retry up to 3 attempts.
+                if (membershipRevision !== startRevision) {
+                    if (attempt < 3) {
+                        return reconcileStreamMembership(context, attempt + 1);
+                    }
+                    updateSyncFeedback('synced', 'Membership synchronized');
+                    return;
+                }
+
+                var membership = selectionReadResult(response);
+                window.applySharedSelection(membership);
+                updateSyncFeedback('synced', 'Membership synchronized');
+            }).catch(function(err) {
+                // If context is no longer active, discard error silently
+                if (window.__deskInstanceId !== myDeskInstanceId || getSessionZid() !== session) {
+                    return;
+                }
+                var nowConnId = (window.SSEBridge && typeof window.SSEBridge.getActiveConnectionId === 'function')
+                    ? window.SSEBridge.getActiveConnectionId()
+                    : 0;
+                if (context.connectionId && nowConnId && context.connectionId !== nowConnId) {
+                    return;
+                }
+
+                if (attempt < 3) {
+                    updateSyncFeedback('syncing', 'Retrying synchronization (' + attempt + '/3)...');
+                    return new Promise(function(resolve) {
+                        setTimeout(function() {
+                            resolve(reconcileStreamMembership(context, attempt + 1));
+                        }, attempt * 500);
+                    });
+                }
+
+                updateSyncFeedback('failed', err && err.message ? err.message : 'Synchronization failed');
+                if (typeof window.showToast === 'function') {
+                    window.showToast('Membership synchronization incomplete: ' + (err && err.message ? err.message : 'network error'), 'warning');
+                }
+            });
+        }
+        window.reconcileStreamMembership = reconcileStreamMembership;
 
         /** @param {Delta[]} snapshot */
         function acknowledgeSelections(snapshot) {

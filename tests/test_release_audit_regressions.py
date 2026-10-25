@@ -297,7 +297,81 @@ def test_phase2_css_enabled_and_disabled_renderers(page):
 
 
 
-def test_f2_browser_reconnect_recovers_durable_membership(page, tmp_path, running_controller):
+@pytest.mark.parametrize("backend", ["sqlite", "tsv"])
+def test_f2_browser_reconnect_recovers_durable_membership(page, tmp_path, running_controller, backend):
+    from pathlib import Path
+    url, server, _ = running_controller
+    server.config.set("storage", "backend", backend)
+    server.resolved_paths["storage_backend"] = backend
+    server.resolved_paths["generated_results_dir"] = server.resolved_paths["results_dir"]
+    if backend == "tsv":
+        adapter = kardenwort_desk.TsvStorageAdapter(server.config, server.resolved_paths)
+    else:
+        adapter = kardenwort_desk.SqliteStorageAdapter(server.config, server.resolved_paths)
+    server.arbiter.storage_adapter = adapter
+
+    zid = "20261025211003"
+    headers = ["Quotation", "WordSource", "WordDestination", "SentenceSourceIndex", "SentenceSource", "DeskSelected", "TokenOrder"]
+    rows = [
+        ["Haus", "Haus", "house", "1", "Das Haus.", "0", "0"],
+        ["Baum", "Baum", "tree", "2", "Der Baum.", "0", "1"],
+    ]
+    path = Path(server.resolved_paths["results_dir"]) / f"{zid}-reconnect.de.tsv"
+    adapter.save_session(
+        session_zid=zid, slug="reconnect-gap", source_language="de", target_language="en",
+        text_mode="single", source_raw_text="Das Haus. Der Baum.",
+        headers=headers, data_rows=rows, working_tsv_path=path,
+    )
+    server.arbiter.sessions[zid] = {
+        "text": "Das Haus. Der Baum.", "headers": headers, "data_rows": rows, "tsv_path": str(path),
+    }
+
+    config, paths, _, _ = kardenwort_desk.load_config()
+    paths.update(storage_backend=backend, sqlite_db_path=server.resolved_paths["sqlite_db_path"],
+                 results_dir=server.resolved_paths["results_dir"])
+    config.set("storage", "backend", backend)
+    config.set("server", "api_key", "test-controller-api-key")
+
+    tsv = tmp_path / f"{zid}-audit.de.tsv"
+    tsv.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "Haus\tHaus\thouse\t1\tDas Haus.\tThe house.\t0\n"
+        "Baum\tBaum\ttree\t2\tDer Baum.\tThe tree.\t0\n",
+        encoding="utf-8",
+    )
+    html = kardenwort_desk.run_render_flow(
+        text="Das Haus. Der Baum.", language="de", zid=zid,
+        text_mode="single", config=config, resolved_paths=paths, theme="dark",
+        tsv_path=str(tsv), spawn_children=False,
+    )
+
+    page.set_extra_http_headers({"X-API-Token": "test-controller-api-key"})
+    page.route(url + "/", lambda route: route.fulfill(content_type="text/html", body=html))
+    page.goto(url + "/")
+    page.wait_for_function("typeof window.toggleRowSelection === 'function'")
+
+    # Disconnect stream
+    page.evaluate("SSEBridge.disconnect()")
+
+    # Remote mutation while stream is disconnected: Haus is selected in durable storage
+    rows[0][headers.index("DeskSelected")] = "1"
+    adapter.save_session(
+        session_zid=zid, slug="reconnect-gap", source_language="de", target_language="en",
+        text_mode="single", source_raw_text="Das Haus. Der Baum.",
+        headers=headers, data_rows=rows, working_tsv_path=path,
+    )
+
+    # Reconnect stream after connection gap
+    page.evaluate(f"() => SSEBridge.connect('{zid}', '{url}')")
+    page.wait_for_function("document.getElementById('sse-status-indicator') && document.getElementById('sse-status-indicator').dataset.status === 'connected'")
+
+    page.wait_for_function("window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas.haus === true")
+    visible = page.evaluate("({haus: !!(window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas.haus), baum: !!(window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas.baum)})")
+    assert visible == {"haus": True, "baum": False}, f"Visible selection {visible} must reflect durable state after reconnect"
+    assert page.evaluate("document.getElementById('sse-status-indicator').getAttribute('data-sync')") == "synced"
+
+
+def test_phase3_local_uncommitted_selections_preserved_during_recovery(page, tmp_path, running_controller):
     from pathlib import Path
     url, server, adapter = running_controller
     zid = "20261025211003"
@@ -340,10 +414,13 @@ def test_f2_browser_reconnect_recovers_durable_membership(page, tmp_path, runnin
     page.goto(url + "/")
     page.wait_for_function("typeof window.toggleRowSelection === 'function'")
 
-    # Disconnect stream
     page.evaluate("SSEBridge.disconnect()")
 
-    # Remote mutation while stream is disconnected: Haus is selected in durable storage
+    # 1. Local user selects Baum (row 1) while disconnected (uncommitted delta)
+    page.evaluate("toggleRowSelection(1, true)")
+    assert page.evaluate("isDirty()") is True
+
+    # 2. Remote storage changed Haus to selected
     rows[0][headers.index("DeskSelected")] = "1"
     adapter.save_session(
         session_zid=zid, slug="reconnect-gap", source_language="de", target_language="en",
@@ -351,13 +428,118 @@ def test_f2_browser_reconnect_recovers_durable_membership(page, tmp_path, runnin
         headers=headers, data_rows=rows, working_tsv_path=path,
     )
 
-    # Reconnect stream after connection gap
+    # 3. Stream reconnects
     page.evaluate(f"() => SSEBridge.connect('{zid}', '{url}')")
     page.wait_for_function("document.getElementById('sse-status-indicator') && document.getElementById('sse-status-indicator').dataset.status === 'connected'")
+    page.wait_for_function("window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas.haus === true")
 
-    page.wait_for_timeout(500)
+    # Both Haus (from remote backend) AND Baum (from uncommitted local delta) must be selected!
     visible = page.evaluate("({haus: !!(window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas.haus), baum: !!(window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas.baum)})")
-    assert visible == {"haus": True, "baum": False}, f"Visible selection {visible} must reflect durable state after reconnect"
+    assert visible == {"haus": True, "baum": True}, f"Local intent for Baum must be preserved alongside recovered Haus: {visible}"
+    assert page.evaluate("isDirty()") is True, "Local uncommitted deltas must retain dirty state"
+
+
+def test_phase3_concurrent_live_event_prevents_stale_read_overwrite(page, tmp_path, running_controller):
+    from pathlib import Path
+    url, server, adapter = running_controller
+    zid = "20261025211003"
+    headers = ["Quotation", "WordSource", "WordDestination", "SentenceSourceIndex", "SentenceSource", "DeskSelected", "TokenOrder"]
+    rows = [
+        ["Haus", "Haus", "house", "1", "Das Haus.", "0", "0"],
+        ["Baum", "Baum", "tree", "2", "Der Baum.", "0", "1"],
+    ]
+    path = Path(server.resolved_paths["results_dir"]) / f"{zid}-reconnect.de.tsv"
+    adapter.save_session(
+        session_zid=zid, slug="reconnect-gap", source_language="de", target_language="en",
+        text_mode="single", source_raw_text="Das Haus. Der Baum.",
+        headers=headers, data_rows=rows, working_tsv_path=path,
+    )
+    server.arbiter.sessions[zid] = {
+        "text": "Das Haus. Der Baum.", "headers": headers, "data_rows": rows, "tsv_path": str(path),
+    }
+
+    config, paths, _, _ = kardenwort_desk.load_config()
+    paths.update(storage_backend="sqlite", sqlite_db_path=server.resolved_paths["sqlite_db_path"],
+                 results_dir=server.resolved_paths["results_dir"])
+    config.set("storage", "backend", "sqlite")
+    config.set("server", "api_key", "test-controller-api-key")
+
+    tsv = tmp_path / f"{zid}-audit.de.tsv"
+    tsv.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "Haus\tHaus\thouse\t1\tDas Haus.\tThe house.\t0\n"
+        "Baum\tBaum\ttree\t2\tDer Baum.\tThe tree.\t0\n",
+        encoding="utf-8",
+    )
+    html = kardenwort_desk.run_render_flow(
+        text="Das Haus. Der Baum.", language="de", zid=zid,
+        text_mode="single", config=config, resolved_paths=paths, theme="dark",
+        tsv_path=str(tsv), spawn_children=False,
+    )
+
+    page.set_extra_http_headers({"X-API-Token": "test-controller-api-key"})
+    page.route(url + "/", lambda route: route.fulfill(content_type="text/html", body=html))
+    page.goto(url + "/")
+    page.wait_for_function("typeof window.toggleRowSelection === 'function'")
+
+    # Intercept /internal/selection to hold the read in flight
+    held_reads = []
+    page.route("**/internal/selection", lambda route: held_reads.append(route))
+
+    # Trigger recovery via SSEBridge connect
+    page.evaluate(f"() => SSEBridge.connect('{zid}', '{url}')")
+    import time
+    for _ in range(50):
+        if len(held_reads) >= 1:
+            break
+        page.wait_for_timeout(50)
+    assert len(held_reads) >= 1
+
+    # While read is held, a newer live event arrives updating membership
+    page.evaluate("() => window.applySharedSelection({haus: false, baum: true})")
+    assert page.evaluate("({haus: !!(AppState.selectedLemmas && AppState.selectedLemmas.haus), baum: !!(AppState.selectedLemmas && AppState.selectedLemmas.baum)})") == {"haus": False, "baum": True}
+
+    # Now fulfill the held read with older state {haus: true, baum: false}
+    # Because membershipRevision changed, the older read must NOT overwrite {baum: true}!
+    first_read = held_reads.pop(0)
+    # Allow the subsequent retry read to unroute and fetch real storage
+    page.unroute("**/internal/selection")
+    rows[1][headers.index("DeskSelected")] = "1"
+    adapter.save_session(
+        session_zid=zid, slug="reconnect-gap", source_language="de", target_language="en",
+        text_mode="single", source_raw_text="Das Haus. Der Baum.",
+        headers=headers, data_rows=rows, working_tsv_path=path,
+    )
+    first_read.fulfill(status=200, json={"ok": True, "shared_selection": {"haus": True, "baum": False}})
+
+    page.wait_for_function("document.getElementById('sse-status-indicator') && document.getElementById('sse-status-indicator').getAttribute('data-sync') === 'synced'")
+    visible = page.evaluate("({haus: !!(AppState.selectedLemmas && AppState.selectedLemmas.haus), baum: !!(AppState.selectedLemmas && AppState.selectedLemmas.baum)})")
+    # Older read was rejected by revision guard; latest state converged
+    assert visible["baum"] is True, f"Older read must not have clobbered baum: {visible}"
+
+
+def test_phase3_sync_feedback_and_failure_retry(page, tmp_path):
+    html = audit_html(tmp_path)
+    page.set_content(html.replace("<head>", "<head>" + TRANSPORT))
+
+    # Mock /internal/selection to fail
+    page.evaluate("""() => {
+        window.__syncAttempts = 0;
+        const origFetch = window.fetch;
+        window.fetch = function(url, options) {
+            if (String(url).includes('/internal/selection')) {
+                window.__syncAttempts++;
+                return Promise.resolve({ok: false, status: 503, json: async () => ({ok: false, status: 'error'})});
+            }
+            return origFetch(url, options);
+        };
+    }""")
+
+    page.evaluate("() => window.reconcileStreamMembership({session: '20261023221555', connectionId: 1})")
+    page.wait_for_function("document.getElementById('sse-status-indicator') && document.getElementById('sse-status-indicator').getAttribute('data-sync') === 'failed'", timeout=5000)
+    attempts = page.evaluate("window.__syncAttempts")
+    assert attempts >= 3, f"Expected at least 3 bounded retries, got {attempts}"
+
 
 
 

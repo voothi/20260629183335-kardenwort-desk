@@ -19,6 +19,12 @@
 
     var activeSessionZid = null;
 
+    var activeServerUrl = null;
+
+    var connectionCounter = 0;
+
+    var activeConnectionId = 0;
+
     /**
      * Updates the SSE connection status badge in #session-header
      * @param {'connected'|'reconnecting'|'disconnected'|'error'} status
@@ -45,9 +51,13 @@
             } else if (status === 'reconnecting') {
                 indicator.textContent = 'SSE: Reconnecting...';
                 indicator.title = 'Connection lost, attempting reconnection';
+                indicator.removeAttribute('data-sync');
+                indicator.removeAttribute('data-sync-message');
             } else {
                 indicator.textContent = 'SSE: Offline';
                 indicator.title = 'Disconnected from streaming server';
+                indicator.removeAttribute('data-sync');
+                indicator.removeAttribute('data-sync-message');
             }
         }
 
@@ -75,6 +85,8 @@
             try { activeEventSource.close(); } catch (e) { console.warn('[SSE] Error closing active EventSource:', e); }
             activeEventSource = null;
             activeSessionZid = null;
+            activeServerUrl = null;
+            activeConnectionId = 0;
             w.__sseActiveZid = null;
         }
 
@@ -83,21 +95,46 @@
             var sseUrl = (base ? base : '') + '/api/v1/events?session=' + encodeURIComponent(sessionZid);
             var es = new EventSource(sseUrl);
 
+            activeConnectionId = ++connectionCounter;
             activeEventSource = es;
             activeSessionZid = sessionZid;
+            activeServerUrl = serverUrl || null;
             w.__sseActiveZid = sessionZid;
+
+            var isConnectionOpen = false;
 
             updateConnectionIndicator('reconnecting');
 
-            es.onopen = function () {
+            function notifyConnectionReady() {
                 if (activeEventSource !== es) return;
                 updateConnectionIndicator('connected');
+                if (!isConnectionOpen) {
+                    isConnectionOpen = true;
+                    if (typeof w.reconcileStreamMembership === 'function') {
+                        w.reconcileStreamMembership({
+                            session: sessionZid,
+                            connectionId: activeConnectionId,
+                            serverUrl: serverUrl
+                        });
+                    }
+                }
+            }
+
+            es.onopen = function () {
+                notifyConnectionReady();
             };
 
             es.onerror = function () {
                 if (activeEventSource !== es) return;
+                isConnectionOpen = false;
                 if (es.readyState === EventSource.CONNECTING) {
+                    activeConnectionId = ++connectionCounter;
                     updateConnectionIndicator('reconnecting');
+                    var indicator = document.getElementById('sse-status-indicator');
+                    if (indicator) {
+                        indicator.removeAttribute('data-sync');
+                        indicator.removeAttribute('data-sync-message');
+                    }
                 } else {
                     updateConnectionIndicator('disconnected');
                 }
@@ -131,7 +168,7 @@
                     if (!data) return;
 
                     if (data.type === 'connected') {
-                        updateConnectionIndicator('connected');
+                        notifyConnectionReady();
                         return;
                     }
 
@@ -180,9 +217,16 @@
             try { activeEventSource.close(); } catch (e) { console.warn('[SSEBridge] Error closing active EventSource:', e); }
             activeEventSource = null;
             activeSessionZid = null;
+            activeServerUrl = null;
+            activeConnectionId = 0;
             var w = (window);
             w.__sseActiveZid = null;
             updateConnectionIndicator('disconnected');
+            var indicator = document.getElementById('sse-status-indicator');
+            if (indicator) {
+                indicator.removeAttribute('data-sync');
+                indicator.removeAttribute('data-sync-message');
+            }
         }
     }
 
@@ -190,7 +234,9 @@
         connect: connect,
         disconnect: disconnect,
         updateConnectionIndicator: updateConnectionIndicator,
-        getActiveZid: function () { return activeSessionZid; }
+        getActiveZid: function () { return activeSessionZid; },
+        getActiveConnectionId: function () { return activeConnectionId; },
+        getServerUrl: function () { return activeServerUrl; }
     };
 
     var w = (typeof window !== 'undefined' ? window : null);
