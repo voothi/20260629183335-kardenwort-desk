@@ -11,6 +11,7 @@ import pytest
 from playwright.sync_api import expect
 
 import kardenwort_desk
+from tests.test_controller_integration import running_controller  # noqa: F401
 
 
 def audit_html(tmp_path, module=kardenwort_desk, theme="dark", container=False):
@@ -155,3 +156,144 @@ def test_f5_status_with_optional_sse_overlap(audit_page, overlap):
     expect(page.get_by_role("button", name="Update", exact=True)).to_be_enabled()
     expect(page.get_by_role("button", name="show all words")).to_be_visible()
     assert page.evaluate("__reloads") == 0
+
+
+def test_f1_non_german_lookup_language_metadata(page):
+    config, paths, goldendict, _ = kardenwort_desk.load_config()
+    goldendict["server_enabled"] = True
+    goldendict["server_api_key"] = "test-controller-api-key"
+    zid = "20261025211003"
+    html = kardenwort_desk.render_lookup_html(
+        "A house.", "en", "fr", config, paths, zid, goldendict,
+        [], ["WordSource", "WordDestination"], [["house", "maison"]], "Une maison.",
+        session_zid=zid, api_token="test-controller-api-key", server_enabled=True,
+    )
+    page.set_content(html.replace("<head>", "<head>" + TRANSPORT))
+    assert page.evaluate("document.getElementById('session-lang').textContent.trim()") == "en"
+    assert page.evaluate("document.getElementById('session-target-lang').textContent.trim()") == "fr"
+    assert page.evaluate("getSessionLang()") == "en"
+    page.evaluate("void onRetextClick()")
+    retext_req = page.evaluate("__requests.find(r => r.url.includes('/session/retext'))")
+    assert retext_req is not None
+    assert retext_req["body"]["language"] == "en"
+
+
+def test_f2_browser_reconnect_recovers_durable_membership(page, tmp_path, running_controller):
+    from pathlib import Path
+    url, server, adapter = running_controller
+    zid = "20261025211003"
+    headers = ["Quotation", "WordSource", "WordDestination", "SentenceSourceIndex", "SentenceSource", "DeskSelected", "TokenOrder"]
+    rows = [
+        ["Haus", "Haus", "house", "1", "Das Haus.", "0", "0"],
+        ["Baum", "Baum", "tree", "2", "Der Baum.", "0", "1"],
+    ]
+    path = Path(server.resolved_paths["results_dir"]) / f"{zid}-reconnect.de.tsv"
+    adapter.save_session(
+        session_zid=zid, slug="reconnect-gap", source_language="de", target_language="en",
+        text_mode="single", source_raw_text="Das Haus. Der Baum.",
+        headers=headers, data_rows=rows, working_tsv_path=path,
+    )
+    server.arbiter.sessions[zid] = {
+        "text": "Das Haus. Der Baum.", "headers": headers, "data_rows": rows, "tsv_path": str(path),
+    }
+
+    config, paths, _, _ = kardenwort_desk.load_config()
+    paths.update(storage_backend="sqlite", sqlite_db_path=server.resolved_paths["sqlite_db_path"],
+                 results_dir=server.resolved_paths["results_dir"])
+    config.set("storage", "backend", "sqlite")
+    config.set("server", "api_key", "test-controller-api-key")
+
+    tsv = tmp_path / f"{zid}-audit.de.tsv"
+    tsv.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "Haus\tHaus\thouse\t1\tDas Haus.\tThe house.\t0\n"
+        "Baum\tBaum\ttree\t2\tDer Baum.\tThe tree.\t0\n",
+        encoding="utf-8",
+    )
+    html = kardenwort_desk.run_render_flow(
+        text="Das Haus. Der Baum.", language="de", zid=zid,
+        text_mode="single", config=config, resolved_paths=paths, theme="dark",
+        tsv_path=str(tsv), spawn_children=False,
+    )
+
+    page.set_extra_http_headers({"X-API-Token": "test-controller-api-key"})
+    page.route(url + "/", lambda route: route.fulfill(content_type="text/html", body=html))
+    page.goto(url + "/")
+    page.wait_for_function("typeof window.toggleRowSelection === 'function'")
+
+    # Disconnect stream
+    page.evaluate("SSEBridge.disconnect()")
+
+    # Remote mutation while stream is disconnected: Haus is selected in durable storage
+    rows[0][headers.index("DeskSelected")] = "1"
+    adapter.save_session(
+        session_zid=zid, slug="reconnect-gap", source_language="de", target_language="en",
+        text_mode="single", source_raw_text="Das Haus. Der Baum.",
+        headers=headers, data_rows=rows, working_tsv_path=path,
+    )
+
+    # Reconnect stream after connection gap
+    page.evaluate(f"() => SSEBridge.connect('{zid}', '{url}')")
+    page.wait_for_function("document.getElementById('sse-status-indicator') && document.getElementById('sse-status-indicator').dataset.status === 'connected'")
+
+    page.wait_for_timeout(500)
+    visible = page.evaluate("({haus: !!(window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas.haus), baum: !!(window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas.baum)})")
+    assert visible == {"haus": True, "baum": False}, f"Visible selection {visible} must reflect durable state after reconnect"
+
+
+
+def test_f3_css_disabled_output_suppresses_stylesheets_and_fetches(page):
+    config, paths, goldendict, _ = kardenwort_desk.load_config()
+    goldendict["disable_css"] = True
+    zid = "20261025211003"
+    html = kardenwort_desk.render_lookup_html(
+        "A house.", "en", "fr", config, paths, zid, goldendict,
+        [], ["WordSource", "WordDestination"], [["house", "maison"]], "Une maison.",
+        session_zid=zid, api_token="test-controller-api-key", server_enabled=True,
+    )
+    css_links = [line for line in html.splitlines() if "<link" in line and "stylesheet" in line]
+    assert css_links == [], f"Expected 0 stylesheet links when disable_css=True, found: {css_links}"
+
+    css_requests = []
+    page.route("**/css/**", lambda route: (css_requests.append(route.request.url), route.fulfill(status=200, body="")))
+    page.set_content(html.replace("<head>", "<head>" + TRANSPORT))
+    assert css_requests == [], f"Expected 0 CSS fetches when disable_css=True, requested: {css_requests}"
+
+
+def test_f4_translation_natural_growth_no_nested_scrolling(page, tmp_path):
+    page.set_viewport_size({"width": 1280, "height": 900})
+    html = audit_html(tmp_path)
+    page.set_content(html.replace("<head>", "<head>" + TRANSPORT))
+
+    long_sentence = "A complete multiline translated sentence that provides substantial content."
+    long_translation = "\n".join([long_sentence] * 40)
+
+    page.evaluate("receiveUpdate", {"translatedText": long_translation})
+
+    has_internal_scroll = page.locator("#translation-container").evaluate("el => el.scrollHeight > el.clientHeight")
+    assert not has_internal_scroll, "Translation container must not have internal scrollbars"
+
+    dynamic_height = page.locator("#translation-container").evaluate("el => el.getBoundingClientRect().height")
+    page.evaluate("text => { const el = document.getElementById('translation-container'); el.style.removeProperty('--kw-text-region-size'); el.textContent = text; }", long_translation)
+    fresh_height = page.locator("#translation-container").evaluate("el => el.getBoundingClientRect().height")
+    assert abs(dynamic_height - fresh_height) < 2.0, f"Dynamic height {dynamic_height} must match fresh render height {fresh_height}"
+
+
+def test_f5_alt_hand_tool_covers_all_tokens_and_native_selection(page, tmp_path):
+    html = audit_html(tmp_path)
+    page.set_content(html.replace("<head>", "<head>" + TRANSPORT))
+
+    page.evaluate("window.setSelectableTextMode(true, false)")
+
+    words = page.locator("#source-container .word, #translation-container .word")
+    count = words.count()
+    assert count > 0
+    cursors = [words.nth(i).evaluate("el => getComputedStyle(el).cursor") for i in range(count)]
+    non_text_cursors = [c for c in cursors if c != "text"]
+    assert non_text_cursors == [], f"All word tokens must have cursor: text under Alt, found: {non_text_cursors}"
+
+    metrics_alt = page.locator("#source-container .word").first.evaluate("el => { const s = getComputedStyle(el); return {pad: s.padding, mar: s.margin, border: s.border}; }")
+    page.evaluate("window.setSelectableTextMode(false, false)")
+    metrics_idle = page.locator("#source-container .word").first.evaluate("el => { const s = getComputedStyle(el); return {pad: s.padding, mar: s.margin, border: s.border}; }")
+    assert metrics_alt == metrics_idle, f"Token box geometry must remain invariant across modes: alt={metrics_alt} vs idle={metrics_idle}"
+
