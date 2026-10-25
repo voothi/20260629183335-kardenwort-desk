@@ -2271,6 +2271,7 @@
         /** @type {number|null} */ var focusedRowId = null;
         /** @type {Desk.Delta[]} */ var deltas = [];
         /** @type {Record<string,Desk.AcknowledgedValue>} */ var acknowledgedValues = {};
+        var membershipRevision = 0;
         /** @type {Desk.HistoryAction[]} */ var historyStack = [];
         var historyIndex = -1;
         /** @type {Desk.Membership} */ var touchedCells = {};
@@ -4325,54 +4326,104 @@
             });
         }
 
+        function selectionOverlay() {
+            var pending = JSON.parse(window.getDeltas());
+            if (saveState && saveState.phase === 'saving') pending = pending.concat(saveState.snapshot);
+            if (nativeSaveSnapshot) pending = pending.concat(nativeSaveSnapshot.deltas);
+            var overlay = {};
+            pending.forEach(function(delta) {
+                if (delta.column !== 'DeskSelected') return;
+                var lemma = getLemmaByRowId(delta.row_id);
+                if (lemma) overlay[lemma] = !!window.AppState.selectedLemmas[lemma];
+            });
+            return overlay;
+        }
+
         window.applySharedSelection = function(membership) {
             if (!membership) return;
-            var pending = JSON.parse(window.getDeltas()).some(/** @param {Desk.Delta} delta */ function(delta) { return delta.column === 'DeskSelected'; });
-            if (pending) return;
+            membershipRevision++;
+            var overlay = selectionOverlay();
             var state = window.AppStore.getState();
             /** @type {Desk.Membership} */ var membershipProjection = {};
-            state.selectedLemmas = membershipProjection;
             Object.keys(membership).forEach(function(lemma) {
                 if (membership[lemma]) membershipProjection[lemma] = true;
             });
-            syncSelectionsToCardsAndState();
+            Object.keys(overlay).forEach(function(lemma) {
+                if (overlay[lemma]) membershipProjection[lemma] = true;
+                else delete membershipProjection[lemma];
+            });
+            var changed = Object.keys(state.selectedLemmas).some(function(lemma) { return !membershipProjection[lemma]; }) ||
+                Object.keys(membershipProjection).some(function(lemma) { return !state.selectedLemmas[lemma]; });
+            state.selectedLemmas = membershipProjection;
             var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
             cards.forEach(function(card) {
                 (card.words || []).forEach(function(word) {
-                    word.selected = membership[String(word.lemma || '').trim().toLowerCase()] ? '1' : '0';
+                    var lemma = String(word.lemma || '').trim().toLowerCase();
+                    if (!Object.prototype.hasOwnProperty.call(overlay, lemma)) word.selected = membership[lemma] ? '1' : '0';
                 });
             });
-            tableRows.forEach(function(row) { initialHighlights[String(row.getAttribute('data-row-id'))] = !!membership[getRowLemma(row)]; });
+            tableRows.forEach(function(row) {
+                var lemma = getRowLemma(row);
+                if (!Object.prototype.hasOwnProperty.call(overlay, lemma)) initialHighlights[String(row.getAttribute('data-row-id'))] = !!membership[lemma];
+            });
+            syncSelectionsToCardsAndState();
+            if (!changed) { updateToolbarState(); return; }
             updateRowStyles();
             updateBidirectionalHighlights();
             updateToolbarState();
         };
 
         if (window.stopSelectionBridge) window.stopSelectionBridge();
-        /** @type {number|null} */ var selectionBridgeTimer = null;
-        window.stopSelectionBridge = function() {
-            if (selectionBridgeTimer !== null) clearInterval(selectionBridgeTimer);
-            selectionBridgeTimer = null;
+        var selectionBridge = {phase: 'stopped', timer: null};
+        function stopSelectionBridge() {
+            if (selectionBridge.phase === 'stopped') return true;
+            var subscription = selectionBridge;
+            selectionBridge = {phase: 'stopped', timer: null};
+            clearInterval(subscription.timer);
+            var body = JSON.stringify({session_zid: subscription.session, client_id: subscription.consumer, close: true});
+            try {
+                selectionReadResult(JSON.parse(window.ahkCall('get_shared_selection', body)));
+                return true;
+            } catch (err) {
+                console.error('[Selection] Native subscription disposal failed', err);
+                return false;
+            }
+        }
+        function pollSelectionBridge(subscription) {
+            if (selectionBridge !== subscription) return;
+            if (!isCurrentSaveSession(subscription)) {
+                stopSelectionBridge();
+                return;
+            }
+            try {
+                var response = JSON.parse(window.ahkCall('get_shared_selection', JSON.stringify({session_zid: subscription.session,
+                    client_id: subscription.consumer, accept_updates: !window.isDirty()})));
+                if (selectionBridge !== subscription) return;
+                var membership = selectionReadResult(response);
+                response = response.data || response;
+                (response.events || []).forEach(function(event) { window.receiveUpdate(event); });
+                window.applySharedSelection(membership);
+            } catch (err) {
+                console.error('[Selection] Native synchronization failed', err);
+            }
+        }
+        window.stopSelectionBridge = stopSelectionBridge;
+        function validateNativeSubscription(consumer, interval) {
+            if (typeof consumer !== 'string' || !consumer.trim()) throw new Error('Native consumer identity is required');
+            if (typeof interval !== 'number' || !isFinite(interval) || interval <= 0) throw new Error('Invalid native polling interval');
+        }
+        window.startSelectionBridge = function(consumer, interval) {
+            if (interval === undefined) interval = 200;
+            validateNativeSubscription(consumer, interval);
+            if (selectionBridge.consumer === consumer && selectionBridge.session === getSessionZid()) return;
+            stopSelectionBridge();
+            var subscription = {phase: 'running', consumer: consumer, session: getSessionZid(), timer: null};
+            selectionBridge = subscription;
+            subscription.timer = setInterval(function() { pollSelectionBridge(subscription); }, interval);
+            pollSelectionBridge(subscription);
         };
-        window.startSelectionBridge = function() {
-            if (selectionBridgeTimer !== null) return;
-            selectionBridgeTimer = setInterval(function() {
-                if (window.__deskInstanceId !== myDeskInstanceId) { window.stopSelectionBridge(); return; }
-                if (!window.ahkCall) return;
-                try {
-                    var response = JSON.parse(window.ahkCall('get_shared_selection', JSON.stringify({session_zid: getSessionZid(), client_id: String(myDeskInstanceId), accept_updates: !window.isDirty()})));
-                    response = response.data || response;
-                    (response.events || []).forEach(/** @param {import('./types.js').UpdatePayload} event */ function(event) { window.receiveUpdate(event); });
-                    if (response.shared_selection) window.applySharedSelection(response.shared_selection);
-                } catch (err) {
-                    console.error('[Selection] Native synchronization failed', err);
-                }
-            }, 200);
-        };
-        addEvent(window, 'pagehide', function() {
-            if (selectionBridgeTimer !== null) clearInterval(selectionBridgeTimer);
-            selectionBridgeTimer = null;
-        });
+        addEvent(window, 'pagehide', stopSelectionBridge);
+        addEvent(window, 'beforeunload', stopSelectionBridge);
 
         /** @param {string} lemma @param {boolean} isSelected */
         function setLemmaSelected(lemma, isSelected) {
@@ -8250,48 +8301,9 @@
         };
 
         window.isDirty = function() {
-            if (deltas.length > 0) return true;
-            if (hasHighlightCol) {
-                if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
-                    var wCards = window.WorkspaceTabs.getCards();
-                    if (wCards && wCards.length > 0) {
-                        var activeC = (typeof window.WorkspaceTabs.getActiveCard === 'function') ? window.WorkspaceTabs.getActiveCard() : null;
-                        if (activeC) {
-                            activeC.selected_ids = [];
-                            for (var sk in selectedRowIdsMap) {
-                                if (selectedRowIdsMap.hasOwnProperty(sk)) activeC.selected_ids.push(sk);
-                            }
-                        }
-                        for (var c = 0; c < wCards.length; c++) {
-                            var card = wCards[c];
-                            var /** @type {Desk.Membership} */ curSelMap = {};
-                            if (card.selected_ids) {
-                                for (var s = 0; s < card.selected_ids.length; s++) curSelMap[String(card.selected_ids[s])] = true;
-                            }
-                            if (card.words) {
-                                for (var w = 0; w < card.words.length; w++) {
-                                    var cw = card.words[w];
-                                    var rId = String(cw.row_id);
-                                    var isCur = curSelMap.hasOwnProperty(rId);
-                                    var isInit = (cw.selected === '1' || cw.selected === 1);
-                                    if (isCur !== isInit) return true;
-                                }
-                            }
-                        }
-                        return false;
-                    }
-                }
-                for (var i = 0; i < tableRows.length; i++) {
-                    var row = tableRows[i];
-                    var rowIdStr = String(row.getAttribute('data-row-id'));
-                    var currentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr);
-                    var initiallySelected = initialHighlights[rowIdStr] || false;
-                    if (currentlySelected !== initiallySelected) {
-                        return true;
-                    }
-                }
-            }
-            return false;
+            if (nativeSaveSnapshot) return true;
+            if (saveState && (saveState.phase === 'reconciling' || saveState.phase === 'reconcile_failed')) return true;
+            return JSON.parse(window.getDeltas()).length > 0;
         };
 
         window.editFocusedCell = function() {
@@ -8719,20 +8731,99 @@
         /** @type {{deltas:Desk.Delta[]}|null} */ var nativeSaveSnapshot = null;
 
         window.captureSaveSnapshot = function() {
+            if (saveState.promise) throw new Error('A save is already pending');
             if (nativeSaveSnapshot) throw new Error('A native save is already pending');
-            nativeSaveSnapshot = {deltas: JSON.parse(window.getDeltas())};
+            nativeSaveSnapshot = {deltas: JSON.parse(window.getDeltas()), revision: membershipRevision, session: getSessionZid()};
             return JSON.stringify(nativeSaveSnapshot.deltas);
         };
         window.abortSaveSnapshot = function() { nativeSaveSnapshot = null; };
         window.acknowledgeSaveSnapshot = function(serialized, response) {
-            if (!nativeSaveSnapshot || JSON.stringify(nativeSaveSnapshot.deltas) !== serialized) {
-                throw new Error('Save acknowledgment does not match the submitted snapshot');
-            }
+            var snapshot = matchingNativeSnapshot(serialized);
             var acknowledgment = response ? JSON.parse(response) : null;
-            acknowledgeValues(nativeSaveSnapshot.deltas, acknowledgment && (acknowledgment.data || acknowledgment));
+            if (response && !successfulSaveResponse({ok: true}, acknowledgment)) throw new Error('Native save failed; changes retained');
+            var needsRead = nativeSnapshotNeedsRead(snapshot, response);
+            acknowledgeValues(snapshot.deltas, acknowledgment && (acknowledgment.data || acknowledgment));
             nativeSaveSnapshot = null;
+            if (needsRead) reconcileNativeSelections(snapshot.session);
+            notifyDirtyState();
             return window.isDirty();
         };
+
+        function matchingNativeSnapshot(serialized) {
+            var snapshot = nativeSaveSnapshot;
+            if (!snapshot || JSON.stringify(snapshot.deltas) !== serialized) {
+                throw new Error('Save acknowledgment does not match the submitted snapshot');
+            }
+            if (!isCurrentSaveSession(snapshot)) nativeSaveSnapshot = null;
+            assertCurrentSave(snapshot);
+            return snapshot;
+        }
+
+        function nativeSnapshotNeedsRead(snapshot, response) {
+            return saveState.phase === 'reconcile_failed' || (response && membershipRevision !== snapshot.revision);
+        }
+
+        function reconcileNativeSelections(session) {
+            saveState.phase = 'reconciling';
+            try {
+                var response = JSON.parse(window.ahkCall('get_shared_selection', JSON.stringify({session_zid: session, accept_updates: false})));
+                assertCurrentSave({session: session});
+                window.applySharedSelection(selectionReadResult(response));
+                saveState.phase = 'idle';
+            } catch (err) {
+                saveState.phase = 'reconcile_failed';
+                throw err;
+            }
+        }
+
+        function assertCurrentSave(context) {
+            if (!isCurrentSaveSession(context)) {
+                throw new Error('Save response belongs to an inactive session or mount');
+            }
+        }
+
+        function isCurrentSaveSession(context) {
+            return window.__deskInstanceId === myDeskInstanceId && getSessionZid() === context.session;
+        }
+
+        function successfulSaveResponse(res, data) {
+            return res.ok && (data.ok || data.status === 'success');
+        }
+
+        function selectionReadResult(response) {
+            var data = response.data || response;
+            if (response.ok === false || response.status === 'error' || !data.shared_selection) {
+                throw new Error(formatErrorWithTrace(response, 'Selection reconciliation failed'));
+            }
+            return data.shared_selection;
+        }
+
+        function reconcileSelections(context) {
+            assertCurrentSave(context);
+            saveState.phase = 'reconciling';
+            var body = JSON.stringify({session_zid: context.session, accept_updates: false});
+            var request;
+            if (window.ahkCall && (document.documentMode || typeof fetch === 'undefined')) {
+                request = Promise.resolve().then(function() {
+                    return JSON.parse(window.ahkCall('get_shared_selection', body));
+                });
+            } else {
+                var headers = {'Content-Type': 'application/json'};
+                var token = getApiToken();
+                if (token) headers['X-API-Token'] = token;
+                request = fetch('/internal/selection', {method: 'POST', headers: headers, body: body}).then(function(res) {
+                    if (!res.ok) throw new Error('Selection reconciliation failed with status ' + res.status);
+                    return res.json();
+                });
+            }
+            return request.then(function(response) {
+                assertCurrentSave(context);
+                window.applySharedSelection(selectionReadResult(response));
+            }).catch(function(err) {
+                if (isCurrentSaveSession(context)) saveState.phase = 'reconcile_failed';
+                throw err;
+            });
+        }
 
         /** @param {Desk.Delta[]} snapshot */
         function acknowledgeSelections(snapshot) {
@@ -8751,11 +8842,12 @@
         }
 
         /** @param {Desk.Delta[]} snapshot */
-        function saveSnapshot(snapshot) {
+        function saveSnapshot(snapshot, context) {
+            assertCurrentSave(context);
             var token = getApiToken();
             var /** @type {Record<string,string>} */ headers = {'Content-Type': 'application/json'};
             if (token) headers['X-API-Token'] = token;
-            var body = JSON.stringify({session_zid: getSessionZid(), language: getSessionLang(), token: token, deltas: snapshot});
+            var body = JSON.stringify({session_zid: context.session, language: getSessionLang(), token: token, deltas: snapshot});
             var request;
             if (window.ahkCall && (document.documentMode || typeof fetch === 'undefined')) {
                 request = Promise.resolve().then(function() {
@@ -8771,33 +8863,41 @@
             }
             return request.then(function(res) {
                 return res.json().then(function(data) {
-                    if (!res.ok || !(data.ok || data.status === 'success')) throw new Error(formatErrorWithTrace(data, 'Save failed'));
+                    if (!successfulSaveResponse(res, data)) throw new Error(formatErrorWithTrace(data, 'Save failed'));
+                    assertCurrentSave(context);
+                    var needsRead = membershipRevision !== context.revision && snapshot.some(function(d) { return d.column === 'DeskSelected'; });
+                    if (needsRead) saveState.phase = 'reconciling';
                     acknowledgeValues(snapshot, data.data || data);
+                    if (needsRead) return reconcileSelections(context);
                 });
             });
         }
 
         /** @param {boolean} selectionOnly @returns {Promise<void>} */
         function persistPending(selectionOnly) {
-            if (saveState.phase === 'saving') {
+            if (nativeSaveSnapshot) return Promise.reject(new Error('A native save is already pending'));
+            if (saveState.promise) {
                 return saveState.promise.then(function() { return persistPending(selectionOnly); });
             }
             var /** @type {Desk.Delta[]} */ snapshot = JSON.parse(window.getDeltas());
             if (selectionOnly) snapshot = snapshot.filter(function(d) { return d.column === 'DeskSelected'; });
-            if (!snapshot.length) return Promise.resolve();
+            var retryRead = saveState.phase === 'reconcile_failed';
+            if (!snapshot.length && !retryRead) return Promise.resolve();
             if (!getSessionZid()) return Promise.reject(new Error('Session ZID missing'));
             var button = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-save'));
             setButtonLoading(button, true, 'Saving...', 'Save (Ctrl+S)');
-            saveState = {phase: 'saving', promise: Promise.resolve().then(function() {
-                return saveSnapshot(snapshot);
+            var context = {session: getSessionZid(), revision: membershipRevision};
+            saveState = {phase: 'saving', snapshot: snapshot, promise: Promise.resolve().then(function() {
+                return retryRead ? reconcileSelections(context) : saveSnapshot(snapshot, context);
             }).finally(function() {
-                saveState = {phase: 'idle', promise: null};
+                saveState = {phase: saveState.phase === 'reconcile_failed' ? 'reconcile_failed' : 'idle', promise: null};
+                if (window.__deskInstanceId !== myDeskInstanceId || getSessionZid() !== context.session) return;
                 setButtonLoading(button, false, '', 'Save (Ctrl+S)');
                 updateToolbarState();
             })};
             return saveState.promise.then(function() {
                 // Acknowledgment may expose a newer reversal of a submitted value.
-                if (selectionOnly) return persistPending(true);
+                if (selectionOnly || retryRead) return persistPending(selectionOnly);
             });
         }
 

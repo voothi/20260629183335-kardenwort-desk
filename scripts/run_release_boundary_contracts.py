@@ -33,6 +33,17 @@ STORAGE = ['tests/test_storage_router.py', 'tests/test_kardenwort_db.py', 'tests
            'tests/test_same_lemma_toggle.py::test_targeted_token_export_creates_single_card',
            'tests/test_same_lemma_toggle.py::test_merged_row_export_unrolls_all_occurrences',
            'tests/test_release_audit_boundaries.py::test_http_required_asset_failure_is_json_without_html']
+CONVERGENCE = ['tests/test_release_save_convergence.py', 'tests/test_release_audit_regressions.py',
+               'tests/test_intent_contract_integrity.py',
+               'tests/test_release_audit_boundaries.py::test_browser_selection_autosave_roundtrip_to_real_sqlite',
+               'tests/test_release_audit_boundaries.py::test_failed_save_prevents_f5_and_keeps_dirty_input',
+               'tests/test_release_audit_boundaries.py::test_native_snapshot_ack_keeps_later_selection',
+               'tests/test_release_audit_boundaries.py::test_edit_during_selection_save_survives_ack_and_offline_retry',
+               'tests/test_release_audit_boundaries.py::test_select_switch_update_delayed_ack_reload_with_sqlite']
+WATCHDOG = ['tests/test_container_watchdog_lifecycle.py', 'tests/test_watchdog_resilience.py',
+            'tests/test_web_action_toolbar.py',
+            'tests/test_release_save_convergence.py::test_watchdog_cleanup_keeps_persistent_membership_stream',
+            'tests/test_release_save_convergence.py::test_disconnected_stream_callbacks_cannot_change_current_session']
 
 
 def digest(path):
@@ -43,6 +54,7 @@ def copy_checkout(target):
     names = subprocess.run(['git', 'ls-files'], cwd=ROOT, text=True, capture_output=True, check=True).stdout.splitlines()
     names.append('tests/test_release_boundary_contracts.py')
     names.append('tests/test_release_membership_reads.py')
+    names.append('tests/test_release_save_convergence.py')
     for name in names:
         source = ROOT / name
         if not source.is_file():
@@ -115,10 +127,14 @@ def temporary_checkout(scratch):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('suite', choices=('contracts', 'controls', 'membership', 'storage'))
+    parser.add_argument('suite', choices=('contracts', 'controls', 'membership', 'storage', 'convergence', 'watchdog'))
     parser.add_argument('--filter', help='Optional pytest expression for fixture diagnosis')
     parser.add_argument('--evidence-dir', type=Path, default=EVIDENCE)
+    parser.add_argument('--run-label', default='', help='Unique suffix for retained run evidence')
     args = parser.parse_args()
+    if not args.run_label.replace('-', '').isalnum() and args.run_label:
+        parser.error('Run label must contain only letters, numbers, or hyphens')
+    evidence_name = args.suite + ('-' + args.run_label if args.run_label else '')
     evidence = args.evidence_dir.resolve()
     assert evidence.parent == (ROOT / 'results').resolve(), 'Evidence must stay in the workspace results directory'
     assert not evidence.is_junction() and not evidence.is_symlink()
@@ -132,25 +148,28 @@ def main():
         assert checkout.resolve().parent == scratch.resolve()
         copy_checkout(checkout)
         guard_external_databases(checkout)
-        selected = {'contracts': CONTRACTS, 'controls': CONTROLS, 'membership': MEMBERSHIP, 'storage': STORAGE}[args.suite]
+        selected = {'contracts': CONTRACTS, 'controls': CONTROLS, 'membership': MEMBERSHIP, 'storage': STORAGE, 'convergence': CONVERGENCE, 'watchdog': WATCHDOG}[args.suite]
         command = [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', *selected,
                    '--tb=short', '--basetemp=' + str(checkout / 'pytest-temp'),
-                   '--junitxml=' + str(evidence / (args.suite + '.xml'))]
+                   '--junitxml=' + str(evidence / (evidence_name + '.xml'))]
         if args.filter:
             command.extend(['-k', args.filter])
         env = dict(os.environ, SSLKEYLOGFILE='', KARDENWORT_NATIVE_REPO='U:/voothi/20240411110510-autohotkey',
                    PYTHONPATH=str(checkout))
-        with (evidence / (args.suite + '.log')).open('w', encoding='utf-8') as log:
+        with (evidence / (evidence_name + '.log')).open('w', encoding='utf-8') as log:
             result = subprocess.run(command, cwd=checkout, env=env, stdout=log, stderr=subprocess.STDOUT)
         metadata = dict(command=command, exit_code=result.returncode, isolated_checkout=str(checkout),
                         original_legacy_test_sha256=digest(ROOT / 'tests/test_same_lemma_toggle.py'),
                         copied_legacy_test_sha256=digest(checkout / 'tests/test_same_lemma_toggle.py'),
                         protected_db_before=before, protected_db_after=digest(protected))
+        metadata['source_sha256'] = {name: digest(checkout / name) for name in
+            ('web/js/app.js', 'web/js/services/sse.js', 'kardenwort_controller.py', 'kardenwort_events.py', 'tests/test_release_save_convergence.py')}
+        metadata['native_host_sha256'] = digest(Path(env['KARDENWORT_NATIVE_REPO']) / 'kardenwort-window/kardenwort-window.ahk')
         guard_log = checkout / 'database-guard.jsonl'
         metadata['external_database_attempts'] = [json.loads(line) for line in guard_log.read_text(encoding='utf8').splitlines()] if guard_log.exists() else []
     metadata['temporary_checkout_removed'] = not checkout.exists()
-    (evidence / (args.suite + '-execution.json')).write_text(json.dumps(metadata, indent=2), encoding='utf-8')
-    print((evidence / (args.suite + '.log')).read_text(encoding='utf-8').splitlines()[-1])
+    (evidence / (evidence_name + '-execution.json')).write_text(json.dumps(metadata, indent=2), encoding='utf-8')
+    print((evidence / (evidence_name + '.log')).read_text(encoding='utf-8').splitlines()[-1])
     print(json.dumps(dict(metadata, external_database_attempts=len(metadata['external_database_attempts']))))
     assert metadata['protected_db_before'] == metadata['protected_db_after'], 'Original database changed during isolated run'
     assert metadata['original_legacy_test_sha256'] == metadata['copied_legacy_test_sha256']

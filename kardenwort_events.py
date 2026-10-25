@@ -78,6 +78,11 @@ class EventDispatcher:
         for key in expired:
             self._remove_polling_client(key)
 
+    def prune_polling_clients(self):
+        """Called by the controller's bounded serve_forever maintenance cycle."""
+        with self._lock:
+            self._prune_polling_clients(time.monotonic())
+
     @staticmethod
     def _drain_events(channel):
         events = []

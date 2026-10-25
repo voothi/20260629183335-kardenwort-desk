@@ -3052,6 +3052,11 @@ def generate_server_zid(server) -> str:
     return f"{now:%Y%m%d%H%M%S}-{seq:04d}"
 
 
+class ControllerHTTPServer(ThreadingHTTPServer):
+    def service_actions(self):
+        EventDispatcher.get_instance().prune_polling_clients()
+
+
 class ControllerRequestHandler(BaseHTTPRequestHandler):
     """
     Central Controller daemon request handler supporting REST API, process supervision,
@@ -3340,11 +3345,13 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Selection query requires an object')
             session_zid = body.get('session_zid')
-            if not session_zid:
+            if not isinstance(session_zid, str) or len(session_zid) != 14 or not session_zid.isascii() or not session_zid.isdigit() or session_zid == '0' * 14:
                 raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Selection query requires a session')
-            adapter = getattr(self.server.arbiter, 'storage_adapter', None) or get_storage_adapter(
-                self.server.config, self.server.resolved_paths, read_only=True)
-            membership = adapter.get_shared_selection(session_zid)
+            membership = {}
+            if not body.get('close'):
+                adapter = getattr(self.server.arbiter, 'storage_adapter', None) or get_storage_adapter(
+                    self.server.config, self.server.resolved_paths, read_only=True)
+                membership = adapter.get_shared_selection(session_zid)
             events = []
             client_id = body.get('client_id')
             if client_id:
@@ -5816,7 +5823,7 @@ def run_controller(args=None):
         raise StructuredError(ErrorCode.CONFIGURATION_ERROR, f"Controller host must be loopback (127.0.0.1). Specified: {host}")
 
     ThreadingHTTPServer.request_queue_size = 64
-    server = ThreadingHTTPServer((host, port), ControllerRequestHandler)
+    server = ControllerHTTPServer((host, port), ControllerRequestHandler)
     server.allow_reuse_address = True
     server.daemon_threads = True
     server.disable_nagle_algorithm = True

@@ -77,7 +77,6 @@
             try { activeEventSource.close(); } catch (e) { console.warn('[SSE] Error closing active EventSource:', e); }
             activeEventSource = null;
             activeSessionZid = null;
-            w._kwEvtSource = null;
             w.__sseActiveZid = null;
         }
 
@@ -88,16 +87,17 @@
 
             activeEventSource = es;
             activeSessionZid = sessionZid;
-            w._kwEvtSource = es;
             w.__sseActiveZid = sessionZid;
 
             updateConnectionIndicator('reconnecting');
 
             es.onopen = function () {
+                if (activeEventSource !== es) return;
                 updateConnectionIndicator('connected');
             };
 
             es.onerror = function () {
+                if (activeEventSource !== es) return;
                 if (es.readyState === EventSource.CONNECTING) {
                     updateConnectionIndicator('reconnecting');
                 } else {
@@ -106,6 +106,7 @@
             };
 
             es.onmessage = function (e) {
+                if (activeEventSource !== es) return;
                 var data;
                 try {
                     data = JSON.parse(e.data);
@@ -182,7 +183,6 @@
             activeEventSource = null;
             activeSessionZid = null;
             var w = /** @type {any} */ (window);
-            w._kwEvtSource = null;
             w.__sseActiveZid = null;
             updateConnectionIndicator('disconnected');
         }
