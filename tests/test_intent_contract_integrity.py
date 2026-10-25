@@ -363,3 +363,25 @@ def test_non_latin_save_and_f5_execute_once(audit_page):
     page.evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'F5',code:'F5',keyCode:116,which:116,bubbles:true,cancelable:true}))")
     page.wait_for_function("__requests.some(r=>r.url.includes('/session/status'))")
     assert page.evaluate("__requests.filter(r=>r.url.includes('/session/status')).length")==1
+
+
+@pytest.mark.parametrize('button,expected', [
+    ('kw-btn-lang-no', 'no'),
+    ('kw-btn-lang-cancel', 'cancel'),
+    ('kw-btn-lang-yes', 'yes'),
+])
+def test_language_modal_enter_dispatches_focused_command_once(audit_page, button, expected):
+    page = audit_page
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.evaluate("""() => {
+        window.__modalCommands = [];
+        window.showLanguageVerificationModal({detected_language: 'en', expected_language: 'de'});
+        window.onLangNo = () => __modalCommands.push('no');
+        window.onLangCancel = () => __modalCommands.push('cancel');
+        window.onLangYes = () => __modalCommands.push('yes');
+    }""")
+    page.locator('#' + button).focus()
+    page.keyboard.press('Enter')
+    assert page.evaluate('__modalCommands') == [expected]
+    assert errors == []

@@ -546,8 +546,6 @@
                 e.preventDefault();
                 if (typeof window.toggleHighlightSameLemma === 'function') {
                     window.toggleHighlightSameLemma();
-                } else if (typeof window.toggleHighlightSameLemma === 'function') {
-                    window.toggleHighlightSameLemma();
                 }
             });
             if (window.AppState && window.AppState.highlightSameLemma) {
@@ -561,8 +559,6 @@
             btnFilter.addEventListener('click', function (e) {
                 e.preventDefault();
                 if (typeof window.toggleFilterSelectedOnly === 'function') {
-                    window.toggleFilterSelectedOnly();
-                } else if (typeof window.toggleFilterSelectedOnly === 'function') {
                     window.toggleFilterSelectedOnly();
                 }
             });
@@ -836,7 +832,7 @@
                         if (colName) td.setAttribute('data-col', String(colName));
                         var scrollDiv = document.createElement('div');
                         scrollDiv.className = 'scrollable-cell';
-                        var nodeVal = /** @type {any} */ (text);
+                        var nodeVal = text;
                         if (nodeVal && typeof nodeVal === 'object' && nodeVal.nodeType) {
                             scrollDiv.appendChild(nodeVal);
                         } else if (typeof text === 'string' && text.indexOf('skeleton-loader') !== -1) {
@@ -1631,7 +1627,7 @@
                 if (mvpRainbowMode && b.slot !== undefined) {
                     addClass(b.srcSpan, 'hl-mvp-pin-' + b.slot);
                 }
-                var td = (typeof window.findTokenData === 'function') ? window.findTokenData(b.srcSpan) : ((window.findTokenData) ? window.findTokenData(b.srcSpan) : null);
+                var td = (typeof window.findTokenData === 'function') ? window.findTokenData(b.srcSpan) : null;
                 if (!td && window.findTokenDataByVisualIdx) {
                     var wIdxAttr = b.srcSpan.getAttribute('data-word-idx');
                     if (wIdxAttr !== null) td = window.findTokenDataByVisualIdx(wIdxAttr);
@@ -1916,7 +1912,6 @@
                             : ((sTd.row_ids && sTd.row_ids.slice) ? sTd.row_ids.slice() : []);
                         sRowIds.forEach(function(id) { window.toggleRowSelection(id, false); });
                         if (typeof window.removeTokenFromActiveSelections === 'function') window.removeTokenFromActiveSelections(sSpan);
-                        if (typeof window.syncSelectionsToCardsAndState === 'function') window.syncSelectionsToCardsAndState();
                         window.syncSelectionsToCardsAndState();
                     }
                 }
@@ -1955,7 +1950,6 @@
                             : ((sTd.row_ids && sTd.row_ids.slice) ? sTd.row_ids.slice() : []);
                         sRowIds.forEach(function(id) { window.toggleRowSelection(id, true); });
                         if (typeof window.addTokenToActiveSelections === 'function') window.addTokenToActiveSelections(activeSrcSpan);
-                        if (typeof window.syncSelectionsToCardsAndState === 'function') window.syncSelectionsToCardsAndState();
                         window.syncSelectionsToCardsAndState();
                     }
                 }
@@ -6063,7 +6057,7 @@
 
         var sourceContainer = document.getElementById('source-container');
         if (sourceContainer) {
-            addEvent(sourceContainer, 'contextmenu', function(e) {
+            addEvent(sourceContainer, 'contextmenu', /** @param {MouseEvent} e */ function(e) {
                 if (window.__selectableTextMode) return;
                 e = /** @type {MouseEvent} */ (e || window.event);
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
@@ -6657,7 +6651,7 @@
         addEvent(document, 'mouseup', handleMouseUp);
         addEvent(window, 'mouseup', handleMouseUp);
 
-        addEvent(document, 'contextmenu', function(e) {
+        addEvent(document, 'contextmenu', /** @param {MouseEvent} e */ function(e) {
             if (window.__selectableTextMode) return;
             if (justFinishedDrag) {
                 e = /** @type {MouseEvent} */ (e || window.event);
@@ -9995,7 +9989,7 @@
             }
         }
 
-        addEvent(document, 'click', function(e) {
+        addEvent(document, 'click', /** @param {MouseEvent} e */ function(e) {
             e = /** @type {MouseEvent} */ (e || window.event);
             var target = /** @type {HTMLElement|null} */ (e.target || e.srcElement);
             if (target && (target.id === 'kw-btn-empty-clear-filter' || (target.closest && target.closest('#kw-btn-empty-clear-filter')))) {

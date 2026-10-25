@@ -236,7 +236,7 @@ interface Window {
     updateActiveProvider(task: string | null, provider: string): void;
     findTokenData(span: HTMLElement | null): Desk.Token | null;
     findTokenDataByVisualIdx(index: Desk.RowId): Desk.Token | null;
-    findRelatedTokenSpans(span: HTMLElement): HTMLElement[];
+    findRelatedTokenSpans?(span: HTMLElement): HTMLElement[];
     getRowGroupIds(row: HTMLElement): string[];
     refreshBookmarkClasses(): void;
     getTargetIdx(index: number, isSource: boolean): number;
