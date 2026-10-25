@@ -1,47 +1,35 @@
 
 /**
  * @file TranslationView.js
- * Autonomous typed vanilla client component for rendering sentence translation,
+ * Shared domain shapes are documented once in ../types.js.
+ * Autonomous JavaScript client component for rendering sentence translation,
  * clean word spans, rainbow link connections with invariant padding: 0, and RMB context audio.
  */
 
-/**
- * @typedef {import('../types.js').SessionState} SessionState
- */
-
 (function () {
-    /**
-     * @param {string} str
-     * @returns {string}
-     */
-    function escapeHtml(str) {
-        var w = /** @type {any} */ (typeof window !== 'undefined' ? window : null);
-        if (w && typeof w.escapeHtml === 'function') {
-            return w.escapeHtml(str);
-        }
-        throw new Error('Required canonical escapeHtml helper is unavailable');
+    function compatibilityTranslationHtml(text) {
+        if (typeof window.escapeHtml !== 'function') throw new Error('Required canonical escapeHtml helper is unavailable');
+        return text.indexOf('<span') === -1 ? window.escapeHtml(text) : text;
     }
 
-    /**
-     * Splits text into alternating non-word and word chunks.
-     * @param {string} text
-     * @returns {Array<string>}
-     */
-    function splitTextTokens(text) {
-        var rx = /([a-zA-Z0-9'\u00C0-\u024F\u0400-\u04FF\u0500-\u052F\u1E00-\u1EFF]+)/g;
-        return text.split(rx);
+    function translationContext(container) {
+        return container.getAttribute('data-sentence-idx') || '0';
     }
 
     /**
      * TranslationView component projection
      */
     var TranslationView = {
-        /** @type {HTMLElement|null} */
+
         container: null,
-        /** @type {boolean} */
+
         _mounted: false,
-        /** @type {EventListener|null} */
+
         _contextHandler: null,
+
+        _projectionContext: null,
+
+        _projectionHtml: null,
 
         /**
          * Mount component to DOM container
@@ -52,7 +40,7 @@
             if (this._mounted && this.container === next) return;
             this.dispose();
             if (typeof target === 'string') {
-                this.container = /** @type {HTMLElement|null} */ (document.querySelector(target));
+                this.container = (document.querySelector(target));
             } else {
                 this.container = target;
             }
@@ -66,6 +54,25 @@
             if (this.container && this._contextHandler) this.container.removeEventListener('contextmenu', this._contextHandler);
             this._contextHandler = null;
             this._mounted = false;
+            this._projectionContext = null;
+            this._projectionHtml = null;
+        },
+
+        /** Project canonical translation HTML; callers supply the active sentence context. */
+        project: function (html, context) {
+            var container = this.container;
+            if (!container) return false;
+            var probe = document.createElement('div');
+            probe.innerHTML = html;
+            var pending = container.querySelector('[data-pending="true"], .skeleton-loader') || container.classList.contains('skeleton-loader');
+            if (!pending && this._projectionContext === context && this._projectionHtml === html && container.textContent === probe.textContent) return false;
+            container.classList.remove('skeleton-loader');
+            container.removeAttribute('data-pending');
+            container.innerHTML = html;
+            this._projectionContext = context;
+            this._projectionHtml = html;
+            window.tokenizeTranslation();
+            return true;
         },
 
         /**
@@ -74,45 +81,12 @@
          */
         render: function (state) {
             if (!this.container) return;
-
-            // Preserve active skeleton loaders during progressive streaming
-            if (this.container.querySelector('[data-pending="true"]') ||
-                this.container.querySelector('.skeleton-loader') ||
-                this.container.classList.contains('skeleton-loader')) {
-                return;
-            }
-
+            if (this.container.querySelector('[data-pending="true"], .skeleton-loader') || this.container.classList.contains('skeleton-loader')) return;
             var text = state.translated_text || state.sentence_translation || '';
-            if (text) {
-                // If text does not already contain HTML word spans, wrap words
-                if (text.indexOf('<span') === -1) {
-                    var parts = splitTextTokens(text);
-                    var html = '';
-                    var wordIdx = 0;
-                    for (var k = 0; k < parts.length; k++) {
-                        var part = parts[k];
-                        if (!part) continue;
-                        if (k % 2 === 1) {
-                            var lc = part.toLowerCase();
-                            html += '<span class="word hl-mvp" data-word="' + escapeHtml(part) +
-                                '" data-word-idx="' + wordIdx +
-                                '" data-order="' + wordIdx +
-                                '" data-lower-clean="' + escapeHtml(lc) +
-                                '" data-line-idx="0" data-sentence-idx="1" style="padding: 0;">' + escapeHtml(part) + '</span>';
-                            wordIdx++;
-                        } else {
-                            html += escapeHtml(part);
-                        }
-                    }
-                    this.container.innerHTML = html;
-                } else {
-                    this.container.innerHTML = text;
-                }
-                var w = /** @type {any} */ (typeof window !== 'undefined' ? window : null);
-                if (w && typeof w.wireMvpEvents === 'function') {
-                    w.wireMvpEvents();
-                }
-            }
+            if (!text) return;
+            var changed = this.project(compatibilityTranslationHtml(text), translationContext(this.container));
+            window.applyTextProvenance(this.container);
+            return changed;
         },
 
         /**
@@ -121,10 +95,10 @@
         bindEvents: function () {
             if (!this.container) return;
             this._contextHandler = /** @param {Event} e */ function (e) {
-                var target = /** @type {HTMLElement|null} */ (e.target);
+                var target = (e.target);
                 var span = target && target.closest ? target.closest('#translation-container span.word') : null;
                 if (span) {
-                    var w = /** @type {any} */ (window);
+                    var w = (window);
                     if (w.__deskHandleMouseUp) {
                         e.preventDefault();
                         return;
@@ -145,7 +119,7 @@
     };
 
     // Expose on global window object
-    var w = /** @type {any} */ (typeof window !== 'undefined' ? window : null);
+    var w = (typeof window !== 'undefined' ? window : null);
     if (w) {
         w.TranslationView = TranslationView;
     }

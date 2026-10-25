@@ -1,81 +1,24 @@
 
 /**
  * @file WorkspaceTabs.js
- * Autonomous typed vanilla client workspace tab controller managing sentence switching,
+ * Autonomous JavaScript client workspace tab controller managing sentence switching,
  * tab strip navigation, dynamic vocabulary row binding, and sentence isolation.
- */
-
-/**
- * @typedef {Object} WordItem
- * @property {number|string} row_id
- * @property {number|string} [token_order]
- * @property {string} [word]
- * @property {string} [lemma]
- * @property {string} [translation]
- * @property {boolean} [is_pending]
- * @property {string|null} [pending_provider]
- * @property {string} [inflected]
- * @property {string} [pos]
- * @property {string} [gender]
- * @property {string} [ipa]
- * @property {string} [morphology]
- * @property {string} [provenance]
- * @property {string} [highlight_class]
- * @property {string|number|boolean} [selected]
- * @property {string|null} [row_html]
- * @property {Array<string|number>} [all_row_ids]
- * @property {number} [sentence_idx]
- * @property {string} [sentence_text]
- * @property {string} [inflected_tooltip]
- * @property {Object} [occurrence_data]
- * @property {string} [dynamic_tds]
- */
-
-/**
- * @typedef {Object} WorkspaceCard
- * @property {number} seq_num
- * @property {number} sentence_idx
- * @property {Array<WordItem>} [words]
- * @property {string} [translated_text]
- * @property {Array<string>} [selected_ids]
- * @property {string} [tsv_filename]
- * @property {string} [zid]
- * @property {number} [index]
- * @property {string} [label]
- */
-
-/**
- * @typedef {Object} TabNavigationState
- * @property {number|null} activeTabSeq
- * @property {number} activeSentenceIdx
- * @property {Array<WorkspaceCard>} cards
- * @property {string} masterSourceHtml
- */
-
-/**
- * @typedef {Object} SentenceSyncItem
- * @property {number} [sentence_index]
- * @property {string} [sentence_destination]
- * @property {string} [translation]
- */
-
-/**
- * @typedef {Array<SentenceSyncItem|string> | Object<string, string|SentenceSyncItem>} SentenceSyncPayload
+ * Shared domain shapes are documented once in ../types.js.
  */
 
 (function () {
     'use strict';
 
     var WorkspaceTabs = (function () {
-        /** @type {Array<WorkspaceCard>} */
+
         var cards = [];
-        /** @type {number|null} */
+
         var activeTabSeq = null;
-        /** @type {number} */
+
         var activeSentenceIdx = 0;
-        /** @type {string} */
+
         var masterSourceHtml = "";
-        /** @type {Object<string, boolean>} */
+
         var selectedRowIdsMap = {};
 
         /**
@@ -83,7 +26,7 @@
          * @returns {string}
          */
         function escapeHtml(str) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (typeof w.escapeHtml === 'function') {
                 return w.escapeHtml(str);
             }
@@ -96,7 +39,7 @@
          * @param {EventListenerOrEventListenerObject|Function} fn
          */
         function addEvent(el, type, fn) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (typeof w.addEvent !== 'function') throw new Error('Required canonical addEvent helper is unavailable');
             return w.addEvent(el, type, fn);
         }
@@ -106,7 +49,7 @@
          * @param {string} cls
          */
         function addClass(el, cls) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (typeof w.addClass !== 'function') throw new Error('Required canonical addClass helper is unavailable');
             return w.addClass(el, cls);
         }
@@ -116,7 +59,7 @@
          * @param {string} cls
          */
         function removeClass(el, cls) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (typeof w.removeClass !== 'function') throw new Error('Required canonical removeClass helper is unavailable');
             return w.removeClass(el, cls);
         }
@@ -124,38 +67,52 @@
         /**
          * @returns {string}
          */
+
+        function namedSessionValue(record, names) {
+            if (!record) return '';
+            for (var i = 0; i < names.length; i++) {
+                if (record[names[i]]) return String(record[names[i]]);
+            }
+            return '';
+        }
+
+        function bootstrapSessionValue(record, names) {
+            return namedSessionValue(record, names) || namedSessionValue(record && record.session_data, names);
+        }
+
+        function scriptSessionValue(names) {
+            var script = document.getElementById('kardenwort-bootstrap');
+            if (!script) return '';
+            try {
+                return bootstrapSessionValue(JSON.parse(script.textContent || '{}'), names);
+            } catch (error) {
+                console.error('[Kardenwort] Malformed workspace bootstrap:', error);
+                throw error;
+            }
+        }
+
+        function hostSessionValue(names, elementId) {
+            var element = document.getElementById(elementId);
+            var value = element ? (element.textContent || element.innerText || '').trim() : '';
+            return value || namedSessionValue(window.AppState, names) || namedSessionValue(window.__CONFIG__, names);
+        }
+
+        function workspaceSessionValue(names, elementId) {
+            var bootstrap = window.AppState && window.AppState.bootstrap;
+            return bootstrapSessionValue(bootstrap, names) || hostSessionValue(names, elementId) || scriptSessionValue(names);
+        }
+
         function getTextMode() {
-            var w = /** @type {any} */ (window);
-            if (typeof w.getTextMode === 'function') return w.getTextMode();
-            var el = document.getElementById('text-mode');
-            if (el) return (el.textContent || el.innerText || '').trim();
-            if (w.AppState && w.AppState.bootstrap) {
-                if (w.AppState.bootstrap.text_mode) return w.AppState.bootstrap.text_mode;
-                if (w.AppState.bootstrap.session_data && w.AppState.bootstrap.session_data.text_mode) {
-                    return w.AppState.bootstrap.session_data.text_mode;
-                }
-            }
-            if (w.__CONFIG__ && w.__CONFIG__.text_mode) {
-                return w.__CONFIG__.text_mode;
-            }
-            var bootEl = document.getElementById('kardenwort-bootstrap');
-            if (bootEl) {
-                try {
-                    var parsed = JSON.parse(bootEl.textContent || '');
-                    if (parsed.text_mode) return parsed.text_mode;
-                    if (parsed.session_data && parsed.session_data.text_mode) return parsed.session_data.text_mode;
-                } catch(e) {
-                    console.error('[Kardenwort] getTextMode: error parsing kardenwort-bootstrap JSON:', e);
-                }
-            }
-            return 'single';
+            var mode = workspaceSessionValue(['text_mode'], 'text-mode');
+            if (!mode) console.error('[Kardenwort] Missing workspace text mode in bootstrap or host metadata');
+            return mode;
         }
 
         /**
          * @returns {string}
          */
         function getTextBaseProvider() {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (typeof w.getTextBaseProvider === 'function') return w.getTextBaseProvider();
             var el = document.getElementById('text-base-provider');
             if (el) return (el.textContent || el.innerText || '').trim();
@@ -187,40 +144,12 @@
          * @returns {string}
          */
         function getSessionLang() {
-            var w = /** @type {any} */ (window);
-            if (typeof w.getSessionLang === 'function') return w.getSessionLang();
-            var el = document.getElementById('session-lang');
-            if (el) {
-                var elText = (el.textContent || el.innerText || '').trim();
-                if (elText) return elText;
+            var language = workspaceSessionValue(['language', 'lang'], 'session-lang');
+            if (!language) {
+                console.error('[Kardenwort] Missing workspace session language in bootstrap or host metadata');
+                throw new Error('Missing session language in bootstrap state');
             }
-            if (w.AppState && w.AppState.bootstrap) {
-                var bootLang = w.AppState.bootstrap.language || w.AppState.bootstrap.lang;
-                if (bootLang) return bootLang;
-                if (w.AppState.bootstrap.session_data && (w.AppState.bootstrap.session_data.language || w.AppState.bootstrap.session_data.lang)) {
-                    return w.AppState.bootstrap.session_data.language || w.AppState.bootstrap.session_data.lang;
-                }
-            }
-            if (w.AppState && w.AppState.language) {
-                return w.AppState.language;
-            }
-            if (w.__CONFIG__ && (w.__CONFIG__.language || w.__CONFIG__.lang)) {
-                return w.__CONFIG__.language || w.__CONFIG__.lang;
-            }
-            var bootEl = document.getElementById('kardenwort-bootstrap');
-            if (bootEl) {
-                try {
-                    var parsed = JSON.parse(bootEl.textContent || '');
-                    if (parsed.language || parsed.lang) return parsed.language || parsed.lang;
-                    if (parsed.session_data && (parsed.session_data.language || parsed.session_data.lang)) {
-                        return parsed.session_data.language || parsed.session_data.lang;
-                    }
-                } catch(e) {
-                    console.error('[Kardenwort] getSessionLang: error parsing kardenwort-bootstrap JSON:', e);
-                }
-            }
-            console.error('[Kardenwort] getSessionLang: unable to resolve session language from bootstrap or session-lang');
-            throw new Error('Missing session language in bootstrap state');
+            return language;
         }
 
         /**
@@ -228,13 +157,13 @@
          * @returns {string}
          */
         function formatProviderSkeletonLabel(provider) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (typeof w.formatProviderSkeletonLabel === 'function') {
                 return w.formatProviderSkeletonLabel(provider);
             }
             if (!provider) return "Loading...";
             var name = String(provider).trim().toLowerCase();
-            /** @type {Object<string, string>} */
+
             var map = {
                 'argos': 'Argos...',
                 'google': 'Google...',
@@ -250,7 +179,7 @@
          * @returns {string}
          */
         function formatProvenanceTooltip(prov) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (typeof w.formatProvenanceTooltip !== 'function') throw new Error('Required canonical formatProvenanceTooltip helper is unavailable');
             return w.formatProvenanceTooltip(prov);
         }
@@ -261,7 +190,7 @@
          * @returns {string}
          */
         function formatTranslationCellTooltip(translation, provenance) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (typeof w.formatTranslationCellTooltip !== 'function') throw new Error('Required canonical formatTranslationCellTooltip helper is unavailable');
             return w.formatTranslationCellTooltip(translation, provenance);
         }
@@ -274,7 +203,7 @@
          * @returns {string}
          */
         function formatInflectedTooltip(sentenceText, inflectedVal, tokenOrder, lemma) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (typeof w.formatInflectedTooltip !== 'function') throw new Error('Required canonical formatInflectedTooltip helper is unavailable');
             return w.formatInflectedTooltip(sentenceText, inflectedVal, tokenOrder, lemma);
         }
@@ -287,7 +216,7 @@
          * @returns {string}
          */
         function formatLemmaTooltip(lemma, gender, activeLang, pos) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (typeof w.formatLemmaTooltip !== 'function') throw new Error('Required canonical formatLemmaTooltip helper is unavailable');
             return w.formatLemmaTooltip(lemma, gender, activeLang, pos);
         }
@@ -297,7 +226,7 @@
          * @returns {string}
          */
         function formatPosTooltip(pos) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (typeof w.formatPosTooltip !== 'function') throw new Error('Required canonical formatPosTooltip helper is unavailable');
             return w.formatPosTooltip(pos);
         }
@@ -309,7 +238,7 @@
          * @returns {string}
          */
         function formatGenderTooltip(gender, lemma, prov) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (typeof w.formatGenderTooltip !== 'function') throw new Error('Required canonical formatGenderTooltip helper is unavailable');
             return w.formatGenderTooltip(gender, lemma, prov);
         }
@@ -319,20 +248,20 @@
          * @returns {string}
          */
         function formatGenderBadge(gender) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (typeof w.formatGenderBadge !== 'function') throw new Error('Required canonical formatGenderBadge helper is unavailable');
             return w.formatGenderBadge(gender);
         }
 
         function updateEmptySelectionState() {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (typeof w.updateEmptySelectionState === 'function') {
                 w.updateEmptySelectionState();
             }
         }
 
         function syncSelectionsToCardsAndState() {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             var active = cards.find(function(card) { return card.seq_num === activeTabSeq; });
             if (active && typeof w.getSelectedRowsArray === 'function') {
                 active.selected_ids = w.getSelectedRowsArray().map(String);
@@ -344,13 +273,13 @@
          * @returns {string}
          */
         function getTranslationHtml(tText) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (tText && typeof tText === 'string' && tText.indexOf('skeleton-loader') !== -1) {
                 return tText;
             }
             if (tText && tText.trim() && tText.indexOf('skeleton-loader') === -1 && tText !== '[FAILED]' && (typeof tText !== 'string' || tText.indexOf('[Error') !== 0)) {
                 var clean = tText.trim();
-                /** @type {Array<string>} */
+
                 var lines = [];
                 if (clean.indexOf('<div') !== -1 || clean.indexOf('</div') !== -1 || clean.indexOf('<p') !== -1 || clean.indexOf('<br') !== -1) {
                     var tmp = document.createElement('div');
@@ -358,7 +287,7 @@
                     var childDivs = tmp.querySelectorAll('div, p');
                     if (childDivs.length > 0) {
                         for (var cd = 0; cd < childDivs.length; cd++) {
-                            lines.push((childDivs[cd].textContent || /** @type {HTMLElement} */ (childDivs[cd]).innerText || '').trim());
+                            lines.push((childDivs[cd].textContent ||  (childDivs[cd]).innerText || '').trim());
                         }
                     }
                     if (lines.length === 0) {
@@ -373,7 +302,7 @@
                 var isSingle = (typeof getTextMode === 'function' && getTextMode() === 'single');
                 if (isSingle) {
                     var srcContainer = document.getElementById('source-container');
-                    var srcText = srcContainer ? (srcContainer.textContent || /** @type {HTMLElement} */ (srcContainer).innerText || '') : '';
+                    var srcText = srcContainer ? (srcContainer.textContent ||  (srcContainer).innerText || '') : '';
                     if (srcText.indexOf(String.fromCharCode(10)) !== -1 || srcText.indexOf(String.fromCharCode(13)) !== -1) {
                         isSingle = false;
                     }
@@ -401,10 +330,10 @@
          * @param {Array<WorkspaceCard>} [explicitCards]
          */
         function init(explicitCards) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
 
             var sessZidEl = document.getElementById('session-zid');
-            var curZid = sessZidEl ? (sessZidEl.textContent || /** @type {HTMLElement} */ (sessZidEl).innerText || "").trim() : "";
+            var curZid = sessZidEl ? (sessZidEl.textContent ||  (sessZidEl).innerText || "").trim() : "";
             if (!curZid && w.AppState && w.AppState.bootstrap) {
                 curZid = w.AppState.bootstrap.session_zid || w.AppState.bootstrap.zid || (w.AppState.bootstrap.session_data && (w.AppState.bootstrap.session_data.session_zid || w.AppState.bootstrap.session_data.zid)) || "";
             }
@@ -456,9 +385,9 @@
                     dock.className = 'kw-tab-dock-top';
                     tabTabBar.appendChild(dock);
                 }
-                var pBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-tab-prev'));
+                var pBtn = (document.getElementById('kw-tab-prev'));
                 if (!pBtn) {
-                    pBtn = /** @type {HTMLButtonElement} */ (document.createElement('button'));
+                    pBtn = (document.createElement('button'));
                     pBtn.type = 'button';
                     pBtn.id = 'kw-tab-prev';
                     pBtn.className = 'kw-tab-nav';
@@ -473,9 +402,9 @@
                     track.id = 'kw-tab-track';
                     dock.appendChild(track);
                 }
-                var nBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-tab-next'));
+                var nBtn = (document.getElementById('kw-tab-next'));
                 if (!nBtn) {
-                    nBtn = /** @type {HTMLButtonElement} */ (document.createElement('button'));
+                    nBtn = (document.createElement('button'));
                     nBtn.type = 'button';
                     nBtn.id = 'kw-tab-next';
                     nBtn.className = 'kw-tab-nav';
@@ -511,8 +440,8 @@
 
             var tabButtons = document.querySelectorAll('.kw-tab-chip');
             for (var i = 0; i < tabButtons.length; i++) {
-                if (/** @type {any} */ (tabButtons[i])._kwBound) continue;
-                /** @type {any} */ (tabButtons[i])._kwBound = true;
+                if ( (tabButtons[i])._kwBound) continue;
+                 (tabButtons[i])._kwBound = true;
                 (function(btn) {
                     addEvent(btn, 'click', function() {
                         var seq = parseInt(btn.getAttribute('data-tab-seq') || '1', 10);
@@ -521,22 +450,22 @@
                 })(tabButtons[i]);
             }
 
-            var prevBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-tab-prev'));
-            var nextBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-tab-next'));
+            var prevBtn = (document.getElementById('kw-tab-prev'));
+            var nextBtn = (document.getElementById('kw-tab-next'));
             if (!track) track = document.getElementById('kw-tab-track');
-            if (prevBtn && track && !/** @type {any} */ (prevBtn)._kwBound) {
-                /** @type {any} */ (prevBtn)._kwBound = true;
+            if (prevBtn && track && ! (prevBtn)._kwBound) {
+                 (prevBtn)._kwBound = true;
                 addEvent(prevBtn, 'click', function(e) {
-                    // @ts-ignore
+
                     if (e && e.preventDefault) e.preventDefault();
                     if (track) track.scrollLeft -= 140;
                     updateNavButtons();
                 });
             }
-            if (nextBtn && track && !/** @type {any} */ (nextBtn)._kwBound) {
-                /** @type {any} */ (nextBtn)._kwBound = true;
+            if (nextBtn && track && ! (nextBtn)._kwBound) {
+                 (nextBtn)._kwBound = true;
                 addEvent(nextBtn, 'click', function(e) {
-                    // @ts-ignore
+
                     if (e && e.preventDefault) e.preventDefault();
                     if (track) track.scrollLeft += 140;
                     updateNavButtons();
@@ -544,8 +473,8 @@
             }
             if (track) {
                 addEvent(track, 'scroll', updateNavButtons);
-                if (tabTabBar && !/** @type {any} */ (tabTabBar)._kwWheelBound) {
-                    /** @type {any} */ (tabTabBar)._kwWheelBound = true;
+                if (tabTabBar && ! (tabTabBar)._kwWheelBound) {
+                     (tabTabBar)._kwWheelBound = true;
                     /**
                      * @param {any} [e]
                      */
@@ -594,7 +523,7 @@
 
             var isWebMode = (window.location.protocol !== 'file:') || (document.body && document.body.getAttribute('data-web-mode') === 'true');
             var sessZidEl = document.getElementById('session-zid');
-            var curZid = sessZidEl ? (sessZidEl.textContent || /** @type {HTMLElement} */ (sessZidEl).innerText || "").trim() : "";
+            var curZid = sessZidEl ? (sessZidEl.textContent ||  (sessZidEl).innerText || "").trim() : "";
             if (!curZid && w.AppState && w.AppState.bootstrap) {
                 curZid = w.AppState.bootstrap.session_zid || w.AppState.bootstrap.zid || (w.AppState.bootstrap.session_data && (w.AppState.bootstrap.session_data.session_zid || w.AppState.bootstrap.session_data.zid)) || "";
             }
@@ -636,8 +565,8 @@
         }
 
         function updateNavButtons() {
-            var prevBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-tab-prev'));
-            var nextBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-tab-next'));
+            var prevBtn = (document.getElementById('kw-tab-prev'));
+            var nextBtn = (document.getElementById('kw-tab-next'));
             var track = document.getElementById('kw-tab-track');
             if (!track || !prevBtn || !nextBtn) return;
             var sl = track.scrollLeft;
@@ -678,13 +607,19 @@
 
         /**
          * @param {HTMLElement|Element|null} tbody
-         * @param {Array<WordItem>} words
+         * @param {Array<VocabularyRow>} words
          * @param {Object<string, boolean>} [selectedMap]
          */
-        function bindCardWordsToTbody(tbody, words, selectedMap) {
+        function rowIsSelected(rowId, active, selectedMap, selectedIds) {
+            var ids = selectedIds || (active && active.selected_ids);
+            if (ids) return ids.map(String).indexOf(rowId) !== -1;
+            return !!(selectedMap && Object.prototype.hasOwnProperty.call(selectedMap, rowId));
+        }
+
+        function bindCardWordsToTbody(tbody, words, selectedMap, selectedIds) {
             if (!tbody || !words) return;
-            var w = /** @type {any} */ (window);
-            /** @type {Array<string>} */
+            var w = (window);
+
             var htmlParts = [];
             for (var i = 0; i < words.length; i++) {
                 var wordObj = words[i];
@@ -692,7 +627,7 @@
                 var tOrdStr = String(wordObj.token_order !== undefined && wordObj.token_order !== null ? wordObj.token_order : rIdStr);
                 var wLemNorm = (wordObj.lemma || '').trim().toLowerCase();
                 var active = cards.find(function(card) { return card.seq_num === activeTabSeq; });
-                var isSel = active ? (active.selected_ids || []).map(String).indexOf(rIdStr) !== -1 : !!(selectedMap && selectedMap.hasOwnProperty(rIdStr));
+                var isSel = rowIsSelected(rIdStr, active, selectedMap, selectedIds);
                 if (isSel) {
                     if (selectedMap) selectedMap[rIdStr] = true;
                     if (wordObj.all_row_ids) {
@@ -710,7 +645,7 @@
                     if (isMatchingRow) {
                         var updatedTrans = (appRow.trans !== undefined && appRow.trans !== "") ? appRow.trans : ((appRow.WordDestination !== undefined && appRow.WordDestination !== "") ? appRow.WordDestination : appRow.word_translation);
                         if (wordObj.all_row_ids && wordObj.all_row_ids.length > 1 && w.AppState && w.AppState.rows) {
-                            /** @type {Array<string>} */
+
                             var rolledTrans = [];
                             var parentLem = (wordObj.lemma || (appRow ? appRow.lemma : '') || '').trim().toLowerCase();
                             for (var aidx = 0; aidx < wordObj.all_row_ids.length; aidx++) {
@@ -817,7 +752,7 @@
                     var provTitle = transTooltip ? (' title="' + escapeHtml(transTooltip) + '"') : '';
                     var provAttr = provData + provTitle;
                     var allIdsAttr = (wordObj.all_row_ids && wordObj.all_row_ids.length > 0) ? (' data-all-row-ids="' + escapeHtml(wordObj.all_row_ids.join(',')) + '"') : '';
-                    var activeLang = (w.AppConfig ? w.AppConfig.language : 'de') || 'de';
+                    var activeLang = 'de';
                     var cardSentenceText = (wordObj.sentence_text || (w.AppState ? w.AppState.sourceText : '') || '');
                     var infTooltip = wordObj.inflected_tooltip || (appRow && appRow.inflected_tooltip) || formatInflectedTooltip(cardSentenceText, wordObj.inflected || '', wordObj.token_order || rIdStr, wordObj.lemma || '');
                     var lemTooltip = formatLemmaTooltip(wordObj.lemma || '', wordObj.gender || '', activeLang, wordObj.pos || '');
@@ -838,7 +773,7 @@
                         : '';
 
                     htmlParts.push(
-                        '<tr data-row-id="' + escapeHtml(rIdStr) + '"' + allIdsAttr + ' data-token-order="' + escapeHtml(String(wordObj.token_order || rIdStr)) + '"' + occAttr + ' data-sentence-idx="' + escapeHtml(String(wordObj.sentence_idx || '1')) + '" data-selected="' + selAttr + '" class="' + hlClass + '">' +
+                        '<tr data-row-id="' + escapeHtml(rIdStr) + '"' + allIdsAttr + ' data-token-order="' + escapeHtml(String(wordObj.token_order || rIdStr)) + '"' + occAttr + ' data-sentence-idx="' + escapeHtml(String(wordObj.sentence_idx || '1')) + '" data-selected="' + selAttr + '" data-filter-hidden="' + (isSel ? '0' : '1') + '" class="' + hlClass + '">' +
                         '<td class="editable col-inflected" data-col="WordSourceInflectedForm"' + infTitleAttr + '><div class="scrollable-cell">' + escapeHtml(wordObj.inflected || '') + '</div></td>' +
                         '<td class="editable col-lemma" data-col="WordSource"' + lemTitleAttr + '><div class="scrollable-cell">' + escapeHtml(wordObj.lemma || '') + '</div></td>' +
                         '<td class="editable col-translation" data-col="WordDestination"' + provAttr + '><div class="scrollable-cell"' + provAttr + '>' + transDisplay + '</div></td>' +
@@ -857,7 +792,7 @@
                 if (lt) addClass(lt, 'kw-filter-selected-only');
             }
             if (typeof w.rebindTableRows === 'function') {
-                w.rebindTableRows();
+                w.rebindTableRows(selectedIds);
             }
             if (typeof updateEmptySelectionState === 'function') {
                 updateEmptySelectionState();
@@ -865,7 +800,7 @@
         }
 
         function updateActiveTabTranslation() {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             var transContainer = document.getElementById('translation-container');
             if (!transContainer || !cards || cards.length === 0) return;
             for (var c = 0; c < cards.length; c++) {
@@ -876,7 +811,7 @@
                         if (cards.length === 1 || activeSentenceIdx === 0) {
                             tText = rawText;
                         } else {
-                            /** @type {Array<string>} */
+
                             var lines = [];
                             if (rawText.indexOf('<div') !== -1 || rawText.indexOf('</div') !== -1) {
                                 var tmpDiv = document.createElement('div');
@@ -884,7 +819,7 @@
                                 var childDivs = tmpDiv.querySelectorAll('div');
                                 if (childDivs.length > 0) {
                                     for (var cd = 0; cd < childDivs.length; cd++) {
-                                        lines.push((childDivs[cd].textContent || /** @type {HTMLElement} */ (childDivs[cd]).innerText || '').trim());
+                                        lines.push((childDivs[cd].textContent ||  (childDivs[cd]).innerText || '').trim());
                                     }
                                 }
                             }
@@ -903,7 +838,7 @@
 
                     var isSingleMode = (typeof getTextMode === 'function' && getTextMode() === 'single');
                     var srcContainer = document.getElementById('source-container');
-                    var srcText = srcContainer ? (srcContainer.textContent || /** @type {HTMLElement} */ (srcContainer).innerText || '') : '';
+                    var srcText = srcContainer ? (srcContainer.textContent ||  (srcContainer).innerText || '') : '';
                     if (srcText.indexOf(String.fromCharCode(10)) !== -1 || srcText.indexOf(String.fromCharCode(13)) !== -1) {
                         isSingleMode = false;
                     }
@@ -922,7 +857,7 @@
                             }
                         }
                         if (filledCount > 1) {
-                            /** @type {Array<string>} */
+
                             var slots = new Array(maxSentenceIdx);
                             for (var si = 0; si < maxSentenceIdx; si++) {
                                 slots[si] = "";
@@ -951,33 +886,8 @@
                         transContainer.removeAttribute('data-sentence-idx');
                         transContainer.removeAttribute('data-line-idx');
                     }
-                    transContainer.innerHTML = getTranslationHtml(tText);
-                    var tabProv = (w.AppState ? (w.AppState.textProvenance || w.AppState.text_provenance || w.AppState.provenance) : null) || transContainer.getAttribute('data-provenance');
-                    if (tabProv) {
-                        var tabTitle = formatProvenanceTooltip(tabProv);
-                        if (tabTitle) {
-                            transContainer.setAttribute('title', tabTitle);
-                            var tabWords = transContainer.querySelectorAll('span.word, div');
-                            for (var tw = 0; tw < tabWords.length; tw++) {
-                                tabWords[tw].setAttribute('data-provenance', tabProv);
-                                tabWords[tw].setAttribute('title', tabTitle);
-                            }
-                        }
-                    }
-                    if (tText && tText.trim()) {
-                        if (typeof w.tokenizeTranslation === 'function') {
-                            w.tokenizeTranslation();
-                        }
-                        if (typeof w.buildLcIndex === 'function') {
-                            w.buildLcIndex();
-                        }
-                        if (typeof w.wireMvpEvents === 'function') {
-                            w.wireMvpEvents();
-                        }
-                        if (typeof w.updateBidirectionalHighlights === 'function') {
-                            w.updateBidirectionalHighlights();
-                        }
-                    }
+                    w.TranslationView.project(getTranslationHtml(tText), String(activeSentenceIdx));
+                    w.applyTextProvenance(transContainer);
                     break;
                 }
             }
@@ -989,8 +899,8 @@
          */
         function switchToTab(seqOrSentIdx, isImmediate) {
             if (!cards || cards.length === 0) return;
-            var w = /** @type {any} */ (window);
-            /** @type {WorkspaceCard|null} */
+            var w = (window);
+
             var targetCard = null;
             for (var i = 0; i < cards.length; i++) {
                 if (cards[i].seq_num === seqOrSentIdx) {
@@ -1075,12 +985,12 @@
                     var chunks = srcContainer.querySelectorAll('.kw-sentence-chunk');
                     if (chunks.length > 0) {
                         for (var c = 0; c < chunks.length; c++) {
-                            /** @type {HTMLElement} */ (chunks[c]).style.display = '';
+                             (chunks[c]).style.display = '';
                         }
                     } else {
                         var spans = srcContainer.querySelectorAll('[data-sentence-idx]');
                         for (var s = 0; s < spans.length; s++) {
-                            /** @type {HTMLElement} */ (spans[s]).style.display = '';
+                             (spans[s]).style.display = '';
                         }
                     }
                 }
@@ -1095,9 +1005,9 @@
                         for (var c2 = 0; c2 < chunks2.length; c2++) {
                             var chunkSentIdx = chunks2[c2].getAttribute('data-sentence-idx');
                             if (chunkSentIdx && chunkSentIdx !== sentStr) {
-                                /** @type {HTMLElement} */ (chunks2[c2]).style.display = 'none';
+                                 (chunks2[c2]).style.display = 'none';
                             } else {
-                                /** @type {HTMLElement} */ (chunks2[c2]).style.display = '';
+                                 (chunks2[c2]).style.display = '';
                             }
                         }
                     } else {
@@ -1105,9 +1015,9 @@
                         for (var s2 = 0; s2 < spans2.length; s2++) {
                             var spanSentIdx = spans2[s2].getAttribute('data-sentence-idx');
                             if (spanSentIdx && spanSentIdx !== sentStr) {
-                                /** @type {HTMLElement} */ (spans2[s2]).style.display = 'none';
+                                 (spans2[s2]).style.display = 'none';
                             } else {
-                                /** @type {HTMLElement} */ (spans2[s2]).style.display = '';
+                                 (spans2[s2]).style.display = '';
                             }
                         }
                     }
@@ -1136,10 +1046,10 @@
                 var sentStr2 = String(activeSentenceIdx);
                 for (var r = 0; r < tableRows.length; r++) {
                     if (activeSentenceIdx === 0) {
-                        /** @type {HTMLElement} */ (tableRows[r]).style.display = '';
+                         (tableRows[r]).style.display = '';
                     } else {
                         var rowSentIdx = tableRows[r].getAttribute('data-sentence-idx');
-                        /** @type {HTMLElement} */ (tableRows[r]).style.display = (rowSentIdx && rowSentIdx === sentStr2) ? '' : 'none';
+                         (tableRows[r]).style.display = (rowSentIdx && rowSentIdx === sentStr2) ? '' : 'none';
                     }
                 }
                 if (typeof w.rebindTableRows === 'function') {
@@ -1191,14 +1101,14 @@
          * @param {WorkspaceCard} targetCard
          */
         function updateTitle(targetCard) {
-            var w = /** @type {any} */ (window);
+            var w = (window);
             var lang = '';
             try {
                 lang = getSessionLang();
             } catch (e) {
                 lang = 'unknown';
             }
-            var tMode = getTextMode() || 'single';
+            var tMode = getTextMode();
             var cardTsv = (targetCard && targetCard.tsv_filename) ? targetCard.tsv_filename : '';
             if (!cardTsv) {
                 if (targetCard && targetCard.zid) {
@@ -1225,7 +1135,7 @@
             var links = document.querySelectorAll("link[rel*='icon']");
             if (links && links.length > 0) {
                 for (var k = 0; k < links.length; k++) {
-                    /** @type {HTMLLinkElement} */ (links[k]).href = iconUrl;
+                     (links[k]).href = iconUrl;
                 }
             } else {
                 var link = document.createElement('link');
@@ -1268,7 +1178,7 @@
          */
         function updateSentences(sents) {
             if (!sents || !cards || cards.length === 0) return;
-            var w = /** @type {any} */ (window);
+            var w = (window);
             if (Array.isArray(sents)) {
                 for (var i = 0; i < sents.length; i++) {
                     var s = sents[i];
@@ -1283,7 +1193,7 @@
                     }
                 }
             } else if (typeof sents === 'object') {
-                var sentsObj = /** @type {Object<string, any>} */ (sents);
+                var sentsObj = (sents);
                 var isZeroBased = (sentsObj[0] !== undefined || sentsObj['0'] !== undefined);
                 for (var kRaw in sentsObj) {
                     if (Object.prototype.hasOwnProperty.call(sentsObj, kRaw)) {
@@ -1305,7 +1215,7 @@
             }
             var isSingleMode = (typeof getTextMode === 'function' && getTextMode() === 'single');
             var srcContainer = document.getElementById('source-container');
-            var srcText = srcContainer ? (srcContainer.textContent || /** @type {HTMLElement} */ (srcContainer).innerText || '') : '';
+            var srcText = srcContainer ? (srcContainer.textContent ||  (srcContainer).innerText || '') : '';
             if (srcText.indexOf(String.fromCharCode(10)) !== -1 || srcText.indexOf(String.fromCharCode(13)) !== -1) {
                 isSingleMode = false;
             }
@@ -1328,7 +1238,7 @@
                     }
                     var c3Trans = c3Card.translated_text;
                     if (filledCount > 1 && !isSingleMode) {
-                        /** @type {Array<string>} */
+
                         var slots = new Array(maxSentenceIdx);
                         for (var si = 0; si < maxSentenceIdx; si++) {
                             slots[si] = "";
@@ -1360,7 +1270,7 @@
             }
             for (var c4 = 0; c4 < cards.length; c4++) {
                 if (cards[c4].words) {
-                    var cWords = /** @type {Array<WordItem>} */ (cards[c4].words);
+                    var cWords = (cards[c4].words);
                     for (var wIdx = 0; wIdx < cWords.length; wIdx++) {
                         cWords[wIdx].row_html = null;
                     }
@@ -1371,7 +1281,7 @@
 
         function rebindActiveTab() {
             var tb = document.querySelector('#lemma-table tbody');
-            /** @type {WorkspaceCard|null} */
+
             var targetCard = null;
             for (var i = 0; i < cards.length; i++) {
                 if (cards[i].seq_num === activeTabSeq) {
@@ -1412,8 +1322,8 @@
     })();
 
     // Expose on global window object
-    /** @type {any} */ (window).WorkspaceTabs = WorkspaceTabs;
-    /** @type {any} */ (window).bindCardWordsToTbody = WorkspaceTabs.bindCardWordsToTbody;
+     (window).WorkspaceTabs = WorkspaceTabs;
+     (window).bindCardWordsToTbody = WorkspaceTabs.bindCardWordsToTbody;
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = WorkspaceTabs;

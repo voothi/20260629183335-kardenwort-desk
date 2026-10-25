@@ -55,6 +55,14 @@ def test_reworked_retext_functions_meet_complexity_ceiling():
     assert max(measured.values()) <= 7, measured
 
 
-def test_bundled_javascript_retains_check_annotations():
+def test_bundled_javascript_has_no_compiler_coupling():
+    # The accepted plain-JavaScript requirement supersedes the old @ts-check gate.
+    # Behavioral tests remain unchanged; this checks the revised architecture contract.
+    root = ROOT / 'web/js'
+    assert not list(root.rglob('*.d.ts'))
+    assert not list(root.rglob('jsconfig.json'))
     for path in (ROOT / 'web/js').rglob('*.js'):
-        assert path.read_text(encoding='utf-8').splitlines()[0] == '// @ts-check', path
+        source = path.read_text(encoding='utf-8')
+        assert '@ts-check' not in source and '@ts-ignore' not in source and '@ts-nocheck' not in source, path
+        assert '<reference path=' not in source and '@type ' not in source, path
+        assert "import('" not in source and 'import("' not in source, path

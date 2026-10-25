@@ -44,6 +44,12 @@ WATCHDOG = ['tests/test_container_watchdog_lifecycle.py', 'tests/test_watchdog_r
             'tests/test_web_action_toolbar.py',
             'tests/test_release_save_convergence.py::test_watchdog_cleanup_keeps_persistent_membership_stream',
             'tests/test_release_save_convergence.py::test_disconnected_stream_callbacks_cannot_change_current_session']
+OWNERSHIP = ['tests/test_intent_architecture.py', 'tests/test_static_web_shell.py',
+             'tests/test_clean_translation_view.py', 'tests/test_table_cell_tooltips.py',
+             'tests/test_workspace_tab_container.py', 'tests/test_release_component_ownership.py',
+             'tests/test_release_audit_boundaries.py::test_canonical_grammar_browser_server_parity',
+             'tests/test_release_audit_boundaries.py::test_pairwise_shell_preferences',
+             'tests/test_release_audit_boundaries.py::test_long_translation_update_preserves_active_layout']
 
 
 def digest(path):
@@ -55,6 +61,7 @@ def copy_checkout(target):
     names.append('tests/test_release_boundary_contracts.py')
     names.append('tests/test_release_membership_reads.py')
     names.append('tests/test_release_save_convergence.py')
+    names.append('tests/test_release_component_ownership.py')
     for name in names:
         source = ROOT / name
         if not source.is_file():
@@ -104,6 +111,19 @@ sys.addaudithook(guard)
     (checkout / 'sitecustomize.py').write_text(guard, encoding='utf-8')
 
 
+def configure_fixture_browser(checkout):
+    """Windows can allocate ephemeral fixture ports blocked by Chromium."""
+    target = checkout / 'conftest.py'
+    assert not target.exists(), 'Do not overwrite a repository root conftest'
+    target.write_text('''import pytest
+
+@pytest.fixture(scope="session")
+def browser_type_launch_args(browser_type_launch_args):
+    return dict(browser_type_launch_args, args=[*browser_type_launch_args.get("args", []),
+        "--explicitly-allowed-ports=5060,5061,6000,6566,6665,6666,6667,6668,6669,6697,10080"])
+''', encoding='utf-8')
+
+
 @contextmanager
 def temporary_checkout(scratch):
     temporary = tempfile.TemporaryDirectory(prefix='20261025104755-contracts-', dir=scratch)
@@ -111,23 +131,23 @@ def temporary_checkout(scratch):
     try:
         yield checkout
     finally:
-        try:
-            temporary.cleanup()
-        except PermissionError:
-            # Windows can release a browser/bridge working-directory handle
-            # after pytest exits. Retry only removal of the now-empty root.
-            deadline = time.monotonic() + 10
-            while checkout.exists():
-                try:
-                    checkout.rmdir()
-                except PermissionError:
-                    if time.monotonic() >= deadline:
-                        raise
+        # Windows may release a browser handle just after pytest exits.
+        # This target was created here and must still be inside scratch.
+        assert checkout.resolve().parent == scratch.resolve()
+        assert not checkout.is_junction() and not checkout.is_symlink()
+        deadline = time.monotonic() + 10
+        while checkout.exists():
+            try:
+                temporary.cleanup()
+            except OSError as error:
+                if error.winerror not in (5, 32, 145) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(.05)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('suite', choices=('contracts', 'controls', 'membership', 'storage', 'convergence', 'watchdog'))
+    parser.add_argument('suite', choices=('contracts', 'controls', 'membership', 'storage', 'convergence', 'watchdog', 'ownership'))
     parser.add_argument('--filter', help='Optional pytest expression for fixture diagnosis')
     parser.add_argument('--evidence-dir', type=Path, default=EVIDENCE)
     parser.add_argument('--run-label', default='', help='Unique suffix for retained run evidence')
@@ -148,7 +168,8 @@ def main():
         assert checkout.resolve().parent == scratch.resolve()
         copy_checkout(checkout)
         guard_external_databases(checkout)
-        selected = {'contracts': CONTRACTS, 'controls': CONTROLS, 'membership': MEMBERSHIP, 'storage': STORAGE, 'convergence': CONVERGENCE, 'watchdog': WATCHDOG}[args.suite]
+        configure_fixture_browser(checkout)
+        selected = {'contracts': CONTRACTS, 'controls': CONTROLS, 'membership': MEMBERSHIP, 'storage': STORAGE, 'convergence': CONVERGENCE, 'watchdog': WATCHDOG, 'ownership': OWNERSHIP}[args.suite]
         command = [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', *selected,
                    '--tb=short', '--basetemp=' + str(checkout / 'pytest-temp'),
                    '--junitxml=' + str(evidence / (evidence_name + '.xml'))]
@@ -163,7 +184,11 @@ def main():
                         copied_legacy_test_sha256=digest(checkout / 'tests/test_same_lemma_toggle.py'),
                         protected_db_before=before, protected_db_after=digest(protected))
         metadata['source_sha256'] = {name: digest(checkout / name) for name in
-            ('web/js/app.js', 'web/js/services/sse.js', 'kardenwort_controller.py', 'kardenwort_events.py', 'tests/test_release_save_convergence.py')}
+            ('web/js/app.js', 'web/js/types.js', 'web/js/state/store.js', 'web/js/services/sse.js',
+             'web/js/components/SourceViewer.js', 'web/js/components/TranslationView.js',
+             'web/js/components/LemmaTable.js', 'web/js/components/WorkspaceTabs.js',
+             'kardenwort_controller.py', 'kardenwort_events.py', 'tests/test_release_save_convergence.py',
+             'tests/test_release_component_ownership.py')}
         metadata['native_host_sha256'] = digest(Path(env['KARDENWORT_NATIVE_REPO']) / 'kardenwort-window/kardenwort-window.ahk')
         guard_log = checkout / 'database-guard.jsonl'
         metadata['external_database_attempts'] = [json.loads(line) for line in guard_log.read_text(encoding='utf8').splitlines()] if guard_log.exists() else []

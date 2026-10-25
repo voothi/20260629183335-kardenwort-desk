@@ -6,9 +6,6 @@
  */
 
 /**
- * @typedef {import('../types.js').SessionState} SessionState
- * @typedef {import('../types.js').UpdatePayload} UpdatePayload
- * @typedef {import('../types.js').UIConfig} UIConfig
  *
  * @typedef {Object} Action
  * @property {string} type - Action type discriminator
@@ -18,7 +15,7 @@
  */
 
 (function () {
-    /** @type {SessionState & {selectedLemmas: Record<string, boolean>}} */
+
     var state = {
         zid: '',
         session_zid: '',
@@ -45,9 +42,8 @@
         activeTabSeq: null
     };
 
-    /** @type {Set<StateListener>} */
     var listeners = new Set();
-    /** @type {string|null} */
+
     var initializedSession = null;
 
     /**
@@ -218,12 +214,12 @@
 
         var prov = data.text_provenance || data.textProvenance || payload.text_provenance;
         if (prov) {
-            // @ts-ignore
+
             state.textProvenance = prov;
         }
 
         if (Array.isArray(data.sentence_cards)) {
-            /** @type {Array<any>} */
+
             var currentCards = state.sentence_cards || [];
             if (!currentCards.length) {
                 state.sentence_cards = data.sentence_cards;
@@ -253,7 +249,7 @@
     };
 
     // Expose on global window object
-    var w = /** @type {any} */ (typeof window !== 'undefined' ? window : null);
+    var w = (typeof window !== 'undefined' ? window : null);
     if (w) {
         w.AppStore = Store;
         Object.assign(state, w.AppState || {});

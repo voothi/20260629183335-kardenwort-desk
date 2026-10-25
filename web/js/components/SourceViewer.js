@@ -1,50 +1,41 @@
-/// <reference path="../host.d.ts" />
+
 
 /**
  * @file SourceViewer.js
- * Autonomous typed vanilla client component for rendering source text chunks,
+ * Shared domain shapes are documented once in ../types.js.
+ * Autonomous JavaScript client component for rendering source text chunks,
  * token spans, hover peer highlights, and RMB context triggers.
  */
 
-/**
- * @typedef {import('../types.js').SessionState} SessionState
- * @typedef {import('../types.js').Token} Token
- */
-
 (function () {
-    /**
-     * @param {string} str
-     * @returns {string}
-     */
-    function escapeHtml(str) {
-        var w = /** @type {any} */ (typeof window !== 'undefined' ? window : null);
-        if (w && typeof w.escapeHtml === 'function') {
-            return w.escapeHtml(str);
-        }
-        throw new Error('Required canonical escapeHtml helper is unavailable');
+    function sourcePayload(action) {
+        var payload = action && action.payload;
+        return payload && payload.data ? payload.data : payload;
     }
 
-    /**
-     * Splits text into alternating non-word and word chunks.
-     * @param {string} text
-     * @returns {Array<string>}
-     */
-    function splitTextTokens(text) {
-        var rx = /([a-zA-Z0-9'\u00C0-\u024F\u0400-\u04FF\u0500-\u052F\u1E00-\u1EFF]+)/g;
-        return text.split(rx);
+    function sourceProjectionRequested(container, payload) {
+        return !!(sourceIsPending(container) || (payload && (payload.source_text || payload.sourceText)));
+    }
+
+    function sourceIsPending(container) {
+        return !!(container.querySelector('[data-pending="true"], .skeleton-loader') || container.classList.contains('skeleton-loader'));
+    }
+
+    function cleanSourceText(node) {
+        return (node.textContent || '').trim().replace(/\s+/g, ' ');
     }
 
     /**
      * SourceViewer component projection
      */
     var SourceViewer = {
-        /** @type {HTMLElement|null} */
+
         container: null,
-        /** @type {boolean} */
+
         _mounted: false,
-        /** @type {(() => void)|null} */
+
         _unsubscribe: null,
-        /** @type {EventListener|null} */
+
         _contextHandler: null,
 
         /**
@@ -56,7 +47,7 @@
             if (this._mounted && this.container === next) return;
             this.dispose();
             if (typeof target === 'string') {
-                this.container = /** @type {HTMLElement|null} */ (document.querySelector(target));
+                this.container = (document.querySelector(target));
             } else {
                 this.container = target;
             }
@@ -72,19 +63,18 @@
 
         /**
          * @param {SessionState} state
-         * @param {{payload?: import('../types.js').UpdatePayload}|null} action
+         * @param {{payload?: UpdatePayload}|null} action
          */
         project: function (state, action) {
             var text = state.sourceText;
             if (text === null || text === undefined || !this.container) return;
-            var pending = this.container.querySelector('[data-pending="true"]');
-            var payload = action && action.payload;
-            if (payload && payload.data) payload = payload.data;
-            if (!pending && !(payload && (payload.source_text || payload.sourceText))) return;
+            if (!sourceProjectionRequested(this.container, sourcePayload(action))) return;
             var probe = document.createElement('div');
             probe.innerHTML = text;
-            var clean = /** @param {Node} node */ function (node) { return (node.textContent || '').trim().replace(/\s+/g, ' '); };
-            if (!pending && clean(this.container) === clean(probe)) return;
+            var pending = sourceIsPending(this.container);
+            if (!pending && cleanSourceText(this.container) === cleanSourceText(probe)) return;
+            this.container.classList.remove('skeleton-loader');
+            this.container.removeAttribute('data-pending');
             this.container.innerHTML = text;
             window.tokenizeSource();
             window.rebindTokenSpans();
@@ -107,37 +97,9 @@
         render: function (state) {
             if (!this.container) return;
             var text = state.source_text || '';
-            if (!text && this.container.children.length > 0) {
-                // If DOM already contains pre-rendered chunks or spans, preserve them
-                return;
-            }
-
-            var parts = splitTextTokens(text);
-            var html = '';
-            var wordIdx = 0;
-            for (var k = 0; k < parts.length; k++) {
-                var part = parts[k];
-                if (!part) continue;
-                if (k % 2 === 1) {
-                    var lc = part.toLowerCase();
-                    html += '<span class="word ' + 'highlight-orange" data-word="' + escapeHtml(part) +
-                        '" data-word-idx="' + wordIdx +
-                        '" data-order="' + wordIdx +
-                        '" data-token-order="' + wordIdx +
-                        '" data-lower-clean="' + escapeHtml(lc) +
-                        '" data-line-idx="0" data-sentence-idx="1">' + escapeHtml(part) + '</span>';
-                    wordIdx++;
-                } else {
-                    html += escapeHtml(part);
-                }
-            }
-            this.container.innerHTML = html;
-            var w = /** @type {any} */ (typeof window !== 'undefined' ? window : null);
-            if (w) {
-                if (typeof w.rebindTokenSpans === 'function') w.rebindTokenSpans();
-                if (typeof w.buildLcIndex === 'function') w.buildLcIndex();
-                if (typeof w.wireMvpEvents === 'function') w.wireMvpEvents();
-            }
+            if (!text && this.container.children.length) return;
+            if (typeof window.escapeHtml !== 'function') throw new Error('Required canonical escapeHtml helper is unavailable');
+            return this.project({sourceText: window.escapeHtml(text)}, {payload: {sourceText: text}});
         },
 
         /**
@@ -148,10 +110,10 @@
             var self = this;
 
             this._contextHandler = /** @param {Event} e */ function (e) {
-                var target = /** @type {HTMLElement|null} */ (e.target);
+                var target = (e.target);
                 var span = target && target.closest ? target.closest('#source-container span.word') : null;
                 if (span) {
-                    var w = /** @type {any} */ (window);
+                    var w = (window);
                     if (w.__deskHandleMouseUp) {
                         e.preventDefault();
                         return;
@@ -172,7 +134,7 @@
     };
 
     // Expose on global window object
-    var w = /** @type {any} */ (typeof window !== 'undefined' ? window : null);
+    var w = (typeof window !== 'undefined' ? window : null);
     if (w) {
         w.SourceViewer = SourceViewer;
     }

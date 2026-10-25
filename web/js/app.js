@@ -1,4 +1,4 @@
-/// <reference path="host.d.ts" />
+
 (function() {
     window.reserveTextRegions = function(reset) {
         ['source-container', 'translation-container'].forEach(function(id) {
@@ -41,10 +41,10 @@
     }
 
     function getSelectedRowIds() {
-        /** @type {number[]} */ var selected = [];
-        var /** @type {Desk.Membership} */ seen = {};
+         var selected = [];
+        var seen = {};
 
-        var checkedBoxes = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('.kw-tag-checkbox:checked'));
+        var checkedBoxes = (document.querySelectorAll('.kw-tag-checkbox:checked'));
         checkedBoxes.forEach(function (cb) {
             var rId = cb.getAttribute('data-row-id');
             if (rId === null || rId === '') {
@@ -59,7 +59,7 @@
             }
         });
 
-        var selectedRows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr.kw-row-selected, #lemma-table tbody tr.selected, #lemma-table tbody tr[data-selected="1"]'));
+        var selectedRows = (document.querySelectorAll('#lemma-table tbody tr.kw-row-selected, #lemma-table tbody tr.selected, #lemma-table tbody tr[data-selected="1"]'));
         selectedRows.forEach(function (row) {
             var rId = row.getAttribute('data-row-id');
             if (rId === null || rId === '') {
@@ -202,7 +202,7 @@
 
     window.kwExportSelected = function () {
         var selectedIds = getSelectedRowIds();
-        var btn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-export-btn'));
+        var btn = (document.getElementById('kw-export-btn'));
         if (btn) btn.disabled = true;
         setStatusMessage('Exporting...', false);
 
@@ -246,10 +246,9 @@
     }
     window.initSSE = initSSE;
 
-
     // Tokenization Helpers
-    /** @type {HTMLElement[]} */ var sourceSpansArray = [];
-    /** @type {HTMLElement[]} */ var transSpansArray = [];
+     var sourceSpansArray = [];
+     var transSpansArray = [];
     var isMvpIndexBuilt = false;
 
     window.sourceSpansArray = sourceSpansArray;
@@ -277,10 +276,106 @@
     }
     window.escapeHtml = escapeHtml;
 
+    function synchronizeOverviewTranslation() {
+        if (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards) return;
+        var cards = window.WorkspaceTabs.getCards() || [];
+        for (var i = 0; i < cards.length; i++) {
+            if (cards[i].sentence_idx === 0) {
+                cards[i].translated_text = window.AppState.translatedText || '';
+                return;
+            }
+        }
+    }
+
+    function activeSentenceTranslation() {
+        return window.WorkspaceTabs && window.WorkspaceTabs.getActiveSentenceIdx && window.WorkspaceTabs.getActiveSentenceIdx() > 0;
+    }
+
+    function translationPending(container) {
+        return container.querySelector('[data-pending="true"], .skeleton-loader') || container.classList.contains('skeleton-loader');
+    }
+
+    function translationFailed() {
+        return window.AppState.textTranslationFailed || window.AppState.textTranslationStatus === 'failed';
+    }
+
+    function translationTerminal(stage) {
+        return stage === 'finished' || window.AppState.isFinished || translationFailed();
+    }
+
+    function canonicalTranslationHtml(text) {
+        if (window.WorkspaceTabs && window.WorkspaceTabs.getTranslationHtml) return window.WorkspaceTabs.getTranslationHtml(text);
+        var clean = (text || '').trim();
+        if (clean.indexOf('<div') !== -1 || clean.indexOf('</div') !== -1) {
+            var probe = document.createElement('div');
+            probe.innerHTML = clean;
+            clean = (probe.textContent || '').trim();
+        }
+        return escapeHtml(clean);
+    }
+
+    function translationReplacementRequested(text, pending, stage) {
+        if (text) return true;
+        if (!pending && !translationFailed()) return false;
+        return translationTerminal(stage);
+    }
+
+    function projectGlobalTranslation(container, stage) {
+        var text = window.AppState.translatedText;
+        if (!translationReplacementRequested(text, translationPending(container), stage)) return false;
+        var changed = window.TranslationView.project(canonicalTranslationHtml(text), '0');
+        applyTextProvenance(container);
+        return changed;
+    }
+
+    function stateTextProvenance() {
+        var state = window.AppState;
+        return state ? (state.textProvenance || state.text_provenance || state.provenance) : null;
+    }
+
+    function scriptTextProvenance() {
+        var script = document.getElementById('sentence-provenance');
+        return script ? (script.textContent || script.innerText || '').trim() : '';
+    }
+
+    function liveTextProvenance() {
+        if (!window.AppState.translatedText || window.AppState.textTranslationFailed) return '';
+        var element = document.getElementById('text-base-provider');
+        var provider = element ? (element.textContent || element.innerText || '').trim() : 'google';
+        return 'live:' + (provider || 'google');
+    }
+
+    function applyTextProvenance(container) {
+        if (!container) throw new Error('Missing translation container');
+        var provenance = stateTextProvenance() || container.getAttribute('data-provenance') || scriptTextProvenance() || liveTextProvenance();
+        if (provenance) projectTextProvenance(container, provenance);
+    }
+
+    function projectTextProvenance(container, provenance) {
+        container.setAttribute('data-provenance', String(provenance));
+        var title = formatProvenanceTooltip(provenance);
+        if (!title) return;
+        container.setAttribute('title', String(title));
+        var words = container.querySelectorAll('span.word, div');
+        for (var i = 0; i < words.length; i++) {
+            words[i].setAttribute('data-provenance', String(provenance));
+            words[i].setAttribute('title', String(title));
+        }
+    }
+    window.applyTextProvenance = applyTextProvenance;
+
+    function isTextRegionNode(node) {
+        while (node) {
+            if (node.id === 'source-container' || node.id === 'translation-container') return true;
+            node = node.parentNode;
+        }
+        return false;
+    }
+
     function tokenizeSource() {
         var sc = document.getElementById('source-container');
         if (!sc) return;
-        if (/** @type {HTMLElement|null} */ (sc.querySelector('span.word'))) return;
+        if ( (sc.querySelector('span.word'))) return;
         var raw = (sc.textContent || '').trim();
         if (!raw) return;
         var parts = tokenizeText(raw);
@@ -302,11 +397,11 @@
     }
     window.tokenizeSource = tokenizeSource;
 
-    /** @param {string=} text @param {Desk.Word[]=} words */
+    /** @param {string=} text @param {VocabularyRow[]=} words */
     function tokenizeTranslation(text, words) {
         var tc = document.getElementById('translation-container');
         if (!tc) return;
-        if (/** @type {HTMLElement|null} */ (tc.querySelector('[data-pending="true"]')) || /** @type {HTMLElement|null} */ (tc.querySelector('.skeleton-loader')) || tc.classList.contains('skeleton-loader')) {
+        if ( (tc.querySelector('[data-pending="true"]')) ||  (tc.querySelector('.skeleton-loader')) || tc.classList.contains('skeleton-loader')) {
             return;
         }
         if (typeof text === 'string' && text) {
@@ -316,7 +411,7 @@
         var sc = document.getElementById('source-container');
         var maxSourceSent = 1;
         if (sc) {
-            var scChunks = /** @type {NodeListOf<HTMLElement>} */ (sc.querySelectorAll('.kw-sentence-chunk, span.word[data-sentence-idx]'));
+            var scChunks = (sc.querySelectorAll('.kw-sentence-chunk, span.word[data-sentence-idx]'));
             for (var scIdx = 0; scIdx < scChunks.length; scIdx++) {
                 var sVal = parseInt(String(scChunks[scIdx].getAttribute('data-sentence-idx')), 10);
                 if (!isNaN(sVal) && sVal > maxSourceSent) maxSourceSent = sVal;
@@ -332,7 +427,7 @@
         if (divs.length === 0) {
             var tcSentIdx = tc.getAttribute('data-sentence-idx') || '1';
             var tcLineIdx = tc.getAttribute('data-line-idx') || '0';
-            var firstChild = /** @type {HTMLElement|null} */ (tc.firstChild);
+            var firstChild = (tc.firstChild);
             if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
                 var childSpans = tc.getElementsByTagName('span');
                 for (var j = 0; j < childSpans.length; j++) {
@@ -369,7 +464,7 @@
             }
         } else if (divs.length === 1 && hasMultiSent) {
             var div = divs[0];
-            var firstChild = /** @type {HTMLElement|null} */ (div.firstChild);
+            var firstChild = (div.firstChild);
             if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
                 var childSpans = div.getElementsByTagName('span');
                 for (var j = 0; j < childSpans.length; j++) {
@@ -411,7 +506,7 @@
                 var divSentIdx = div.getAttribute('data-sentence-idx') || String(i + 1);
                 div.setAttribute('data-sentence-idx', String(divSentIdx));
                 div.setAttribute('data-line-idx', String(i));
-                var firstChild = /** @type {HTMLElement|null} */ (div.firstChild);
+                var firstChild = (div.firstChild);
                 if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
                     var childSpans = div.getElementsByTagName('span');
                     for (var j = 0; j < childSpans.length; j++) {
@@ -444,34 +539,7 @@
             }
         }
 
-        // Provenance handling
-        var effProv = (window.AppState ? (window.AppState.textProvenance || window.AppState.text_provenance || window.AppState.provenance) : null) || tc.getAttribute('data-provenance');
-        if (!effProv) {
-            var provScript = document.getElementById('sentence-provenance');
-            if (provScript) {
-                var sProv = (provScript.textContent || provScript.innerText || '').trim();
-                if (sProv) effProv = sProv;
-            }
-        }
-        if (!effProv && window.AppState && window.AppState.translatedText && !window.AppState.textTranslationFailed) {
-            var provEl = document.getElementById('text-base-provider');
-            var baseProv = provEl ? (provEl.textContent || provEl.innerText || '').trim() : 'google';
-            effProv = 'live:' + (baseProv || 'google');
-        }
-        if (effProv) {
-            var pTitle = (typeof formatProvenanceTooltip === 'function') ? formatProvenanceTooltip(effProv) : ((typeof window.formatProvenanceTooltip === 'function') ? window.formatProvenanceTooltip(effProv) : ('Translated via ' + effProv));
-            if (pTitle) {
-                tc.setAttribute('data-provenance', String(effProv));
-                tc.setAttribute('title', String(pTitle));
-                var spans = tc.getElementsByTagName('span');
-                for (var sIdx = 0; sIdx < spans.length; sIdx++) {
-                    if (spans[sIdx].classList && (spans[sIdx].classList.contains('word') || spans[sIdx].classList.contains('hl-mvp'))) {
-                        spans[sIdx].setAttribute('data-provenance', String(effProv));
-                        spans[sIdx].setAttribute('title', String(pTitle));
-                    }
-                }
-            }
-        }
+        applyTextProvenance(tc);
 
         buildLcIndex();
         if (typeof window.wireMvpEvents === 'function') {
@@ -488,11 +556,11 @@
         transSpansArray = [];
         var sc = document.getElementById('source-container');
         if (sc) {
-            var srcSpans = /** @type {NodeListOf<HTMLElement>} */ (sc.querySelectorAll('span.word'));
+            var srcSpans = (sc.querySelectorAll('span.word'));
             if (srcSpans.length > 0) isMvpIndexBuilt = true;
             for (var i = 0; i < srcSpans.length; i++) {
                 var span = srcSpans[i];
-                var chunk = /** @type {HTMLElement|null} */ (span.closest ? span.closest('.kw-sentence-chunk') : span.parentElement);
+                var chunk = (span.closest ? span.closest('.kw-sentence-chunk') : span.parentElement);
                 if (chunk && chunk.classList && chunk.classList.contains('kw-sentence-chunk') && chunk.style && chunk.style.display === 'none') {
                     continue;
                 }
@@ -509,10 +577,10 @@
         var tc = document.getElementById('translation-container');
         if (tc) {
             var tcSentIdx = tc.getAttribute('data-sentence-idx');
-            var transSpans = /** @type {NodeListOf<HTMLElement>} */ (tc.querySelectorAll('span.word, span.hl-mvp'));
+            var transSpans = (tc.querySelectorAll('span.word, span.hl-mvp'));
             for (var j = 0; j < transSpans.length; j++) {
                 var span = transSpans[j];
-                var chunk = /** @type {HTMLElement|null} */ (span.closest ? span.closest('div') : span.parentElement);
+                var chunk = (span.closest ? span.closest('div') : span.parentElement);
                 if (chunk && chunk.style && chunk.style.display === 'none') {
                     continue;
                 }
@@ -538,7 +606,7 @@
     window.buildLcIndex = buildLcIndex;
 
     function wireActionToolbar() {
-        var btnSame = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-same-lemma'));
+        var btnSame = (document.getElementById('kw-btn-same-lemma'));
         if (btnSame && !btnSame.__kw_bound) {
             btnSame.__kw_bound = true;
             btnSame.addEventListener('click', function (e) {
@@ -552,7 +620,7 @@
             }
         }
 
-        var btnFilter = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-filter-selected'));
+        var btnFilter = (document.getElementById('kw-btn-filter-selected'));
         if (btnFilter && !btnFilter.__kw_bound) {
             btnFilter.__kw_bound = true;
             btnFilter.addEventListener('click', function (e) {
@@ -568,7 +636,7 @@
             }
         }
 
-        var btnSave = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-save'));
+        var btnSave = (document.getElementById('kw-btn-save'));
         if (btnSave && !btnSave.__kw_bound) {
             btnSave.__kw_bound = true;
             btnSave.addEventListener('click', function (e) {
@@ -577,7 +645,7 @@
             });
         }
 
-        var btnUpdate = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-update'));
+        var btnUpdate = (document.getElementById('kw-btn-update'));
         if (btnUpdate && !btnUpdate.__kw_bound) {
             btnUpdate.__kw_bound = true;
             btnUpdate.addEventListener('click', function (e) {
@@ -586,7 +654,7 @@
             });
         }
 
-        var btnRetext = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-retext'));
+        var btnRetext = (document.getElementById('kw-btn-retext'));
         if (btnRetext && !btnRetext.__kw_bound) {
             btnRetext.__kw_bound = true;
             btnRetext.addEventListener('click', function (e) {
@@ -595,7 +663,7 @@
             });
         }
 
-        var btnReword = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-reword'));
+        var btnReword = (document.getElementById('kw-btn-reword'));
         if (btnReword && !btnReword.__kw_bound) {
             btnReword.__kw_bound = true;
             btnReword.addEventListener('click', function (e) {
@@ -604,7 +672,7 @@
             });
         }
 
-        var btnExport = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-export'));
+        var btnExport = (document.getElementById('kw-btn-export'));
         if (btnExport && !btnExport.__kw_bound) {
             btnExport.__kw_bound = true;
             btnExport.addEventListener('click', function (e) {
@@ -613,7 +681,7 @@
             });
         }
 
-        var btnHand = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-hand-tool'));
+        var btnHand = (document.getElementById('kw-btn-hand-tool'));
         if (btnHand && !btnHand.__kw_bound) {
             btnHand.__kw_bound = true;
             btnHand.addEventListener('click', function (e) {
@@ -622,7 +690,7 @@
             });
         }
 
-        var btnDelete = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-delete'));
+        var btnDelete = (document.getElementById('kw-btn-delete'));
         if (btnDelete && !btnDelete.__kw_bound) {
             btnDelete.__kw_bound = true;
             btnDelete.addEventListener('click', function (e) {
@@ -631,7 +699,7 @@
             });
         }
 
-        var btnLangYes = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-yes'));
+        var btnLangYes = (document.getElementById('kw-btn-lang-yes'));
         if (btnLangYes && !btnLangYes.__kw_bound) {
             btnLangYes.__kw_bound = true;
             btnLangYes.addEventListener('click', function (e) {
@@ -640,7 +708,7 @@
             });
         }
 
-        var btnLangNo = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-no'));
+        var btnLangNo = (document.getElementById('kw-btn-lang-no'));
         if (btnLangNo && !btnLangNo.__kw_bound) {
             btnLangNo.__kw_bound = true;
             btnLangNo.addEventListener('click', function (e) {
@@ -649,7 +717,7 @@
             });
         }
 
-        var btnLangCancel = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-cancel'));
+        var btnLangCancel = (document.getElementById('kw-btn-lang-cancel'));
         if (btnLangCancel && !btnLangCancel.__kw_bound) {
             btnLangCancel.__kw_bound = true;
             btnLangCancel.addEventListener('click', function (e) {
@@ -659,8 +727,6 @@
         }
     }
     window.wireActionToolbar = wireActionToolbar;
-
-
 
     function hydrateSession() {
         var bootstrapEl = document.getElementById('kardenwort-bootstrap');
@@ -779,7 +845,7 @@
             }
 
             // Hydrate Table
-            var tbody = /** @type {HTMLElement|null} */ (document.querySelector('#lemma-table tbody'));
+            var tbody = (document.querySelector('#lemma-table tbody'));
             if (isMismatch) {
                 if (tbody) tbody.innerHTML = '';
             } else if (tbody && !tbody.children.length && session.data_rows && session.data_rows.length) {
@@ -868,10 +934,10 @@
             }
 
             // Synchronize thead tag header with actual checkboxes
-            var theadTr = /** @type {HTMLElement|null} */ (document.querySelector('#lemma-table thead tr'));
+            var theadTr = (document.querySelector('#lemma-table thead tr'));
             if (theadTr) {
-                var existingTagTh = /** @type {HTMLElement|null} */ (theadTr.querySelector('.kw-tag-header'));
-                var hasCheckboxes = !!/** @type {HTMLElement|null} */ (document.querySelector('#lemma-table tbody .kw-tag-control, #lemma-table tbody .kw-tag-checkbox'));
+                var existingTagTh = (theadTr.querySelector('.kw-tag-header'));
+                var hasCheckboxes = !! (document.querySelector('#lemma-table tbody .kw-tag-control, #lemma-table tbody .kw-tag-checkbox'));
                 var shouldHaveTagHeader = SERVER_ENABLED && hasCheckboxes;
                 if (!shouldHaveTagHeader && existingTagTh) {
                     if (existingTagTh.parentNode) existingTagTh.parentNode.removeChild(existingTagTh);
@@ -946,8 +1012,6 @@
     }
     window.hydrateSession = hydrateSession;
 
-
-
     function isNativeAhkHost() {
         return window.location.protocol === 'file:' ||
                typeof window.ahkCall !== 'undefined' ||
@@ -966,11 +1030,11 @@
     /** @template {keyof HTMLElementEventMap} K @param {EventTarget} el @param {K} type @param {(this: HTMLElement, event: HTMLElementEventMap[K]) => void} fn */
     function addEvent(el, type, fn) {
         if (el.addEventListener) {
-            el.addEventListener(type, /** @type {EventListener} */ (fn), false);
+            el.addEventListener(type,  (fn), false);
         } else {
-            var legacy = /** @type {EventTarget & {attachEvent?: (name: string, listener: EventListener) => void} & Partial<Record<`on${string}`, EventListener>>} */ (el);
-            if (legacy.attachEvent) legacy.attachEvent('on' + type, /** @type {EventListener} */ (fn));
-            else legacy[/** @type {`on${string}`} */ ('on' + type)] = /** @type {EventListener} */ (fn);
+            var legacy = (el);
+            if (legacy.attachEvent) legacy.attachEvent('on' + type,  (fn));
+            else legacy[ ('on' + type)] = (fn);
         }
     }
 
@@ -1008,12 +1072,11 @@
         return false;
     }
 
-
     /** @param {string} providerName */
     function formatProviderSkeletonLabel(providerName) {
         if (!providerName) return "Loading...";
         var name = String(providerName).trim().toLowerCase();
-        var /** @type {Record<string,string>} */ map = {
+        var map = {
             'argos': 'Argos...',
             'google': 'Google...',
             'deepl': 'DeepL...',
@@ -1095,11 +1158,11 @@
         return res;
     }
 
-    /** @param {string} sentenceText @param {string} inflectedVal @param {Desk.RowId=} tokenOrder @param {string=} lemma */
+    /** @param {string} sentenceText @param {string} inflectedVal @param {number|string=} tokenOrder @param {string=} lemma */
     function formatInflectedTooltip(sentenceText, inflectedVal, tokenOrder, lemma) {
         if (!sentenceText) return (inflectedVal || "").trim();
         if (!inflectedVal) return sentenceText.trim();
-        var /** @type {Desk.Membership} */ targetIndices = {};
+        var targetIndices = {};
         if (tokenOrder !== undefined && tokenOrder !== null) {
             var tStr = String(tokenOrder).trim();
             if (tStr.indexOf('+') !== -1) {
@@ -1110,7 +1173,7 @@
                 }
             }
         }
-        var /** @type {Desk.Membership} */ targetWords = {};
+        var targetWords = {};
         var lemmaClean = (lemma && String(lemma).trim()) ? String(lemma).trim().toLowerCase() : null;
         var rawComponents = String(inflectedVal || "").split(',');
         for (var c = 0; c < rawComponents.length; c++) {
@@ -1511,10 +1574,10 @@
             if (tc) {
                 var isPendingTc = tc.classList.contains('skeleton-loader') ||
                                   tc.getAttribute('data-pending') === 'true' ||
-                                  /** @type {HTMLElement|null} */ (tc.querySelector('.skeleton-loader')) !== null ||
-                                  /** @type {HTMLElement|null} */ (tc.querySelector('[data-pending="true"]')) !== null;
+                                   (tc.querySelector('.skeleton-loader')) !== null ||
+                                   (tc.querySelector('[data-pending="true"]')) !== null;
                 if (isPendingTc) {
-                    var childSkels = /** @type {NodeListOf<HTMLElement>} */ (tc.querySelectorAll('.skeleton-loader, [data-pending="true"]'));
+                    var childSkels = (tc.querySelectorAll('.skeleton-loader, [data-pending="true"]'));
                     if (childSkels.length > 0) {
                         for (var i = 0; i < childSkels.length; i++) {
                             childSkels[i].textContent = label;
@@ -1542,7 +1605,7 @@
 
         // 3. Dynamically synchronize lemma translation skeletons in table rows
         if (isLemma) {
-            var tableSkels = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('td.col-translation .skeleton-loader, td.col-translation[data-pending="true"] .skeleton-loader, td[data-col="WordDestination"] .skeleton-loader, td[data-col="word_translation"] .skeleton-loader'));
+            var tableSkels = (document.querySelectorAll('td.col-translation .skeleton-loader, td.col-translation[data-pending="true"] .skeleton-loader, td[data-col="WordDestination"] .skeleton-loader, td[data-col="word_translation"] .skeleton-loader'));
             for (var k = 0; k < tableSkels.length; k++) {
                 var tSk = tableSkels[k];
                 tSk.textContent = label;
@@ -1575,15 +1638,15 @@
     window.getLemmaBaseProvider = getLemmaBaseProvider;
     window.updateActiveProvider = updateActiveProvider;
 
-    /** @type {Desk.Bookmark[]} */ var mvpBookmarks = [];
-    /** @type {HTMLElement[]} */ var sourceSpansArray = [];
-    /** @type {HTMLElement[]} */ var transSpansArray = [];
+     var mvpBookmarks = [];
+     var sourceSpansArray = [];
+     var transSpansArray = [];
     var mvpN = 3;
     var isMvpIndexBuilt = false;
     var mvpRainbowMode = true;
     var mvpHighlightEnabled = true;
 
-    var scriptEl = /** @type {HTMLScriptElement|null} */ (document.getElementById('hl-mvp-script'));
+    var scriptEl = (document.getElementById('hl-mvp-script'));
     if (scriptEl) {
         var dr = scriptEl.getAttribute('data-rainbow');
         if (dr !== null) mvpRainbowMode = (dr === '1' || dr === 'true');
@@ -1610,7 +1673,7 @@
                 removeClass(span, 'hl-mvp-pin-' + k);
             }
         }
-        var tRows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
+        var tRows = (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
         for (var rIdx = 0; rIdx < tRows.length; rIdx++) {
             var rEl = tRows[rIdx];
             removeClass(rEl, 'hl-mvp-pin');
@@ -1620,7 +1683,7 @@
         }
         for (var m = 0; m < mvpBookmarks.length; m++) {
             var b = mvpBookmarks[m];
-            /** @type {Desk.RowId[]} */ var mappedRowIds = [];
+             var mappedRowIds = [];
             if (b.srcSpan) {
                 addClass(b.srcSpan, 'hl-mvp-pin');
                 if (mvpRainbowMode && b.slot !== undefined) {
@@ -1674,8 +1737,6 @@
     }
     window.refreshBookmarkClasses = refreshBookmarkClasses;
 
-
-
     /** @param {number} idx @param {boolean} isSource */
     function getTargetIdx(idx, isSource) {
         var sourceArray = isSource ? sourceSpansArray : transSpansArray;
@@ -1717,12 +1778,12 @@
         }
 
         // Tier 2: Line / Cue Scope resolution
-        var /** @type {Desk.Membership} */ distinctSourceLines = {};
+        var distinctSourceLines = {};
         for (var i = 0; i < sourceSentPool.length; i++) {
             var l = sourceArray[sourceSentPool[i]].getAttribute('data-line-idx') || "0";
             distinctSourceLines[l] = true;
         }
-        var /** @type {Desk.Membership} */ distinctTargetLines = {};
+        var distinctTargetLines = {};
         for (var j = 0; j < targetSentPool.length; j++) {
             var l2 = targetArray[targetSentPool[j]].getAttribute('data-line-idx') || "0";
             distinctTargetLines[l2] = true;
@@ -1812,7 +1873,7 @@
                 rowId = this.getAttribute('data-row-id') || this.getAttribute('data-word-idx') || this.getAttribute('data-token-order');
             }
             if (rowId !== null && rowId !== undefined) {
-                var tr = /** @type {HTMLElement|null} */ (document.querySelector('#lemma-table tbody tr[data-row-id="' + rowId + '"]'));
+                var tr = (document.querySelector('#lemma-table tbody tr[data-row-id="' + rowId + '"]'));
                 if (tr) addClass(tr, 'hl-mvp-hover');
             }
             if (window.AppState && window.AppState.highlightSameLemma) {
@@ -1822,10 +1883,10 @@
                     var td = window.findTokenData(this);
                     if (td && td.lemma) wordLemma = String(td.lemma).trim().toLowerCase();
                 }
-                var /** @type {Desk.Membership} */ targetLemmas = {};
+                var targetLemmas = {};
                 if (wordLemma) targetLemmas[wordLemma] = true;
                 if (wordText) targetLemmas[wordText] = true;
-                var allWords = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#source-container span.word'));
+                var allWords = (document.querySelectorAll('#source-container span.word'));
                 for (var w = 0; w < allWords.length; w++) {
                     var otherSpan = allWords[w];
                     if (otherSpan === this) continue;
@@ -1866,14 +1927,14 @@
                 rowId = this.getAttribute('data-row-id') || this.getAttribute('data-word-idx') || this.getAttribute('data-token-order');
             }
             if (rowId !== null && rowId !== undefined) {
-                var tr = /** @type {HTMLElement|null} */ (document.querySelector('#lemma-table tbody tr[data-row-id="' + rowId + '"]'));
+                var tr = (document.querySelector('#lemma-table tbody tr[data-row-id="' + rowId + '"]'));
                 if (tr) removeClass(tr, 'hl-mvp-hover');
             }
             if (window.AppState && window.AppState.highlightSameLemma) {
                 if (typeof window.updateBidirectionalHighlights === 'function') {
                     window.updateBidirectionalHighlights();
                 } else {
-                    var peers = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#source-container span.word.lemma-peer-highlight'));
+                    var peers = (document.querySelectorAll('#source-container span.word.lemma-peer-highlight'));
                     for (var p = 0; p < peers.length; p++) {
                         removeClass(peers[p], 'lemma-peer-highlight');
                     }
@@ -1883,7 +1944,7 @@
         var handleClick = /** @param {MouseEvent} e @this {HTMLElement} */ function(e) {
             if (window.__selectableTextMode) return;
             ensureIndex();
-            e = /** @type {MouseEvent} */ (e || window.event);
+            e = (e || window.event);
             var btn = (e.button !== undefined) ? e.button : e.which;
             if (btn !== 0 && btn !== 1) return;
             var isSource = (this.getAttribute('data-mvp-type') === 'source');
@@ -1920,13 +1981,13 @@
                 var srcSpan = isSource ? sourceSpansArray[idx] : sourceSpansArray[targetIdx];
                 var transSpan = isSource ? transSpansArray[targetIdx] : transSpansArray[idx];
                 while (mvpBookmarks.length >= mvpN) {
-                    var oldest = /** @type {Desk.Bookmark} */ (mvpBookmarks.shift());
+                    var oldest = (mvpBookmarks.shift());
                     if (oldest.srcSpan) removeClass(oldest.srcSpan, 'hl-mvp-hover');
                     if (oldest.transSpan) removeClass(oldest.transSpan, 'hl-mvp-hover');
                 }
                 var slot = 0;
                 if (mvpRainbowMode) {
-                    var /** @type {Desk.Membership} */ usedSlots = {};
+                    var usedSlots = {};
                     for (var i = 0; i < mvpBookmarks.length; i++) {
                         if (mvpBookmarks[i].slot !== undefined) {
                             usedSlots[mvpBookmarks[i].slot] = true;
@@ -1964,7 +2025,7 @@
                     }
                     var rStr = String(rowId);
                     window.toggleRowSelection(rStr, true);
-                    var tr = /** @type {HTMLElement|null} */ (document.querySelector('#lemma-table tbody tr[data-row-id="' + rStr + '"]'));
+                    var tr = (document.querySelector('#lemma-table tbody tr[data-row-id="' + rStr + '"]'));
                     if (tr) addClass(tr, 'kw-row-selected');
                 }
             }
@@ -2070,14 +2131,14 @@
         var transSpan = isSource ? transSpansArray[targetIdx] : transSpansArray[idx];
 
         while (mvpBookmarks.length >= mvpN) {
-            var oldest = /** @type {Desk.Bookmark} */ (mvpBookmarks.shift());
+            var oldest = (mvpBookmarks.shift());
             if (oldest.srcSpan) removeClass(oldest.srcSpan, 'hl-mvp-hover');
             if (oldest.transSpan) removeClass(oldest.transSpan, 'hl-mvp-hover');
         }
 
         var slot = 0;
         if (mvpRainbowMode) {
-            var /** @type {Desk.Membership} */ usedSlots = {};
+            var usedSlots = {};
             for (var i = 0; i < mvpBookmarks.length; i++) {
                 if (mvpBookmarks[i].slot !== undefined) {
                     usedSlots[mvpBookmarks[i].slot] = true;
@@ -2158,7 +2219,7 @@
             var transSpan = isSource ? transSpansArray[targetIdx] : transSpansArray[idx];
             var slot = 0;
             if (mvpRainbowMode) {
-                var /** @type {Desk.Membership} */ usedSlots = {};
+                var usedSlots = {};
                 for (var m = 0; m < mvpBookmarks.length; m++) {
                     if (mvpBookmarks[m].slot !== undefined) {
                         usedSlots[mvpBookmarks[m].slot] = true;
@@ -2192,7 +2253,7 @@
     };
 
     addEvent(window, 'keydown', function(e) {
-        e = /** @type {KeyboardEvent} */ (e || window.event);
+        e = (e || window.event);
         if (e.key === 'Alt' || e.keyCode === 18) {
             if (!window.__selectableTextMode) {
                 window.setSelectableTextMode(true, false);
@@ -2201,7 +2262,7 @@
     });
 
     addEvent(window, 'keyup', function(e) {
-        e = /** @type {KeyboardEvent} */ (e || window.event);
+        e = (e || window.event);
         if (e.key === 'Alt' || e.keyCode === 18) {
             if (!window.__persistentSelectableMode) {
                 window.setSelectableTextMode(false, false);
@@ -2261,21 +2322,21 @@
             hydrateSession();
         }
 
-        /** @type {HTMLElement[]} */ var tableRows = [];
-        /** @type {Desk.Membership} */ var selectedRowIdsMap = {};
-        /** @type {Desk.Membership} */ var selectedOrphanWordIdxsMap = {};
-        /** @type {Desk.Membership} */ var initialHighlights = {};
+         var tableRows = [];
+         var selectedRowIdsMap = {};
+         var selectedOrphanWordIdxsMap = {};
+         var initialHighlights = {};
         var hasHighlightCol = false;
-        /** @type {number|null} */ var lastClickedRowId = null;
-        /** @type {number|null} */ var focusedRowId = null;
-        /** @type {Desk.Delta[]} */ var deltas = [];
-        /** @type {Record<string,Desk.AcknowledgedValue>} */ var acknowledgedValues = {};
+         var lastClickedRowId = null;
+         var focusedRowId = null;
+         var deltas = [];
+         var acknowledgedValues = {};
         var membershipRevision = 0;
-        /** @type {Desk.HistoryAction[]} */ var historyStack = [];
+         var historyStack = [];
         var historyIndex = -1;
-        /** @type {Desk.Membership} */ var touchedCells = {};
-        /** @type {HTMLElement|null} */ var lastClickedCell = null;
-        /** @type {HTMLElement|null} */ var lastHoveredCell = null;
+         var touchedCells = {};
+         var lastClickedCell = null;
+         var lastHoveredCell = null;
         var isDragSelecting = false;
         var dragStartX = 0;
         var dragStartY = 0;
@@ -2286,7 +2347,7 @@
         var lastClickedVisualIdx = -1;
         var isShiftClick = false;
         var isCtrlKey = false;
-        /** @type {HTMLElement|null} */ var mousedownTargetRow = null;
+         var mousedownTargetRow = null;
         var dragSelectMode = true;
         var isTokenDragSelecting = false;
         var tokenDragMode = true;
@@ -2294,11 +2355,11 @@
         var justFinishedDrag = false;
         var tokenDragStartIdx = -1;
         var tokenDragLastIdx = -1;
-        /** @type {Desk.Membership|null} */ var initialSelectedMap = null;
-        /** @type {HTMLElement|null} */ var mousedownTargetSpan = null;
+         var initialSelectedMap = null;
+         var mousedownTargetSpan = null;
         var isRmbDragFlipping = false;
         var rmbFlipMode = true;
-        /** @type {boolean[]|null} */ var initialFlippedMap = null;
+         var initialFlippedMap = null;
 
         var pos_display_order_json;
         var POS_DISPLAY_ORDER_MAP = ((window.__CONFIG__ && window.__CONFIG__.pos_display_order) || {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3});
@@ -2306,9 +2367,9 @@
             POS_DISPLAY_ORDER_MAP = (window.__CONFIG__ && window.__CONFIG__.pos_display_order) || {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3};
         }
         window.POS_DISPLAY_ORDER_MAP = POS_DISPLAY_ORDER_MAP;
-        /** @type {Desk.Token[]} */ var tokenMap = [];
+         var tokenMap = [];
         try {
-            var tokenMapEl = /** @type {HTMLScriptElement|null} */ (document.getElementById('token-map'));
+            var tokenMapEl = (document.getElementById('token-map'));
             if (!tokenMapEl) throw new Error('Missing token-map element');
             var jsonStr = tokenMapEl.text || tokenMapEl.textContent || tokenMapEl.innerHTML || "[]";
             tokenMap = JSON.parse(jsonStr);
@@ -2339,7 +2400,7 @@
         if (!existingState.rows) existingState.rows = {};
         existingState.selectedLemmas = {};
         var selectionCards = document.getElementById('sentence-cards');
-        var /** @type {Desk.Card[]} */ initialCards = selectionCards ? JSON.parse(selectionCards.textContent || '[]') : [];
+        var initialCards = selectionCards ? JSON.parse(selectionCards.textContent || '[]') : [];
         initialCards.forEach(function(card) {
             (card.words || []).forEach(function(word) {
                 if (String(word.selected) === '1') existingState.selectedLemmas[String(word.lemma || '').trim().toLowerCase()] = true;
@@ -2401,7 +2462,7 @@
                         if (pLower === 'deepl') capProv = 'DeepL';
                         else if (pLower === 'intellifiller') capProv = 'IntelliFiller';
                         var label = capProv + '...';
-                        var skels = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('.skeleton-loader'));
+                        var skels = (document.querySelectorAll('.skeleton-loader'));
                         for (var ski = 0; ski < skels.length; ski++) {
                             var skEl = skels[ski];
                             skEl.textContent = label;
@@ -2450,7 +2511,7 @@
                 if (trans !== null) {
                     window.AppState.translatedText = trans;
                     if (window.AppView.renderTranslatedText(data.stage)) updated = true;
-                } else if (document.getElementById('translation-container') && (/** @type {HTMLElement|null} */ (requireElement('translation-container').querySelector('[data-pending="true"]')) || window.AppState.textTranslationFailed || data.stage === 'translated_text')) {
+                } else if (document.getElementById('translation-container') && ( (requireElement('translation-container').querySelector('[data-pending="true"]')) || window.AppState.textTranslationFailed || data.stage === 'translated_text' || isTerminal)) {
                     if (window.AppView.renderTranslatedText(data.stage)) updated = true;
                 }
 
@@ -2507,15 +2568,15 @@
                         }
                     }
                 }
-                /** @param {Record<string,Desk.RowUpdate>} rowsData @param {import("./types.js").UpdatePayload} rawPayload */
+                /** @param {Record<string,VocabularyRow>} rowsData @param {UpdatePayload} rawPayload */
                 function applyCardProgressiveUpdate(rowsData, rawPayload) {
                     if (!rowsData) return;
                     var wCards = (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function')
                         ? window.WorkspaceTabs.getCards()
                         : (typeof getCardModels === 'function' ? getCardModels() : null);
                     if (!wCards || wCards.length === 0) return;
-                    var /** @type {Record<string,Desk.RowUpdate>} */ deltasByTokenOrder = {};
-                    var /** @type {Record<string,Desk.RowUpdate>} */ deltasByRowId = {};
+                    var deltasByTokenOrder = {};
+                    var deltasByRowId = {};
                     for (var rk in rowsData) {
                         if (rowsData.hasOwnProperty(rk)) {
                             var d = rowsData[rk];
@@ -2619,7 +2680,7 @@
                                             if (subLem && parentLem && subLem !== parentLem) {
                                                 continue;
                                             }
-                                            /** @type {string|undefined} */ var subTr = "";
+                                             var subTr = "";
                                             if (subDelta) {
                                                 subTr = (subDelta.trans !== undefined && subDelta.trans !== "") ? subDelta.trans : ((subDelta.WordDestination !== undefined && subDelta.WordDestination !== "") ? subDelta.WordDestination : subDelta.word_translation);
                                             }
@@ -2660,28 +2721,16 @@
                 window.applyCardProgressiveUpdate = applyCardProgressiveUpdate;
                 applyCardProgressiveUpdate(rowsData, data);
                 if (window.AppState.isFinished) {
-                    var tc = document.getElementById('translation-container');
-                    if (tc && (/** @type {HTMLElement|null} */ (tc.querySelector('.skeleton-loader')) || /** @type {HTMLElement|null} */ (tc.querySelector('[data-pending="true"]')) || tc.classList.contains('skeleton-loader') || !(tc.textContent || '').trim())) {
-                        tc.classList.remove('skeleton-loader');
-                        tc.removeAttribute('data-pending');
-                        tc.innerHTML = window.AppState.translatedText || '';
-                        updated = true;
-                    }
-                    var sc = document.getElementById('source-container');
-                    if (sc && (/** @type {HTMLElement|null} */ (sc.querySelector('.skeleton-loader')) || /** @type {HTMLElement|null} */ (sc.querySelector('[data-pending="true"]')) || sc.classList.contains('skeleton-loader'))) {
-                        sc.classList.remove('skeleton-loader');
-                        sc.removeAttribute('data-pending');
-                        sc.innerHTML = window.AppState.sourceText || "";
-                        updated = true;
-                    }
-                    var skels = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('td .skeleton-loader, #translation-container .skeleton-loader, #source-container .skeleton-loader, .skeleton-loader[data-pending="true"], [data-pending="true"]'));
+                    window.SourceViewer.project({sourceText: window.AppState.sourceText || ''}, {payload: {}});
+                    var skels = (document.querySelectorAll('td .skeleton-loader, #translation-container .skeleton-loader, #source-container .skeleton-loader, .skeleton-loader[data-pending="true"], [data-pending="true"]'));
                     if (skels.length > 0) {
                         for (var i = 0; i < skels.length; i++) {
                             var skel = skels[i];
+                            if (isTextRegionNode(skel)) continue;
                             skel.classList.remove('skeleton-loader');
                             skel.removeAttribute('data-pending');
-                            var p = /** @type {HTMLElement|null} */ (skel.parentNode);
-                            var tr = skel.closest ? skel.closest('tr') : (function(/** @type {HTMLElement|null} */ node) {
+                            var p = (skel.parentNode);
+                            var tr = skel.closest ? skel.closest('tr') : (function( node) {
                                 while (node && node.nodeName !== 'TR') { node = node.parentElement; }
                                 return node;
                             })(skel);
@@ -2700,10 +2749,7 @@
                                         skel.parentNode.removeChild(skel);
                                     }
                                 }
-                            } else if (p && p.id === 'translation-container') {
-                                p.innerHTML = window.AppState.translatedText || '';
-                            } else if (p && p.id === 'source-container') {
-                                p.innerHTML = window.AppState.sourceText || "";
+
                             } else if (skel.parentNode) {
                                 skel.parentNode.removeChild(skel);
                             }
@@ -2712,17 +2758,17 @@
                     }
 
                     // Comprehensive scan for any remaining blank/empty translation cells across all table rows:
-                    var allRows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('tr[data-row-id]'));
+                    var allRows = (document.querySelectorAll('tr[data-row-id]'));
                     for (var r = 0; r < allRows.length; r++) {
                         var rowEl = allRows[r];
                         var rId = rowEl.getAttribute('data-row-id') || rowEl.getAttribute('data-token-order');
                         var tOrd = rowEl.getAttribute('data-token-order');
                         var tdsEl = rowEl.getElementsByTagName('td');
                         if (tdsEl.length >= 3 && rId !== null && rId !== undefined) {
-                            var transTd = /** @type {HTMLElement|null} */ (rowEl.querySelector('td[data-col="WordDestination"]')) || tdsEl[2];
-                            var transDiv = /** @type {HTMLElement|null} */ (transTd.querySelector('.scrollable-cell')) || transTd;
+                            var transTd = (rowEl.querySelector('td[data-col="WordDestination"]')) || tdsEl[2];
+                            var transDiv = (transTd.querySelector('.scrollable-cell')) || transTd;
                             var transContent = (transDiv.textContent || transDiv.innerText || "").trim();
-                            if (!transContent || transContent === '...' || transContent === 'Loading...' || /** @type {HTMLElement|null} */ (transDiv.querySelector('.skeleton-loader'))) {
+                            if (!transContent || transContent === '...' || transContent === 'Loading...' ||  (transDiv.querySelector('.skeleton-loader'))) {
                                 var rState = window.AppState.rows[rId] || (tOrd ? window.AppState.rows[tOrd] : null);
                                 var rTrans = rState ? (rState.trans || rState.WordDestination || rState.word_translation || '') : '';
                                 if (rTrans && rTrans !== '') {
@@ -2752,7 +2798,7 @@
                                 var rState = window.AppState.rows[rId] || (tOrd ? window.AppState.rows[tOrd] : null);
                                 var rProv = rState ? (rState.provenance || rState._provenance || rState.transProvenance) : null;
                                 if (rProv && !transTd.classList.contains('dirty') && !transTd.classList.contains('editing')) {
-                                    if (!/** @type {HTMLElement|null} */ (transDiv.querySelector('.skeleton-loader'))) {
+                                    if (! (transDiv.querySelector('.skeleton-loader'))) {
                                         transTd.setAttribute('data-provenance', String(rProv));
                                         var pTitle = formatTranslationCellTooltip(transDiv.textContent || transTd.textContent, rProv);
                                         if (pTitle) {
@@ -2805,143 +2851,29 @@
             renderTranslatedText: function(globalStage) {
                 var container = document.getElementById('translation-container');
                 if (!container) return false;
-
-                if (window.WorkspaceTabs && window.WorkspaceTabs.getCards) {
-                    var cards = window.WorkspaceTabs.getCards();
-                    if (cards && cards.length > 0) {
-                        for (var i = 0; i < cards.length; i++) {
-                            if (cards[i].sentence_idx === 0) {
-                                cards[i].translated_text = window.AppState.translatedText || "";
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (window.WorkspaceTabs && window.WorkspaceTabs.getActiveSentenceIdx && window.WorkspaceTabs.getActiveSentenceIdx() > 0) {
-                    if (window.WorkspaceTabs.updateActiveTabTranslation) {
-                        window.WorkspaceTabs.updateActiveTabTranslation();
-                    }
+                synchronizeOverviewTranslation();
+                if (activeSentenceTranslation()) {
+                    window.WorkspaceTabs.updateActiveTabTranslation();
                     return false;
                 }
-
-                var pendingNode = /** @type {HTMLElement|null} */ (container.querySelector('[data-pending="true"]')) || /** @type {HTMLElement|null} */ (container.querySelector('.skeleton-loader')) || container.classList.contains('skeleton-loader');
-                var isFailed = (window.AppState && (window.AppState.textTranslationFailed || window.AppState.textTranslationStatus === 'failed'));
-                if (window.AppState.translatedText === null && !pendingNode && !isFailed) return false;
-                var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
-                var tempDiv = document.createElement('div');
-                tempDiv.innerHTML = window.AppState.translatedText || "";
-                var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\s+/g, ' ');
-                var isTerm = (globalStage === 'finished' || window.AppState.isFinished || isFailed);
-                var forceUpdate = (isTerm || globalStage === 'translated' || globalStage === 'translated_text');
-
-                function applyTextProvenance() {
-                    if (!container) throw new Error('Missing translation container');
-                    var effProv = (window.AppState ? (window.AppState.textProvenance || window.AppState.text_provenance || window.AppState.provenance) : null) || container.getAttribute('data-provenance');
-                    if (!effProv) {
-                        var provScript = document.getElementById('sentence-provenance');
-                        if (provScript) {
-                            var sProv = (provScript.textContent || provScript.innerText || '').trim();
-                            if (sProv) effProv = sProv;
-                        }
-                    }
-                    if (!effProv && window.AppState && window.AppState.translatedText && !window.AppState.textTranslationFailed) {
-                        var provEl = document.getElementById('text-base-provider');
-                        var baseProv = provEl ? (provEl.textContent || provEl.innerText || '').trim() : 'google';
-                        effProv = 'live:' + (baseProv || 'google');
-                    }
-                    if (effProv) {
-                        container.setAttribute('data-provenance', String(effProv));
-                        var pTitle = formatProvenanceTooltip(effProv);
-                        if (pTitle) {
-                            container.setAttribute('title', String(pTitle));
-                            var words = /** @type {NodeListOf<HTMLElement>} */ (container.querySelectorAll('span.word, div'));
-                            for (var i = 0; i < words.length; i++) {
-                                words[i].setAttribute('data-provenance', String(effProv));
-                                words[i].setAttribute('title', String(pTitle));
-                            }
-                        }
-                    }
-                }
-
-                if (newText !== "") {
-                    container.classList.remove('skeleton-loader');
-                    container.removeAttribute('data-pending');
-                    if (window.WorkspaceTabs && window.WorkspaceTabs.getTranslationHtml) {
-                        container.innerHTML = window.WorkspaceTabs.getTranslationHtml(window.AppState.translatedText);
-                    } else {
-                        var clean = (window.AppState.translatedText || "").trim();
-                        if (clean.indexOf('<div') !== -1 || clean.indexOf('</div') !== -1) {
-                            var tmp = document.createElement('div');
-                            tmp.innerHTML = clean;
-                            clean = (tmp.textContent || tmp.innerText || '').trim();
-                        }
-                        container.innerHTML = escapeHtml(clean);
-                    }
-                    if (typeof tokenizeTranslation === 'function') tokenizeTranslation();
-                    if (typeof buildLcIndex === 'function') buildLcIndex();
-                    if (typeof updateBidirectionalHighlights === 'function') updateBidirectionalHighlights();
-                    applyTextProvenance();
-                    return true;
-                } else if (isTerm) {
-                    container.classList.remove('skeleton-loader');
-                    container.removeAttribute('data-pending');
-                    if (window.AppState.translatedText) {
-                        if (window.WorkspaceTabs && window.WorkspaceTabs.getTranslationHtml) {
-                            container.innerHTML = window.WorkspaceTabs.getTranslationHtml(window.AppState.translatedText);
-                        } else {
-                            var clean = (window.AppState.translatedText || "").trim();
-                            if (clean.indexOf('<div') !== -1 || clean.indexOf('</div') !== -1) {
-                                var tmp = document.createElement('div');
-                                tmp.innerHTML = clean;
-                                clean = (tmp.textContent || tmp.innerText || '').trim();
-                            }
-                            container.innerHTML = escapeHtml(clean);
-                        }
-                        if (typeof tokenizeTranslation === 'function') tokenizeTranslation();
-                        if (typeof buildLcIndex === 'function') buildLcIndex();
-                        if (typeof updateBidirectionalHighlights === 'function') updateBidirectionalHighlights();
-                        applyTextProvenance();
-                    } else if (pendingNode || !currentText || isFailed) {
-                        container.innerHTML = '';
-                    }
-                    return true;
-                } else if (!pendingNode && (forceUpdate || currentText !== newText)) {
-                    if (window.WorkspaceTabs && window.WorkspaceTabs.getTranslationHtml) {
-                        container.innerHTML = window.WorkspaceTabs.getTranslationHtml(window.AppState.translatedText);
-                    } else {
-                        var clean = (window.AppState.translatedText || "").trim();
-                        if (clean.indexOf('<div') !== -1 || clean.indexOf('</div') !== -1) {
-                            var tmp = document.createElement('div');
-                            tmp.innerHTML = clean;
-                            clean = (tmp.textContent || tmp.innerText || '').trim();
-                        }
-                        container.innerHTML = escapeHtml(clean);
-                    }
-                    if (typeof tokenizeTranslation === 'function') tokenizeTranslation();
-                    if (typeof buildLcIndex === 'function') buildLcIndex();
-                    if (typeof updateBidirectionalHighlights === 'function') updateBidirectionalHighlights();
-                    applyTextProvenance();
-                    return true;
-                }
-                return false;
+                return projectGlobalTranslation(container, globalStage);
             },
-            renderRow: /** @param {Desk.RowId} rowId @param {string=} globalStage */ function(rowId, globalStage) {
-                /** @type {string|undefined} */ var targetVal;
+            renderRow: /** @param {number|string} rowId @param {string=} globalStage */ function(rowId, globalStage) {
+                 var targetVal;
                 var updated = false;
                 var rowData = window.AppState.rows[rowId];
                 if (!rowData) return false;
                 var tr = null;
                 if (rowData.token_order !== undefined && rowData.token_order !== null && String(rowData.token_order) !== "") {
-                    tr = /** @type {HTMLElement|null} */ (document.querySelector('tr[data-token-order="' + rowData.token_order + '"]'));
+                    tr = (document.querySelector('tr[data-token-order="' + rowData.token_order + '"]'));
                 } else {
-                    tr = /** @type {HTMLElement|null} */ (document.querySelector('tr[data-row-id="' + rowId + '"]'));
+                    tr = (document.querySelector('tr[data-row-id="' + rowId + '"]'));
                 }
                 if (!tr) {
-                    tr = /** @type {HTMLElement|null} */ (document.querySelector('tr[data-row-id="' + rowId + '"]'));
+                    tr = (document.querySelector('tr[data-row-id="' + rowId + '"]'));
                 }
                 if (!tr) {
-                    var allTrs = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('tr[data-all-row-ids]'));
+                    var allTrs = (document.querySelectorAll('tr[data-all-row-ids]'));
                     for (var at = 0; at < allTrs.length; at++) {
                         var parts = (allTrs[at].getAttribute('data-all-row-ids') || '').split(',').map(function(s) { return s.trim(); });
                         if (parts.indexOf(String(rowId)) !== -1) {
@@ -2952,14 +2884,14 @@
                 }
                 if (!tr) return false;
                 var tds = tr.getElementsByTagName('td');
-                var infCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-inflected, td[data-col="WordSourceInflectedForm"]')) || (tds.length >= 5 ? tds[0] : null);
-                var lemCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-lemma, td[data-col="WordSource"]')) || (tds.length >= 5 ? tds[1] : (tds.length > 0 ? tds[0] : null));
-                var transTd = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-translation, td[data-col="WordDestination"]')) || (tds.length >= 3 ? tds[2] : (tds.length > 1 ? tds[1] : null));
-                var ipaCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-ipa, td[data-col="WordSourceIpaAI"], td[data-col="WordSourceIpa"]')) || (tds.length > 3 ? tds[3] : null);
-                var morphCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-morphology, td[data-col="WordSourceMorphologyAI"], td[data-col="WordSourceMorphology"]')) || (tds.length > 4 ? tds[4] : null);
+                var infCell = (tr.querySelector('td.col-inflected, td[data-col="WordSourceInflectedForm"]')) || (tds.length >= 5 ? tds[0] : null);
+                var lemCell = (tr.querySelector('td.col-lemma, td[data-col="WordSource"]')) || (tds.length >= 5 ? tds[1] : (tds.length > 0 ? tds[0] : null));
+                var transTd = (tr.querySelector('td.col-translation, td[data-col="WordDestination"]')) || (tds.length >= 3 ? tds[2] : (tds.length > 1 ? tds[1] : null));
+                var ipaCell = (tr.querySelector('td.col-ipa, td[data-col="WordSourceIpaAI"], td[data-col="WordSourceIpa"]')) || (tds.length > 3 ? tds[3] : null);
+                var morphCell = (tr.querySelector('td.col-morphology, td[data-col="WordSourceMorphologyAI"], td[data-col="WordSourceMorphology"]')) || (tds.length > 4 ? tds[4] : null);
                 if (tds.length >= 1) {
                     if (infCell && !infCell.classList.contains('dirty') && rowData.hasOwnProperty('inflected') && rowData.inflected !== undefined && rowData.inflected !== "") {
-                        var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (infCell.querySelector('.scrollable-cell'));
+                        var div = (infCell.querySelector('.scrollable-cell'));
                         var val = rowData.inflected || "";
                         var oldVal = div ? (div.textContent || div.innerText) : (infCell.classList.contains('editing') ? null : (infCell.textContent || infCell.innerText));
                         var existingTitle = infCell.getAttribute('data-orig-title') || infCell.getAttribute('title') || (div ? (div.getAttribute('data-orig-title') || div.getAttribute('title')) : '');
@@ -2985,7 +2917,7 @@
                         }
                     }
                     if (lemCell && !lemCell.classList.contains('dirty') && rowData.hasOwnProperty('lemma') && rowData.lemma !== undefined) {
-                        var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (lemCell.querySelector('.scrollable-cell'));
+                        var div = (lemCell.querySelector('.scrollable-cell'));
                         var val = rowData.lemma || "";
                         if (globalStage === 'translated_lemmas' || globalStage === 'translated' || globalStage === 'finished') {
                             if (div) setCellText(div, val);
@@ -3001,7 +2933,7 @@
                         }
                         var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
                         var rawG = rowData.gender !== undefined ? rowData.gender : (rowData.WordSourceGender || "");
-                        var curPosCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]'));
+                        var curPosCell = (tr.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]'));
                         var rawPos = rowData.pos !== undefined ? rowData.pos : (rowData.WordSourcePos !== undefined ? rowData.WordSourcePos : (curPosCell ? (curPosCell.textContent || curPosCell.innerText || "").trim() : ""));
                         var lemTip = formatLemmaTooltip(val, rawG, activeLang, rawPos);
                         if (lemTip) {
@@ -3011,12 +2943,12 @@
                             lemCell.removeAttribute('title');
                             if (div && div !== lemCell) div.removeAttribute('title');
                         }
-                        var curGenderCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-gender, td[data-col="WordSourceGender"]'));
+                        var curGenderCell = (tr.querySelector('td.col-gender, td[data-col="WordSourceGender"]'));
                         if (curGenderCell) {
                             var curGenVal = rawG || (curGenderCell.textContent || curGenderCell.innerText || "").trim();
                             var curProv = rowData.provenance || rowData._provenance || rowData.transProvenance;
                             if (!curProv) {
-                                var curTransCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-translation, td[data-col="WordDestination"]'));
+                                var curTransCell = (tr.querySelector('td.col-translation, td[data-col="WordDestination"]'));
                                 if (curTransCell) curProv = curTransCell.getAttribute('data-provenance') || undefined;
                             }
                             var updatedGenTip = formatGenderTooltip(curGenVal, val, curProv);
@@ -3039,14 +2971,14 @@
                     /** @param {string} effectiveVal */
                     function applyCellProvenance(effectiveVal) {
                         if (!transTd) return;
-                        var existingProv = transTd.getAttribute('data-provenance') || (/** @type {HTMLElement} */ (transTd.querySelector('.scrollable-cell')) ? /** @type {HTMLElement} */ (transTd.querySelector('.scrollable-cell')).getAttribute('data-provenance') : null);
+                        var existingProv = transTd.getAttribute('data-provenance') || ( (transTd.querySelector('.scrollable-cell')) ?  (transTd.querySelector('.scrollable-cell')).getAttribute('data-provenance') : null);
                         var effProv = rowProv || existingProv || (effectiveVal && effectiveVal.indexOf('skeleton-loader') === -1 ? 'cached:sqlite' : null);
                         var transTip = formatTranslationCellTooltip(effectiveVal, effProv);
                         if (effProv && effectiveVal && effectiveVal.indexOf('skeleton-loader') === -1) {
                             transTd.setAttribute('data-provenance', String(effProv));
                             if (transTip) transTd.setAttribute('title', String(transTip));
                             else transTd.removeAttribute('title');
-                            var scrollDiv = /** @type {HTMLElement|null} */ (transTd.querySelector('.scrollable-cell'));
+                            var scrollDiv = (transTd.querySelector('.scrollable-cell'));
                             if (scrollDiv) {
                                 scrollDiv.setAttribute('data-provenance', String(effProv));
                                 if (transTip) scrollDiv.setAttribute('title', String(transTip));
@@ -3055,7 +2987,7 @@
                         } else if (transTip) {
                             transTd.removeAttribute('data-provenance');
                             transTd.setAttribute('title', String(transTip));
-                            var scrollDiv = /** @type {HTMLElement|null} */ (transTd.querySelector('.scrollable-cell'));
+                            var scrollDiv = (transTd.querySelector('.scrollable-cell'));
                             if (scrollDiv) {
                                 scrollDiv.removeAttribute('data-provenance');
                                 scrollDiv.setAttribute('title', String(transTip));
@@ -3063,7 +2995,7 @@
                         } else {
                             transTd.removeAttribute('data-provenance');
                             transTd.removeAttribute('title');
-                            var scrollDiv = /** @type {HTMLElement|null} */ (transTd.querySelector('.scrollable-cell'));
+                            var scrollDiv = (transTd.querySelector('.scrollable-cell'));
                             if (scrollDiv) {
                                 scrollDiv.removeAttribute('data-provenance');
                                 scrollDiv.removeAttribute('title');
@@ -3071,7 +3003,7 @@
                         }
                     }
                     if (transTd && !transTd.classList.contains('dirty') && hasTransProp) {
-                        var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (transTd.querySelector('.scrollable-cell')) || transTd;
+                        var div = (transTd.querySelector('.scrollable-cell')) || transTd;
                         var val = (rowData.trans !== undefined && rowData.trans !== "") ? rowData.trans : ((rowData.WordDestination !== undefined && rowData.WordDestination !== "") ? rowData.WordDestination : ((rowData.word_translation !== undefined) ? rowData.word_translation : (rowData.trans || "")));
                         var allRowIdsAttr = tr.getAttribute('data-all-row-ids');
                         if (allRowIdsAttr) {
@@ -3097,7 +3029,7 @@
                                 }
                             }
                         }
-                        var hasSkeleton = /** @type {HTMLElement|null} */ (div.querySelector('.skeleton-loader')) !== null;
+                        var hasSkeleton = (div.querySelector('.skeleton-loader')) !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
@@ -3146,16 +3078,16 @@
                             }
                         }
                     } else if (transTd && !transTd.classList.contains('dirty') && !transTd.classList.contains('editing')) {
-                        var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (transTd.querySelector('.scrollable-cell')) || transTd;
+                        var div = (transTd.querySelector('.scrollable-cell')) || transTd;
                         var curText = (div.textContent || div.innerText || '').trim();
-                        if (curText && curText !== '...' && curText !== 'Loading...' && !/** @type {HTMLElement|null} */ (div.querySelector('.skeleton-loader'))) {
+                        if (curText && curText !== '...' && curText !== 'Loading...' && ! (div.querySelector('.skeleton-loader'))) {
                             applyCellProvenance(curText);
                         }
                     }
                     if (ipaCell && !ipaCell.classList.contains('dirty') && rowData.hasOwnProperty('ipa') && rowData.ipa !== undefined) {
-                        var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (ipaCell.querySelector('.scrollable-cell')) || ipaCell;
+                        var div = (ipaCell.querySelector('.scrollable-cell')) || ipaCell;
                         var val = rowData.ipa || "";
-                        var hasSkeleton = /** @type {HTMLElement|null} */ (div.querySelector('.skeleton-loader')) !== null;
+                        var hasSkeleton = (div.querySelector('.skeleton-loader')) !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
@@ -3188,9 +3120,9 @@
                         }
                     }
                     if (morphCell && !morphCell.classList.contains('dirty') && (rowData.hasOwnProperty('morph') || rowData.hasOwnProperty('morphology') || rowData.hasOwnProperty('WordSourceMorphologyAI')) && (rowData.morph !== undefined || rowData.morphology !== undefined || rowData.WordSourceMorphologyAI !== undefined)) {
-                        var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (morphCell.querySelector('.scrollable-cell')) || morphCell;
+                        var div = (morphCell.querySelector('.scrollable-cell')) || morphCell;
                         var val = (rowData.morph !== undefined && rowData.morph !== "") ? rowData.morph : ((rowData.morphology !== undefined && rowData.morphology !== "") ? rowData.morphology : (rowData.WordSourceMorphologyAI || ""));
-                        var hasSkeleton = /** @type {HTMLElement|null} */ (div.querySelector('.skeleton-loader')) !== null;
+                        var hasSkeleton = (div.querySelector('.skeleton-loader')) !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
@@ -3236,9 +3168,9 @@
                         for (var class_name in rowData.classifications) {
                             if (rowData.classifications.hasOwnProperty(class_name)) {
                                 var val = rowData.classifications[class_name] || "";
-                                var cell = /** @type {HTMLElement|null} */ (tr.querySelector('td[data-col="' + class_name + '"]'));
+                                var cell = (tr.querySelector('td[data-col="' + class_name + '"]'));
                                 if (cell) {
-                                    var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (cell.querySelector('.scrollable-cell'));
+                                    var div = (cell.querySelector('.scrollable-cell'));
                                     var displayVal = val;
                                     var spanClass = "";
                                     if (val.indexOf(':') !== -1) {
@@ -3266,15 +3198,15 @@
                     }
                     var hasPosProp = rowData.hasOwnProperty('pos') || rowData.hasOwnProperty('WordSourcePOS');
                     if (hasPosProp) {
-                        var posCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-pos, td[data-col="WordSourcePOS"]'));
+                        var posCell = (tr.querySelector('td.col-pos, td[data-col="WordSourcePOS"]'));
                         if (posCell && !posCell.classList.contains('dirty')) {
-                            var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (posCell.querySelector('.scrollable-cell')) || posCell;
+                            var div = (posCell.querySelector('.scrollable-cell')) || posCell;
                             var rawPos = (rowData.pos !== undefined && rowData.pos !== null) ? rowData.pos : (rowData.WordSourcePOS || "");
                             var normPos = rawPos;
                             if (typeof rawPos === 'string') {
                                 var pClean = rawPos.trim();
                                 var pUpper = pClean.toUpperCase();
-                                var /** @type {Record<string,string>} */ posMap = {
+                                var posMap = {
                                     "NOUN": "n.", "PROPN": "n.", "VERB": "v.", "AUX": "v.", "ADJ": "adj.",
                                     "ADV": "adv.", "ADP": "prep.", "PREP": "prep.", "PRON": "pron.",
                                     "CCONJ": "conj.", "SCONJ": "conj.", "CONJ": "conj.", "NUM": "num.",
@@ -3312,9 +3244,9 @@
                     }
                     var hasGenderProp = rowData.hasOwnProperty('gender') || rowData.hasOwnProperty('WordSourceGender');
                     if (hasGenderProp) {
-                        var genderCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-gender, td[data-col="WordSourceGender"]'));
+                        var genderCell = (tr.querySelector('td.col-gender, td[data-col="WordSourceGender"]'));
                         if (genderCell && !genderCell.classList.contains('dirty')) {
-                            var /** @type {HTMLElement|null} */ div = /** @type {HTMLElement|null} */ (genderCell.querySelector('.scrollable-cell')) || genderCell;
+                            var div = (genderCell.querySelector('.scrollable-cell')) || genderCell;
                             var rawGender = (rowData.gender !== undefined && rowData.gender !== null) ? rowData.gender : (rowData.WordSourceGender || "");
                             var targetGenderHtml = formatGenderBadge(rawGender);
                             var oldGenderHtml = div.innerHTML;
@@ -3324,17 +3256,17 @@
                             }
                             var rowLemma = (rowData.lemma !== undefined && rowData.lemma !== null) ? rowData.lemma : (rowData.WordSource || "");
                             if (!rowLemma) {
-                                var lemmaCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-lemma, td[data-col="WordSource"]'));
+                                var lemmaCell = (tr.querySelector('td.col-lemma, td[data-col="WordSource"]'));
                                 if (lemmaCell) {
-                                    var lemDiv = /** @type {HTMLElement|null} */ (lemmaCell.querySelector('.scrollable-cell')) || lemmaCell;
+                                    var lemDiv = (lemmaCell.querySelector('.scrollable-cell')) || lemmaCell;
                                     rowLemma = (lemDiv.textContent || lemDiv.innerText || '').trim();
                                 }
                             }
                             var effProv = rowData.provenance || rowData._provenance || rowData.transProvenance;
                             if (!effProv) {
-                                var transCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-translation, td[data-col="WordDestination"]'));
+                                var transCell = (tr.querySelector('td.col-translation, td[data-col="WordDestination"]'));
                                 if (transCell) {
-                                    effProv = transCell.getAttribute('data-provenance') || (/** @type {HTMLElement} */ (transCell.querySelector('[data-provenance]')) ? /** @type {HTMLElement} */ (transCell.querySelector('[data-provenance]')).getAttribute('data-provenance') : null) || undefined;
+                                    effProv = transCell.getAttribute('data-provenance') || ( (transCell.querySelector('[data-provenance]')) ?  (transCell.querySelector('[data-provenance]')).getAttribute('data-provenance') : null) || undefined;
                                 }
                             }
                             if (!effProv && rowData.token_order !== undefined && rowData.token_order !== null && window.AppState && window.AppState.rows) {
@@ -3382,28 +3314,17 @@
             if (initialSentenceProv) {
                 window.AppState.textProvenance = initialSentenceProv;
                 var tcInit = document.getElementById('translation-container');
-                if (tcInit) {
-                    tcInit.setAttribute('data-provenance', String(initialSentenceProv));
-                    var initProvTitle = formatProvenanceTooltip(initialSentenceProv);
-                    if (initProvTitle) {
-                        tcInit.setAttribute('title', String(initProvTitle));
-                        var words = /** @type {NodeListOf<HTMLElement>} */ (tcInit.querySelectorAll('span.word, div'));
-                        for (var i = 0; i < words.length; i++) {
-                            words[i].setAttribute('data-provenance', String(initialSentenceProv));
-                            words[i].setAttribute('title', String(initProvTitle));
-                        }
-                    }
-                }
+                if (tcInit) applyTextProvenance(tcInit);
             }
         } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
 
         try {
-            var initRows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('tr[data-row-id]'));
+            var initRows = (document.querySelectorAll('tr[data-row-id]'));
             for (var ir = 0; ir < initRows.length; ir++) {
                 var rEl = initRows[ir];
                 var rId = rEl.getAttribute('data-row-id');
                 var tOrd = rEl.getAttribute('data-token-order');
-                var transTd = /** @type {HTMLElement|null} */ (rEl.querySelector('td.col-translation, td[data-col="WordDestination"]'));
+                var transTd = (rEl.querySelector('td.col-translation, td[data-col="WordDestination"]'));
                 var rProv = transTd ? transTd.getAttribute('data-provenance') : null;
                 if (rProv) {
                     if (rId) {
@@ -3418,7 +3339,7 @@
             }
         } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
 
-        /** @type {Desk.Card[]|null} */ var _cachedSentenceCards = null;
+         var _cachedSentenceCards = null;
         function getCardModels() {
             if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
                 var c = window.WorkspaceTabs.getCards();
@@ -3444,7 +3365,7 @@
         window.getCardModels = getCardModels;
 
         function countPendingSkeletons() {
-            var domCount = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('.skeleton-loader, [data-pending="true"]')).length;
+            var domCount = (document.querySelectorAll('.skeleton-loader, [data-pending="true"]')).length;
             var cards = getCardModels();
             if (!cards || cards.length === 0) {
                 return domCount;
@@ -3456,7 +3377,7 @@
             } else if (window._kwActiveTabSeq !== undefined && window._kwActiveTabSeq !== null) {
                 activeSeq = window._kwActiveTabSeq;
             } else {
-                var activeChip = /** @type {HTMLElement|null} */ (document.querySelector('.kw-tab-chip.active'));
+                var activeChip = (document.querySelector('.kw-tab-chip.active'));
                 if (activeChip) {
                     var parsed = parseInt(String(activeChip.getAttribute('data-tab-seq')), 10);
                     if (!isNaN(parsed)) activeSeq = parsed;
@@ -3470,7 +3391,7 @@
             var isFailed = !!(window.AppState && (window.AppState.textTranslationFailed || window.AppState.textTranslationStatus === 'failed'));
 
             var tc = document.getElementById('translation-container');
-            var tcHasSkel = !!(tc && (tc.classList.contains('skeleton-loader') || tc.getAttribute('data-pending') === 'true' || /** @type {HTMLElement|null} */ (tc.querySelector('.skeleton-loader, [data-pending="true"]'))));
+            var tcHasSkel = !!(tc && (tc.classList.contains('skeleton-loader') || tc.getAttribute('data-pending') === 'true' ||  (tc.querySelector('.skeleton-loader, [data-pending="true"]'))));
 
             for (var i = 0; i < cards.length; i++) {
                 var card = cards[i];
@@ -3548,7 +3469,7 @@
         window.normalizeCardSkeletons = normalizeCardSkeletons;
 
         var _lastEnsureRestartTime = 0;
-        /** @type {number|null} */ var _ensureDebounceTimer = null;
+         var _ensureDebounceTimer = null;
         /** @param {string} reason */
         function ensureWatchdogActive(reason) {
             var isWebMode = (window.location.protocol !== 'file:') || (document.body && document.body.getAttribute('data-web-mode') === 'true');
@@ -3710,7 +3631,7 @@
                     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
                         return;
                     }
-                    var pendings = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('.skeleton-loader, [data-pending="true"]'));
+                    var pendings = (document.querySelectorAll('.skeleton-loader, [data-pending="true"]'));
                     if (pendings.length > 0) {
                         for (var i = 0; i < pendings.length; i++) {
                             var el = pendings[i];
@@ -3764,7 +3685,7 @@
                         var cTimeoutId = cController ? setTimeout(function() {
                             try { if (cController) cController.abort(); } catch(e) { console.debug("[AbortController] Abort failed:", e); }
                         }, 4000) : null;
-                        var /** @type {RequestInit} */ cOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
+                        var cOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
                         if (cController) cOpts.signal = cController.signal;
 
                         fetch(statusUrl, cOpts)
@@ -3885,7 +3806,7 @@
                     var timeoutId = controller ? setTimeout(function() {
                         try { if (controller) controller.abort(); } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
                     }, 4000) : null;
-                    var /** @type {RequestInit} */ fetchOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
+                    var fetchOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
                     if (controller) {
                         fetchOpts.signal = controller.signal;
                     }
@@ -3958,7 +3879,7 @@
                             var rcTimeoutId = rcController ? setTimeout(function() {
                                 try { if (rcController) rcController.abort(); } catch(e) { console.debug("[AbortController] Abort failed:", e); }
                             }, 4000) : null;
-                            var /** @type {RequestInit} */ rcOpts = { method: 'GET' };
+                            var rcOpts = { method: 'GET' };
                             if (rcController) rcOpts.signal = rcController.signal;
 
                             fetch(renderCheckUrl, rcOpts)
@@ -4174,7 +4095,7 @@
                         }
                     });
 
-                    /** @type {number|null} */ var focusDebounceTimer = null;
+                     var focusDebounceTimer = null;
                     window.addEventListener('focus', function() {
                         var remaining = countPendingSkeletons();
                         if (remaining > 0) {
@@ -4210,7 +4131,7 @@
 
         var sourceContainer = document.getElementById('source-container');
         var spans = sourceContainer ? sourceContainer.getElementsByTagName('span') : [];
-        /** @type {HTMLElement[]} */ var tokenSpans = [];
+         var tokenSpans = [];
         for (var i = 0; i < spans.length; i++) {
             var sp = spans[i];
             if (sp.classList.contains('word')) {
@@ -4234,13 +4155,13 @@
             }
         }
 
-        /** @param {Desk.RowId|null|undefined} rowId */
+        /** @param {number|string|null|undefined} rowId */
         function findTableRowById(rowId) {
             if (rowId === undefined || rowId === null) return null;
             var rIdStr = String(rowId);
             var rows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
                 ? tableRows
-                : /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
+                :  (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
             for (var k = 0; k < rows.length; k++) {
                 var tr = rows[k];
                 if (getRowGroupIds(tr).indexOf(rIdStr) !== -1) {
@@ -4253,14 +4174,14 @@
         /** @param {HTMLElement|null|undefined} tr */
         function getRowLemma(tr) {
             if (!tr) return '';
-            var lemCell = /** @type {HTMLElement|null} */ (tr.querySelector('.col-lemma'));
-            if (!lemCell) lemCell = /** @type {HTMLElement|null} */ (tr.querySelector('[data-col="WordSource"]'));
+            var lemCell = (tr.querySelector('.col-lemma'));
+            if (!lemCell) lemCell = (tr.querySelector('[data-col="WordSource"]'));
             if (!lemCell) return '';
             var txt = (lemCell.textContent || lemCell.innerText || '').trim();
             return txt.toLowerCase();
         }
 
-        /** @param {Desk.RowId|null|undefined} rowId */
+        /** @param {number|string|null|undefined} rowId */
         function getLemmaByRowId(rowId) {
             if (rowId === undefined || rowId === null) return '';
             var strId = String(rowId);
@@ -4299,7 +4220,7 @@
             // 1. Update current tableRows and selectedRowIdsMap
             var rows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
                 ? tableRows
-                : /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
+                :  (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
             if (rows && rows.length > 0) {
                 for (var i = 0; i < rows.length; i++) {
                     var r = rows[i];
@@ -4316,7 +4237,7 @@
 
             var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
             cards.forEach(function(card) {
-                /** @type {string[]} */ var cardSelections = [];
+                 var cardSelections = [];
                 card.selected_ids = cardSelections;
                 (card.words || []).forEach(function(word) {
                     var lemma = String(word.lemma || '').trim().toLowerCase();
@@ -4343,7 +4264,7 @@
             membershipRevision++;
             var overlay = selectionOverlay();
             var state = window.AppStore.getState();
-            /** @type {Desk.Membership} */ var membershipProjection = {};
+             var membershipProjection = {};
             Object.keys(membership).forEach(function(lemma) {
                 if (membership[lemma]) membershipProjection[lemma] = true;
             });
@@ -4457,7 +4378,7 @@
                 return isJoinerText(txt);
             }
             if (node.nodeType === 1) { // Element node (e.g. <span class="sentence-delimiter">-</span>)
-                if (/** @type {HTMLElement} */ (node).classList && /** @type {HTMLElement} */ (node).classList.contains('sentence-delimiter')) {
+                if ( (node).classList &&  (node).classList.contains('sentence-delimiter')) {
                     var txt = node._origVal !== undefined ? node._origVal : (node.textContent || "");
                     return isJoinerText(txt);
                 }
@@ -4473,9 +4394,9 @@
             var startSpan = span;
             var curr = span;
             while (curr) {
-                var prevNode = /** @type {HTMLElement|null} */ (curr.previousSibling);
+                var prevNode = (curr.previousSibling);
                 if (isCompoundDelimiterNode(prevNode)) {
-                    var prevSpan = /** @type {HTMLElement|null} */ ((prevNode && prevNode.previousSibling));
+                    var prevSpan = ((prevNode && prevNode.previousSibling));
                     if (prevSpan && prevSpan.nodeType === 1 && prevSpan.classList && prevSpan.classList.contains('word')) {
                         startSpan = prevSpan;
                         curr = prevSpan;
@@ -4495,9 +4416,9 @@
             var group = [startSpan];
             curr = startSpan;
             while (curr) {
-                var nextNode = /** @type {HTMLElement|null} */ (curr.nextSibling);
+                var nextNode = (curr.nextSibling);
                 if (isCompoundDelimiterNode(nextNode)) {
-                    var nextSpan = /** @type {HTMLElement|null} */ ((nextNode && nextNode.nextSibling));
+                    var nextSpan = ((nextNode && nextNode.nextSibling));
                     if (nextSpan && nextSpan.nodeType === 1 && nextSpan.classList && nextSpan.classList.contains('word')) {
                         group.push(nextSpan);
                         curr = nextSpan;
@@ -4547,7 +4468,7 @@
                 for (var i = 0; i < td.row_ids.length; i++) {
                     var tr = findTableRowById(td.row_ids[i]);
                     if (tr) {
-                        var posCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-pos'));
+                        var posCell = (tr.querySelector('td.col-pos'));
                         if (posCell) {
                             var text = (posCell.textContent || posCell.innerText || "").trim();
                             if (text) return text;
@@ -4578,7 +4499,7 @@
                 for (var r = 0; r < td.row_ids.length; r++) {
                     var tr = findTableRowById(td.row_ids[r]);
                     if (tr) {
-                        var infCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-inflected'));
+                        var infCell = (tr.querySelector('td.col-inflected'));
                         var infText = infCell ? (infCell.textContent || infCell.innerText || '').trim() : '';
                         if (infText.indexOf(' ') !== -1 || infText.indexOf('+') !== -1) {
                             isMultiToken = true;
@@ -4610,7 +4531,7 @@
                     for (var r = 0; r < otd.row_ids.length; r++) {
                         var tr = findTableRowById(otd.row_ids[r]);
                         if (tr) {
-                            var infCell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-inflected'));
+                            var infCell = (tr.querySelector('td.col-inflected'));
                             var infText = infCell ? (infCell.textContent || infCell.innerText || '').trim() : '';
                             if (infText.indexOf(' ') !== -1 || infText.indexOf('+') !== -1) {
                                 otherMulti = true;
@@ -4694,7 +4615,7 @@
         }
         window.decideTokenClickAction = decideTokenClickAction;
 
-        /** @param {HTMLElement|null} span @returns {Desk.Token|null} */
+        /** @param {HTMLElement|null} span @returns {Token|null} */
         function findTokenData(span) {
             if (!span) return null;
             var wordIdx = parseInt(String(span.getAttribute('data-word-idx') || span.getAttribute('data-order') || span.getAttribute('data-token-order')), 10);
@@ -4702,7 +4623,7 @@
             var rawSent = parseInt(String(span.getAttribute('data-sentence-idx')), 10);
             var spanSent = isNaN(rawSent) ? null : rawSent;
 
-            /** @param {Desk.Word} wObj @param {Desk.Card} card */
+            /** @param {VocabularyRow} wObj @param {WorkspaceCard} card */
             function resolveSent(wObj, card) {
                 if (spanSent !== null) return spanSent;
                 var w = parseInt(String(wObj.sentence_idx), 10);
@@ -4739,7 +4660,7 @@
                 }
                 if (spanText) {
                     var candidates = [];
-                    var /** @type {Desk.Membership} */ seenRowIds = {};
+                    var seenRowIds = {};
                     for (var c = 0; c < cards.length; c++) {
                         var words = cards[c].words || [];
                         for (var w = 0; w < words.length; w++) {
@@ -4770,13 +4691,13 @@
                 }
             }
             if (spanText) {
-                var rows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id]'));
+                var rows = (document.querySelectorAll('#lemma-table tbody tr[data-row-id]'));
                 var matchedRows = [];
                 for (var r = 0; r < rows.length; r++) {
                     var tr = rows[r];
                     var rId = parseInt(String(tr.getAttribute('data-row-id')), 10);
-                    var srcInfCell = /** @type {HTMLElement|null} */ (tr.querySelector('td[data-col="WordSourceInflectedForm"]'));
-                    var srcCell = /** @type {HTMLElement|null} */ (tr.querySelector('td[data-col="WordSource"]'));
+                    var srcInfCell = (tr.querySelector('td[data-col="WordSourceInflectedForm"]'));
+                    var srcCell = (tr.querySelector('td[data-col="WordSource"]'));
                     var t1 = (srcInfCell ? (srcInfCell.textContent || '') : '').trim().toLowerCase();
                     var t2 = (srcCell ? (srcCell.textContent || '') : '').trim().toLowerCase();
                     if (t1 === spanText || t2 === spanText) {
@@ -4799,7 +4720,7 @@
             return null;
         }
 
-        /** @param {Desk.RowId} wordIdx */
+        /** @param {number|string} wordIdx */
         function findTokenDataByVisualIdx(wordIdx) {
             wordIdx = parseInt(String(wordIdx), 10);
             for (var i = 0; i < tokenMap.length; i++) {
@@ -4822,18 +4743,18 @@
             return false;
         }
 
-        /** @param {string} rowIdStr @param {Desk.Membership} excludedVisualIdxsMap */
+        /** @param {string} rowIdStr @param {Object<string, boolean>} excludedVisualIdxsMap */
         function isRowStillNeededByOtherActiveTokens(rowIdStr, excludedVisualIdxsMap) {
             if (!window.AppState || !window.AppState.activeTokenSelections) return false;
             var targetRowIdInt = parseInt(String(rowIdStr), 10);
 
-            var /** @type {Desk.Membership} */ relevantRowIds = {};
+            var relevantRowIds = {};
             relevantRowIds[String(rowIdStr)] = true;
             if (!isNaN(targetRowIdInt)) relevantRowIds[String(targetRowIdInt)] = true;
 
             var rows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
                 ? tableRows
-                : /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
+                :  (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
             if (rows && rows.length > 0) {
                 for (var i = 0; i < rows.length; i++) {
                     var tr = rows[i];
@@ -4858,7 +4779,7 @@
                 if (excludedVisualIdxsMap && excludedVisualIdxsMap[String(item.visual_idx)]) continue;
                 var td = findTokenDataByVisualIdx ? findTokenDataByVisualIdx(Number(item.visual_idx)) : null;
                 if (!td) {
-                    var s = /** @type {HTMLElement|null} */ (document.querySelector('span[data-word-idx="' + item.visual_idx + '"]'));
+                    var s = (document.querySelector('span[data-word-idx="' + item.visual_idx + '"]'));
                     if (s) td = findTokenData(s);
                 }
                 var atomics = td ? ((td.atomic_row_ids !== undefined) ? td.atomic_row_ids : (td.row_ids || [])) : [];
@@ -4872,7 +4793,7 @@
         }
         window.isRowStillNeededByOtherActiveTokens = isRowStillNeededByOtherActiveTokens;
 
-        /** @param {string} lemmaStr @param {Desk.Membership} excludedVisualIdxsMap */
+        /** @param {string} lemmaStr @param {Object<string, boolean>} excludedVisualIdxsMap */
         function isLemmaStillNeededByOtherActiveTokens(lemmaStr, excludedVisualIdxsMap) {
             if (!lemmaStr || !window.AppState || !window.AppState.activeTokenSelections) return false;
             var normLemma = String(lemmaStr).trim().toLowerCase();
@@ -4882,7 +4803,7 @@
                 if (excludedVisualIdxsMap && excludedVisualIdxsMap[String(item.visual_idx)]) continue;
                 var td = findTokenDataByVisualIdx ? findTokenDataByVisualIdx(Number(item.visual_idx)) : null;
                 if (!td) {
-                    var s = /** @type {HTMLElement|null} */ (document.querySelector('span[data-word-idx="' + item.visual_idx + '"]'));
+                    var s = (document.querySelector('span[data-word-idx="' + item.visual_idx + '"]'));
                     if (s) td = findTokenData(s);
                 }
                 if (td) {
@@ -4964,7 +4885,7 @@
             saveActiveTokensToStorage();
         }
 
-        /** @param {Desk.RowId} rowId @param {string} lemma */
+        /** @param {number|string} rowId @param {string} lemma */
         function pruneActiveTokensByRowOrLemma(rowId, lemma) {
             if (!window.AppState || !window.AppState.activeTokenSelections || window.AppState.activeTokenSelections.length === 0) return;
             var rStr = (rowId !== undefined && rowId !== null) ? String(rowId) : null;
@@ -5043,7 +4964,7 @@
         function removeTokenFromActiveSelections(span) {
             if (!window.AppState || !window.AppState.activeTokenSelections) return;
             var relatedSpans = findRelatedTokenSpans(span);
-            var /** @type {Desk.Membership} */ vIdxsToRemove = {};
+            var vIdxsToRemove = {};
             for (var i = 0; i < relatedSpans.length; i++) {
                 var s = relatedSpans[i];
                 var td = findTokenData(s);
@@ -5078,7 +4999,7 @@
                     var tds = tr.getElementsByTagName('td');
                     for (var m = 0; m < tds.length; m++) {
                         if (tds[m].getAttribute('data-col') === 'WordDestination') {
-                            if (/** @type {HTMLElement|null} */ (tds[m].querySelector('.skeleton-loader')) || /** @type {HTMLElement|null} */ (tds[m].querySelector('[data-pending="true"]')) || tds[m].classList.contains('skeleton-loader')) {
+                            if ( (tds[m].querySelector('.skeleton-loader')) ||  (tds[m].querySelector('[data-pending="true"]')) || tds[m].classList.contains('skeleton-loader')) {
                                 continue;
                             }
                             var trans = tds[m].textContent || tds[m].innerText || "";
@@ -5153,7 +5074,7 @@
                     if (col === '{lemma_col_name}' || col === 'WordSource') {
                         lemma = (tds[m].textContent || tds[m].innerText || "").trim();
                     } else if (col === 'WordDestination') {
-                        if (/** @type {HTMLElement|null} */ (tds[m].querySelector('.skeleton-loader')) || /** @type {HTMLElement|null} */ (tds[m].querySelector('[data-pending="true"]')) || tds[m].classList.contains('skeleton-loader')) {
+                        if ( (tds[m].querySelector('.skeleton-loader')) ||  (tds[m].querySelector('[data-pending="true"]')) || tds[m].classList.contains('skeleton-loader')) {
                             trans = "";
                         } else {
                             var tStr = (tds[m].textContent || tds[m].innerText || "").trim();
@@ -5313,7 +5234,7 @@
             // Manage delimiters between sibling spans in the compound group
             for (var j = 0; j < group.length - 1; j++) {
                 var currSpan = group[j];
-                var nextSpan = /** @type {HTMLElement|null} */ (group[j + 1]);
+                var nextSpan = (group[j + 1]);
                 var delimNode = currSpan.nextSibling;
                 if (delimNode && isCompoundDelimiterNode(delimNode)) {
                     if (delimNode._origVal === undefined) {
@@ -5369,7 +5290,7 @@
                     window.ahkCall('play', audioPythonExe + "\\n" + audioAnkiTtsCli + "\\n" + lang + "\\n" + escapedText);
                 } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             } else if (typeof fetch === 'function') {
-                var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
+                var headers = { 'Content-Type': 'application/json' };
                 if (typeof getApiToken === 'function') {
                     var tok = getApiToken();
                     if (tok) {
@@ -5509,7 +5430,7 @@
         /** @param {HTMLElement} s @param {string} sourceMode @param {string=} chainMode */
         function getSingleTokenWordsToPlay(s, sourceMode, chainMode) {
             if (!s) return "";
-            /** @type {string[]} */ var words = [];
+             var words = [];
             var tokenData = findTokenData(s);
             var spanClean = (s.getAttribute('data-lower-clean') || s.getAttribute('data-original-text') || s.textContent || "").trim().toLowerCase();
             var spanText = (s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
@@ -5633,7 +5554,7 @@
             var group = findCompoundSiblingSpans(targetSpan);
             if (!group || group.length === 0) group = [targetSpan];
 
-            /** @type {string[]} */ var words = [];
+             var words = [];
             for (var i = 0; i < group.length; i++) {
                 var s = group[i];
                 var term = getSingleTokenWordsToPlay(s, sourceMode);
@@ -5669,7 +5590,7 @@
                 addEvent(span, 'mousedown', function(e) {
                     if (window.__selectableTextMode) return;
                     if (window.__deskInstanceId && myDeskInstanceId !== window.__deskInstanceId) return;
-                    e = /** @type {MouseEvent} */ (e || window.event);
+                    e = (e || window.event);
 
                     if (e.button === 0) { // LMB
                         var lt = document.getElementById('lemma-table');
@@ -5756,7 +5677,7 @@
                                 if (wl) clickedLemma = String(wl).trim().toLowerCase();
                             }
 
-                            var /** @type {Desk.Membership} */ targetMergedRowIds = {};
+                            var targetMergedRowIds = {};
                             for (var t = 0; t < targetRowIds.length; t++) {
                                 targetMergedRowIds[String(targetRowIds[t])] = true;
                             }
@@ -5862,7 +5783,7 @@
                         }
 
                         var relatedSpans = findRelatedTokenSpans(span);
-                        var /** @type {Desk.Membership} */ vIdxsToRemove = {};
+                        var vIdxsToRemove = {};
                         for (var i = 0; i < relatedSpans.length; i++) {
                             var rSpan = relatedSpans[i];
                             var rTd = findTokenData(rSpan);
@@ -5872,7 +5793,7 @@
 
                         var currentTableRows = (tableRows && tableRows.length > 0)
                             ? tableRows
-                            : /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
+                            :  (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
                         for (var j = 0; j < targetRowIds.length; j++) {
                             var tid = String(targetRowIds[j]);
                             if (tokenDragMode) {
@@ -5957,7 +5878,7 @@
                 addEvent(span, 'mouseover', function(e) {
                     if (window.__selectableTextMode) return;
                     if (window.__deskInstanceId && myDeskInstanceId !== window.__deskInstanceId) return;
-                    e = /** @type {MouseEvent} */ (e || window.event);
+                    e = (e || window.event);
                     if (isTokenDragSelecting) {
                         if (e.buttons !== undefined && (e.buttons & 1) === 0) {
                             isTokenDragSelecting = false;
@@ -6110,14 +6031,14 @@
         if (sourceContainer) {
             addEvent(sourceContainer, 'contextmenu', /** @param {MouseEvent} e */ function(e) {
                 if (window.__selectableTextMode) return;
-                e = /** @type {MouseEvent} */ (e || window.event);
+                e = (e || window.event);
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 return false;
             });
         }
 
         var lemmaTable = document.getElementById('lemma-table');
-    /** @type {HTMLElement[]} */ var tableRows = [];
+     var tableRows = [];
     function detectHasHighlightCol() {
         if (window.__CONFIG__ && window.__CONFIG__.has_highlight_col !== undefined) {
             return !!(window.__CONFIG__.has_highlight_col === true || window.__CONFIG__.has_highlight_col === 'true');
@@ -6170,8 +6091,8 @@
     function wireTableRowEvents(row) {
         addEvent(row, 'mousedown', function(e) {
             if (window.__selectableTextMode) return;
-            e = /** @type {MouseEvent} */ (e || window.event);
-            var target = /** @type {HTMLElement|null} */ (e.target || e.srcElement);
+            e = (e || window.event);
+            var target = (e.target || e.srcElement);
             if (target && target.tagName === 'INPUT') {
                 return;
             }
@@ -6324,14 +6245,14 @@
                 }
             }
 
-            e = /** @type {MouseEvent} */ (e || window.event);
+            e = (e || window.event);
             if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
             return false;
         });
 
         addEvent(row, 'mouseover', function(e) {
             if (window.__selectableTextMode) return;
-            e = /** @type {MouseEvent} */ (e || window.event);
+            e = (e || window.event);
             var lt = document.getElementById('lemma-table');
             var isFilterActive = lt && lt.classList.contains('kw-filter-selected-only');
 
@@ -6444,7 +6365,15 @@
         }
     }
 
-    function rebindTableRows() {
+    function acceptRenderedSelection(rows, selectedIds) {
+        if (!selectedIds) return;
+        var ids = selectedIds.map(String);
+        rows.forEach(function(row) {
+            window.setLemmaSelected(getRowLemma(row), ids.indexOf(row.getAttribute('data-row-id')) !== -1);
+        });
+    }
+
+    function rebindTableRows(selectedIds) {
         var hasCardsElement = !!document.getElementById('sentence-cards');
         var isContainerMode = !!(document.getElementById('delivery-mode') && (requireElement('delivery-mode').textContent || '').trim() === 'container');
         var cardsList = (hasCardsElement || isContainerMode) && (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function')
@@ -6472,6 +6401,7 @@
                 }
             }
         }
+        acceptRenderedSelection(tableRows, selectedIds);
         for (var i = 0; i < tableRows.length; i++) {
             var r = tableRows[i];
             var rIdStr = String(r.getAttribute('data-row-id'));
@@ -6510,7 +6440,7 @@
     /** @param {MouseEvent} e */
     function handleMouseUp(e) {
             if (window.__deskInstanceId && myDeskInstanceId !== window.__deskInstanceId) return;
-            e = /** @type {MouseEvent} */ (e || window.event);
+            e = (e || window.event);
             var lt = document.getElementById('lemma-table');
             if (lt) {
                 lt.classList.remove('kw-table-dragging');
@@ -6705,19 +6635,19 @@
         addEvent(document, 'contextmenu', /** @param {MouseEvent} e */ function(e) {
             if (window.__selectableTextMode) return;
             if (justFinishedDrag) {
-                e = /** @type {MouseEvent} */ (e || window.event);
+                e = (e || window.event);
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 return false;
             }
         });
 
         addEvent(document, 'keydown', function(e) {
-            e = /** @type {KeyboardEvent} */ (e || window.event);
+            e = (e || window.event);
             var keyCode = e.keyCode || e.which;
             var isSaveKey = (keyCode === 83 || (e.key && (e.key.toLowerCase() === 's' || e.key.toLowerCase() === 'ы')) || e.code === 'KeyS');
             if ((e.ctrlKey || e.metaKey) && isSaveKey) { // Ctrl+S
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-                var saveBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-save'));
+                var saveBtn = (document.getElementById('kw-btn-save'));
                 if (saveBtn && !saveBtn.disabled) {
                     saveBtn.click();
                 } else if (typeof window.onSaveClick === 'function') {
@@ -6728,7 +6658,7 @@
 
             if (keyCode === 116 || e.key === 'F5') { // F5 -> update
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-                var updateBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-update'));
+                var updateBtn = (document.getElementById('kw-btn-update'));
                 if (updateBtn && !updateBtn.disabled) {
                     updateBtn.click();
                 } else if (typeof window.onUpdateClick === 'function') {
@@ -6941,7 +6871,7 @@
             if (window.forceRepaint) window.forceRepaint();
         };
 
-        /** @param {Desk.RowId} rowId @param {boolean=} forceState */
+        /** @param {number|string} rowId @param {boolean=} forceState */
         function toggleRowSelection(rowId, forceState) {
             var rIdStr = String(rowId);
             var lem = getLemmaByRowId(rowId);
@@ -6982,7 +6912,7 @@
             }
 
             if (!lt) return;
-            var tbody = /** @type {HTMLElement|null} */ (lt.querySelector('tbody'));
+            var tbody = (lt.querySelector('tbody'));
             if (!tbody) return;
 
             var isFilterActive = !!(window.AppState && window.AppState.filterSelectedOnly);
@@ -6994,7 +6924,7 @@
                 return;
             }
 
-            var selectedRows = /** @type {NodeListOf<HTMLElement>} */ (tbody.querySelectorAll('tr[data-selected="1"]'));
+            var selectedRows = (tbody.querySelectorAll('tr[data-selected="1"]'));
             if (selectedRows.length === 0) {
                 if (!emptyRow) {
                     emptyRow = document.createElement('tr');
@@ -7108,8 +7038,8 @@
         function applyOccurrenceRow(tr) {
             if (!tr || !tr.hasAttribute('data-occ')) return;
             var sels = (window.AppState && window.AppState.activeTokenSelections) ? window.AppState.activeTokenSelections : [];
-            var /** @type {Record<string,string>} */ cellMap = { 'col-inflected': 'form', 'col-translation': 'trans', 'col-morphology': 'morph', 'col-pos': 'pos' };
-            var /** @type {Record<string,string>} */ posNameMap = {
+            var cellMap = { 'col-inflected': 'form', 'col-translation': 'trans', 'col-morphology': 'morph', 'col-pos': 'pos' };
+            var posNameMap = {
                 'art.': 'Article',
                 'pron.': 'Pronoun',
                 'det.': 'Determiner',
@@ -7134,9 +7064,9 @@
             }
             for (var cls in cellMap) {
                 if (!cellMap.hasOwnProperty(cls)) continue;
-                var td = /** @type {HTMLElement|null} */ (tr.querySelector('td.' + cls));
+                var td = (tr.querySelector('td.' + cls));
                 if (!td) continue;
-                var cell = /** @type {HTMLElement|null} */ (td.querySelector('.scrollable-cell')) || td;
+                var cell = (td.querySelector('.scrollable-cell')) || td;
                 if (!td.hasAttribute('data-orig-html')) td.setAttribute('data-orig-html', String(cell.innerHTML));
                 if (!td.hasAttribute('data-orig-title')) td.setAttribute('data-orig-title', String(td.getAttribute('title') || ''));
                 if (cell !== td && !cell.hasAttribute('data-orig-title')) cell.setAttribute('data-orig-title', String(cell.getAttribute('title') || ''));
@@ -7223,7 +7153,7 @@
         window.applyOccurrenceRow = applyOccurrenceRow;
 
         function applyOccurrenceView() {
-            var rows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('tr[data-occ]'));
+            var rows = (document.querySelectorAll('tr[data-occ]'));
             for (var r = 0; r < rows.length; r++) {
                 applyOccurrenceRow(rows[r]);
             }
@@ -7232,7 +7162,7 @@
 
         function updateBidirectionalHighlights() {
             try { applyOccurrenceView(); } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-            var /** @type {Record<string,Desk.Token|null>} */ tokByVidx = {}, /** @type {Record<string,HTMLElement|null>} */ spanByVidx = {}, /** @type {Record<string,number|undefined>} */ sentByRowId = {};
+            var tokByVidx = {},  spanByVidx = {},  sentByRowId = {};
             for (var m = 0; m < tokenMap.length; m++) {
                 var t = tokenMap[m];
                 tokByVidx[String(t.visual_idx)] = t;
@@ -7244,7 +7174,7 @@
                 }
             }
             for (var i = 0; i < tokenSpans.length; i++) {
-                var /** @type {HTMLElement|null} */ span = tokenSpans[i];
+                var span = tokenSpans[i];
                 var sk = String(span.getAttribute('data-word-idx'));
                 if (!spanByVidx.hasOwnProperty(sk)) spanByVidx[sk] = span;
                 try {
@@ -7260,9 +7190,9 @@
             var isSameLemmaOn = !!(window.AppState && window.AppState.highlightSameLemma);
 
             var selLemmas = (window.AppState && window.AppState.selectedLemmas) ? window.AppState.selectedLemmas : {};
-            var /** @type {Desk.Membership} */ activeTargetRowIds = {};
-            var /** @type {Desk.Membership} */ primaryTargetRowIds = {};
-            for (var /** @type {Desk.RowId} */ rId in selectedRowIdsMap) {
+            var activeTargetRowIds = {};
+            var primaryTargetRowIds = {};
+            for (var rId in selectedRowIdsMap) {
                 if (!selectedRowIdsMap.hasOwnProperty(rId)) continue;
                 var rowId = parseInt(String(rId), 10);
                 if (!isNaN(rowId)) {
@@ -7271,7 +7201,7 @@
             }
             var curTableRows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
                 ? tableRows
-                : /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
+                :  (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
             for (var i = 0; i < curTableRows.length; i++) {
                 var tr = curTableRows[i];
                 var trId = String(tr.getAttribute('data-row-id'));
@@ -7304,10 +7234,10 @@
                 }
             }
 
-            var /** @type {Desk.Membership} */ activeVisualIdxs = {};
-            var /** @type {Desk.Membership} */ activeLemmas = {};
-            var /** @type {Desk.Membership} */ activeTokenRowIds = {};
-            var isCompoundRow = /** @param {Desk.RowId} rVal @param {Desk.Token|null} tokObj */ function(rVal, tokObj) {
+            var activeVisualIdxs = {};
+            var activeLemmas = {};
+            var activeTokenRowIds = {};
+            var isCompoundRow = /** @param {number|string} rVal @param {Token|null} tokObj */ function(rVal, tokObj) {
                 if (!tokObj) return false;
                 var cRows = tokObj.compound_row_ids;
                 if (cRows && cRows.length > 0) {
@@ -7325,12 +7255,12 @@
                         if (c) activeLemmas[c] = true;
                     }
                 };
-                var markActiveRow = /** @param {Desk.RowId} rVal */ function(rVal) {
+                var markActiveRow = /** @param {number|string} rVal */ function(rVal) {
                     if (rVal !== undefined && rVal !== null) {
                         activeTokenRowIds[String(rVal)] = true;
                     }
                 };
-                var addRowLem = /** @param {Desk.RowId} rVal */ function(rVal) {
+                var addRowLem = /** @param {number|string} rVal */ function(rVal) {
                     if (rVal !== undefined && rVal !== null) {
                         var rStr = String(rVal);
                         activeTokenRowIds[rStr] = true;
@@ -7420,7 +7350,7 @@
             for (var i = 0; i < tokenMap.length; i++) {
                 var token = tokenMap[i];
                 var isOrphanSelected = (typeof selectedOrphanWordIdxsMap !== 'undefined' && selectedOrphanWordIdxsMap && selectedOrphanWordIdxsMap.hasOwnProperty(String(token.visual_idx)));
-                var /** @type {Desk.RowId[]} */ tokRowIds = [];
+                var tokRowIds = [];
                 if (token.atomic_row_ids && token.atomic_row_ids.length > 0) {
                     for (var tri = 0; tri < token.atomic_row_ids.length; tri++) {
                         tokRowIds.push(token.atomic_row_ids[tri]);
@@ -7585,7 +7515,7 @@
                 }
 
                 if (!hasMatchingRow && selLemmas) {
-                    var /** @type {Desk.RowId[]} */ tokRowIds = (token.atomic_row_ids && token.atomic_row_ids.length > 0)
+                    var tokRowIds = (token.atomic_row_ids && token.atomic_row_ids.length > 0)
                         ? token.atomic_row_ids
                         : (token.row_ids || []);
                     for (var r = 0; r < tokRowIds.length; r++) {
@@ -7602,7 +7532,7 @@
                 }
 
                 if (hasMatchingRow) {
-                    var /** @type {HTMLElement|null} */ span = spanByVidx[String(token.visual_idx)] || null;
+                    var span = spanByVidx[String(token.visual_idx)] || null;
                     if (span) {
                         try {
                             if (isDirectRowMatch || isTargetedActiveTokenMatch) {
@@ -7712,7 +7642,7 @@
                     }
                 }
             }
-            var selRows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr.kw-row-selected, #lemma-table tbody tr.selected, #lemma-table tbody tr[data-selected="1"]'));
+            var selRows = (document.querySelectorAll('#lemma-table tbody tr.kw-row-selected, #lemma-table tbody tr.selected, #lemma-table tbody tr[data-selected="1"]'));
             for (var r = 0; r < selRows.length; r++) {
                 var rId = selRows[r].getAttribute('data-row-id');
                 if (rId !== null && rId !== '') {
@@ -7729,7 +7659,7 @@
             var arr = [];
             for (var k in selectedRowIdsMap) {
                 if (selectedRowIdsMap.hasOwnProperty(k)) {
-                    var tr = /** @type {HTMLElement|null} */ (document.querySelector('tr[data-row-id="' + k + '"]'));
+                    var tr = (document.querySelector('tr[data-row-id="' + k + '"]'));
                     if (tr) {
                         var tOrd = tr.getAttribute('data-token-order');
                         if (tOrd !== null && tOrd !== undefined && tOrd !== '') {
@@ -7774,7 +7704,7 @@
         function makeEditable(cell) {
             if (cell.getElementsByTagName('input').length > 0) return;
 
-            var scrollDiv = /** @type {HTMLElement|null} */ (cell.querySelector('.scrollable-cell'));
+            var scrollDiv = (cell.querySelector('.scrollable-cell'));
             var originalValue = scrollDiv ? (scrollDiv.textContent || scrollDiv.innerText) : (cell.textContent || cell.innerText || "");
             var colName = cell.getAttribute('data-col');
             var trParent = cell.parentElement;
@@ -7824,9 +7754,9 @@
                         div.removeAttribute('title');
                     }
                 } else if (colName === 'WordSource' || cell.classList.contains('col-lemma')) {
-                    var curGenCell = trParent ? /** @type {HTMLElement|null} */ (trParent.querySelector('td.col-gender, td[data-col="WordSourceGender"], td[data-col="gender"]')) : null;
+                    var curGenCell = trParent ?  (trParent.querySelector('td.col-gender, td[data-col="WordSourceGender"], td[data-col="gender"]')) : null;
                     var curGen = curGenCell ? (curGenCell.textContent || curGenCell.innerText || "").trim() : "";
-                    var curPosCell = trParent ? /** @type {HTMLElement|null} */ (trParent.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]')) : null;
+                    var curPosCell = trParent ?  (trParent.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]')) : null;
                     var curPos = curPosCell ? (curPosCell.textContent || curPosCell.innerText || "").trim() : "";
                     var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
                     var origTip = formatLemmaTooltip(originalValue, curGen, activeLang, curPos);
@@ -7838,7 +7768,7 @@
                         div.removeAttribute('title');
                     }
                 } else if (colName === 'WordSourceInflectedForm' || cell.classList.contains('col-inflected')) {
-                    var lemCell = trParent ? /** @type {HTMLElement|null} */ (trParent.querySelector('td.col-lemma, td[data-col="WordSource"]')) : null;
+                    var lemCell = trParent ?  (trParent.querySelector('td.col-lemma, td[data-col="WordSource"]')) : null;
                     var lemVal = lemCell ? (lemCell.textContent || lemCell.innerText || "").trim() : "";
                     var cardSentenceText = (window.AppState ? window.AppState.sourceText : '') || '';
                     var origTip = formatInflectedTooltip(cardSentenceText, originalValue, tokenOrderVal, lemVal);
@@ -7874,9 +7804,9 @@
                         div.removeAttribute('title');
                     }
                 } else if (colName === 'WordSource' || cell.classList.contains('col-lemma')) {
-                    var curGenCell = trParent ? /** @type {HTMLElement|null} */ (trParent.querySelector('td.col-gender, td[data-col="WordSourceGender"], td[data-col="gender"]')) : null;
+                    var curGenCell = trParent ?  (trParent.querySelector('td.col-gender, td[data-col="WordSourceGender"], td[data-col="gender"]')) : null;
                     var curGen = curGenCell ? (curGenCell.textContent || curGenCell.innerText || "").trim() : "";
-                    var curPosCell = trParent ? /** @type {HTMLElement|null} */ (trParent.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]')) : null;
+                    var curPosCell = trParent ?  (trParent.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]')) : null;
                     var curPos = curPosCell ? (curPosCell.textContent || curPosCell.innerText || "").trim() : "";
                     var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
                     var newTip = formatLemmaTooltip(newValue, curGen, activeLang, curPos);
@@ -7888,7 +7818,7 @@
                         div.removeAttribute('title');
                     }
                 } else if (colName === 'WordSourceInflectedForm' || cell.classList.contains('col-inflected')) {
-                    var lemCell = trParent ? /** @type {HTMLElement|null} */ (trParent.querySelector('td.col-lemma, td[data-col="WordSource"]')) : null;
+                    var lemCell = trParent ?  (trParent.querySelector('td.col-lemma, td[data-col="WordSource"]')) : null;
                     var lemVal = lemCell ? (lemCell.textContent || lemCell.innerText || "").trim() : "";
                     var cardSentenceText = (window.AppState ? window.AppState.sourceText : '') || '';
                     var newTip = formatInflectedTooltip(cardSentenceText, newValue, tokenOrderVal, lemVal);
@@ -7903,7 +7833,7 @@
                 cell.appendChild(div);
                 cell.classList.remove('editing');
                 if (newValue !== originalValue) {
-                    var /** @type {Desk.HistoryAction} */ action = {
+                    var action = {
                         type: 'edit',
                         rowId: parseInt(String(rowId), 10),
                         tokenOrder: tokenOrderVal,
@@ -7923,7 +7853,7 @@
             window.commitActiveEdit = commit;
 
             addEvent(input, 'keydown', function(e) {
-                e = /** @type {KeyboardEvent} */ (e || window.event);
+                e = (e || window.event);
                 var keyCode = e.keyCode;
                 if (e.ctrlKey && keyCode === 65) { // Ctrl+A
                     if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
@@ -7990,7 +7920,7 @@
         };
 
         window.deleteSelectedRows = function() {
-            /** @type {Desk.RowId[]} */ var selected = getSelectedRowsArray();
+             var selected = getSelectedRowsArray();
             if (selected.length === 0) return;
             var tOrders = [];
             var sIndices = [];
@@ -8010,7 +7940,7 @@
                 tOrders.push(tOrd);
                 sIndices.push(sIdx);
             }
-            var /** @type {Desk.HistoryAction} */ action = {
+            var action = {
                 type: 'delete',
                 rowIds: selected,
                 tokenOrders: tOrders,
@@ -8022,7 +7952,7 @@
             if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
         };
 
-        /** @param {Desk.HistoryAction} action */
+        /** @param {HistoryAction} action */
         function pushHistory(action) {
             recordUserIntent(action, true, true);
             historyStack.splice(historyIndex + 1);
@@ -8030,7 +7960,7 @@
             historyIndex++;
         }
 
-        /** @param {Desk.EditAction} action @param {string} value */
+        /** @param {HistoryAction} action @param {string} value */
         function projectEditedValue(action, value) {
             action.cell.innerHTML = '';
             var div = document.createElement('div');
@@ -8044,7 +7974,7 @@
             }
         }
 
-        /** @param {Desk.HistoryAction} action */
+        /** @param {HistoryAction} action */
         function applyAction(action) {
             recordUserIntent(action, true, false);
             if (action.type === 'edit') {
@@ -8064,7 +7994,7 @@
             }
         }
 
-        /** @param {Desk.HistoryAction} action */
+        /** @param {HistoryAction} action */
         function revertAction(action) {
             recordUserIntent(action, false, false);
             if (action.type === 'edit') {
@@ -8101,23 +8031,23 @@
             if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
         };
 
-        /** @param {Desk.Delta} delta */
+        /** @param {Delta} delta */
         function deltaIdentity(delta) {
             return [delta.sentence_idx, delta.token_order, delta.column].join(':');
         }
 
-        /** @param {Desk.HistoryAction} action */
+        /** @param {HistoryAction} action */
         function historyValues(action) {
             if (action.type === 'edit') return [{row_id: action.rowId, token_order: action.tokenOrder,
                 sentence_idx: action.sentenceIdx, column: action.column, value: action.newValue, original: action.oldValue, element: action.cell}];
             return action.rowIds.map(function(id, index) {
                 return {row_id: id, token_order: action.tokenOrders[index], sentence_idx: action.sentenceIndices[index],
                     column: '_delete', value: true, original: false,
-                    element: /** @type {HTMLElement|null} */ (document.querySelector('#lemma-table tr[data-row-id="' + id + '"]'))};
+                    element:  (document.querySelector('#lemma-table tr[data-row-id="' + id + '"]'))};
             });
         }
 
-        /** @param {Desk.HistoryAction} action @param {boolean} forward @param {boolean} newAction */
+        /** @param {HistoryAction} action @param {boolean} forward @param {boolean} newAction */
         function recordUserIntent(action, forward, newAction) {
             historyValues(action).forEach(function(value) {
                 var key = deltaIdentity(value);
@@ -8132,7 +8062,7 @@
             });
         }
 
-        /** @param {Desk.Delta[]} snapshot @param {Desk.SaveResponse|null|undefined} response */
+        /** @param {Delta[]} snapshot @param {SaveResponse|null|undefined} response */
         function acknowledgeValues(snapshot, response) {
             snapshot.forEach(function(delta) {
                 if (delta.column !== 'DeskSelected') acknowledgedValues[deltaIdentity(delta)].value = delta.value;
@@ -8146,12 +8076,12 @@
             rebuildDeltas();
         }
 
-        /** @param {Desk.Delta} delta */
+        /** @param {Delta} delta */
         function markDirtyDelta(delta) {
             if (delta.column === '_delete') return;
-            var row = /** @type {HTMLElement|null} */ (document.querySelector('#lemma-table tr[data-row-id="' + delta.row_id + '"]'));
+            var row = (document.querySelector('#lemma-table tr[data-row-id="' + delta.row_id + '"]'));
             if (!row) return;
-            var cell = /** @type {HTMLElement|null} */ (row.querySelector('td[data-col="' + delta.column + '"]'));
+            var cell = (row.querySelector('td[data-col="' + delta.column + '"]'));
             if (cell) cell.classList.add('dirty');
         }
 
@@ -8166,7 +8096,7 @@
 
         function rebuildDeltas() {
             deltas = [];
-            Array.prototype.forEach.call(/** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table td.dirty')), function(cell) {
+            Array.prototype.forEach.call( (document.querySelectorAll('#lemma-table td.dirty')), function(cell) {
                 cell.classList.remove('dirty');
             });
             Object.keys(acknowledgedValues).forEach(function(key) {
@@ -8193,10 +8123,10 @@
                                 if (selectedRowIdsMap.hasOwnProperty(sk)) activeC.selected_ids.push(sk);
                             }
                         }
-                        var /** @type {Desk.Membership} */ seenWordDeltas = {};
+                        var seenWordDeltas = {};
                         for (var c = 0; c < wCards.length; c++) {
                             var card = wCards[c];
-                            var /** @type {Desk.Membership} */ curSelMap = {};
+                            var curSelMap = {};
                             if (card.selected_ids) {
                                 for (var s = 0; s < card.selected_ids.length; s++) curSelMap[String(card.selected_ids[s])] = true;
                             }
@@ -8266,7 +8196,7 @@
                         }
                         for (var c = 0; c < wCards.length; c++) {
                             var card = wCards[c];
-                            var /** @type {Desk.Membership} */ curSelMap = {};
+                            var curSelMap = {};
                             if (card.selected_ids) {
                                 for (var s = 0; s < card.selected_ids.length; s++) curSelMap[String(card.selected_ids[s])] = true;
                             }
@@ -8340,7 +8270,7 @@
         };
 
         window.selectAllInActiveEdit = function() {
-            var el = /** @type {HTMLInputElement|null} */ (document.activeElement);
+            var el = (document.activeElement);
             if (el && el.tagName === 'INPUT') {
                 el.select();
             }
@@ -8350,7 +8280,7 @@
             if (typeof tableRows === 'undefined' || !tableRows || tableRows.length === 0) {
                 var lt = document.getElementById('lemma-table');
                 if (lt) {
-                    var trs = /** @type {NodeListOf<HTMLElement>} */ (lt.querySelectorAll('tbody tr[data-row-id]'));
+                    var trs = (lt.querySelectorAll('tbody tr[data-row-id]'));
                     var fresh = [];
                     for (var r = 0; r < trs.length; r++) fresh.push(trs[r]);
                     tableRows = fresh;
@@ -8379,7 +8309,7 @@
         };
 
         function updateToolbarState() {
-            var saveBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-save'));
+            var saveBtn = (document.getElementById('kw-btn-save'));
             if (saveBtn) {
                 saveBtn.disabled = (typeof window.isDirty === 'function') ? !window.isDirty() : true;
             }
@@ -8389,7 +8319,7 @@
         /** @param {HTMLButtonElement|null} btn @param {boolean} isLoading @param {string} loadingText @param {string} defaultText */
         function setButtonLoading(btn, isLoading, loadingText, defaultText) {
             if (typeof btn === 'string') {
-                btn = /** @type {HTMLButtonElement|null} */ (document.getElementById(btn));
+                btn = (document.getElementById(btn));
             }
             if (!btn) return;
             if (isLoading) {
@@ -8432,7 +8362,7 @@
         }
         window.setButtonLoading = setButtonLoading;
 
-        /** @param {Desk.ErrorResponse|Error|string|null|undefined} resObj @param {string=} fallback */
+        /** @param {ErrorResponse|Error|string|null|undefined} resObj @param {string=} fallback */
         function formatErrorWithTrace(resObj, fallback) {
             fallback = fallback || "Operation failed";
             if (!resObj) return fallback;
@@ -8594,7 +8524,7 @@
         }
         window.getApiToken = getApiToken;
 
-        /** @param {Desk.RowId} rowId @param {HTMLButtonElement} btnElement */
+        /** @param {number|string} rowId @param {HTMLButtonElement} btnElement */
         function retryRow(rowId, btnElement) {
             var curZid = getSessionZid();
             if (!curZid) {
@@ -8606,12 +8536,12 @@
                 return;
             }
 
-            var tr = /** @type {HTMLElement|null} */ (document.querySelector('tr[data-row-id="' + rowId + '"]'));
-            /** @type {HTMLElement|null} */ var cellDiv = null;
+            var tr = (document.querySelector('tr[data-row-id="' + rowId + '"]'));
+             var cellDiv = null;
             if (tr) {
-                var cell = /** @type {HTMLElement|null} */ (tr.querySelector('td.col-translation, td[data-col="WordDestination"], td[data-col="word_translation"]')) || tr.getElementsByTagName('td')[2];
+                var cell = (tr.querySelector('td.col-translation, td[data-col="WordDestination"], td[data-col="word_translation"]')) || tr.getElementsByTagName('td')[2];
                 if (cell) {
-                    cellDiv = /** @type {HTMLElement|null} */ (cell.querySelector('.scrollable-cell')) || cell;
+                    cellDiv = (cell.querySelector('.scrollable-cell')) || cell;
                 }
             }
             if (btnElement) {
@@ -8622,17 +8552,17 @@
             }
 
             var token = getApiToken ? getApiToken() : "";
-            var /** @type {Record<string,string>} */ headers = {
+            var headers = {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json'
             };
             if (token) headers['X-API-Token'] = token;
 
-            var /** @type {Desk.CommandRequest} */ retryPayload = {
+            var retryPayload = {
                 session_zid: curZid,
                 row_ids: [parseInt(String(rowId), 10)]
             };
-            var trElem = /** @type {HTMLElement|null} */ (document.querySelector('tr[data-row-id="' + rowId + '"]'));
+            var trElem = (document.querySelector('tr[data-row-id="' + rowId + '"]'));
             if (trElem) {
                 var tOrdAttr = trElem.getAttribute('data-token-order');
                 if (tOrdAttr !== null && tOrdAttr !== undefined && tOrdAttr !== '') {
@@ -8682,12 +8612,11 @@
             if (!curZid) return;
             window._kwRetryToastShown = false;
             var token = getApiToken ? getApiToken() : "";
-            var /** @type {Record<string,string>} */ headers = {
+            var headers = {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json'
             };
             if (token) headers['X-API-Token'] = token;
-
 
             if (typeof window.showToast === 'function') {
                 window.showToast("Retrying unresolved translations...", "info");
@@ -8724,10 +8653,9 @@
         }
         window.retrySession = retrySession;
 
-
-        var /** @type {Desk.SaveState} */ saveState = {phase: 'idle', promise: null};
-        /** @type {number|null} */ var selectionSaveTimer = null;
-        /** @type {{deltas:Desk.Delta[]}|null} */ var nativeSaveSnapshot = null;
+        var saveState = {phase: 'idle', promise: null};
+         var selectionSaveTimer = null;
+         var nativeSaveSnapshot = null;
 
         window.captureSaveSnapshot = function() {
             if (saveState.promise) throw new Error('A save is already pending');
@@ -8824,7 +8752,7 @@
             });
         }
 
-        /** @param {Desk.Delta[]} snapshot */
+        /** @param {Delta[]} snapshot */
         function acknowledgeSelections(snapshot) {
             var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
             snapshot.filter(function(d) { return d.column === 'DeskSelected'; }).forEach(function(d) {
@@ -8840,11 +8768,11 @@
             });
         }
 
-        /** @param {Desk.Delta[]} snapshot */
+        /** @param {Delta[]} snapshot */
         function saveSnapshot(snapshot, context) {
             assertCurrentSave(context);
             var token = getApiToken();
-            var /** @type {Record<string,string>} */ headers = {'Content-Type': 'application/json'};
+            var headers = {'Content-Type': 'application/json'};
             if (token) headers['X-API-Token'] = token;
             var body = JSON.stringify({session_zid: context.session, language: getSessionLang(), token: token, deltas: snapshot});
             var request;
@@ -8878,12 +8806,12 @@
             if (saveState.promise) {
                 return saveState.promise.then(function() { return persistPending(selectionOnly); });
             }
-            var /** @type {Desk.Delta[]} */ snapshot = JSON.parse(window.getDeltas());
+            var snapshot = JSON.parse(window.getDeltas());
             if (selectionOnly) snapshot = snapshot.filter(function(d) { return d.column === 'DeskSelected'; });
             var retryRead = saveState.phase === 'reconcile_failed';
             if (!snapshot.length && !retryRead) return Promise.resolve();
             if (!getSessionZid()) return Promise.reject(new Error('Session ZID missing'));
-            var button = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-save'));
+            var button = (document.getElementById('kw-btn-save'));
             setButtonLoading(button, true, 'Saving...', 'Save (Ctrl+S)');
             var context = {session: getSessionZid(), revision: membershipRevision};
             saveState = {phase: 'saving', snapshot: snapshot, promise: Promise.resolve().then(function() {
@@ -8927,7 +8855,7 @@
             });
         };
 
-        /** @type {number|null} */ var autoSaveDebounceTimer = null;
+         var autoSaveDebounceTimer = null;
         window.triggerAutoSaveOnEdit = function() {
             var uiCfg = window.__CONFIG__ || {};
             if (!uiCfg.auto_save_on_edit) return;
@@ -8961,9 +8889,9 @@
             if (!deltasJson || deltasJson.length === 0) return;
 
             var tok = (typeof getApiToken === 'function') ? getApiToken() : '';
-            var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
+            var headers = { 'Content-Type': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
-            var /** @type {Desk.CommandRequest} */ bodyPayload = {
+            var bodyPayload = {
                 session_zid: sZid,
                 deltas: deltasJson,
                 language: (typeof getSessionLang === 'function') ? getSessionLang() : ''
@@ -9006,20 +8934,20 @@
                 else if (window.location && window.location.reload) window.location.reload();
                 return;
             }
-            var updateBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-update'));
+            var updateBtn = (document.getElementById('kw-btn-update'));
             setButtonLoading(updateBtn, true, "Updating...", "Update");
 
             var tok = getApiToken();
-            var /** @type {Record<string,string>} */ headers = { 'Accept': 'application/json' };
+            var headers = { 'Accept': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
-            var /** @type {Record<string,string>} */ postHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+            var postHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
             if (tok) postHeaders['X-API-Token'] = tok;
 
             // Check if sentence translation or any lemma translation is missing or in error/skeleton state
             var tc = document.getElementById('translation-container');
             var tcText = tc ? (tc.textContent || tc.innerText || "").trim() : "";
             var needsRetext = false;
-            if (!tcText || tcText === 'Loading' || tcText === 'Loading translation' || tcText === 'Processed' || tcText.indexOf('...') !== -1 || (tc && (tc.classList.contains('skeleton-loader') || /** @type {HTMLElement|null} */ (tc.querySelector('.skeleton-loader'))))) {
+            if (!tcText || tcText === 'Loading' || tcText === 'Loading translation' || tcText === 'Processed' || tcText.indexOf('...') !== -1 || (tc && (tc.classList.contains('skeleton-loader') ||  (tc.querySelector('.skeleton-loader'))))) {
                 needsRetext = true;
             }
             if (window.AppState && (!window.AppState.translatedText || window.AppState.translatedText.trim() === '')) {
@@ -9027,18 +8955,18 @@
             }
 
             var untranslatedRowIds = [];
-            var allRows = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#lemma-table tbody tr[data-row-id]'));
+            var allRows = (document.querySelectorAll('#lemma-table tbody tr[data-row-id]'));
             for (var r = 0; r < allRows.length; r++) {
                 var rowEl = allRows[r];
                 var rId = rowEl.getAttribute('data-row-id') || rowEl.getAttribute('data-token-order');
-                var transTd = /** @type {HTMLElement|null} */ (rowEl.querySelector('td[data-col="WordDestination"]')) || /** @type {HTMLElement|null} */ (rowEl.querySelector('.col-translation'));
+                var transTd = (rowEl.querySelector('td[data-col="WordDestination"]')) ||  (rowEl.querySelector('.col-translation'));
                 if (!transTd) {
                     var tds = rowEl.getElementsByTagName('td');
                     if (tds.length >= 3) transTd = tds[2];
                 }
-                var transCell = transTd ? (/** @type {HTMLElement|null} */ (transTd.querySelector('.scrollable-cell')) || transTd) : null;
+                var transCell = transTd ? ( (transTd.querySelector('.scrollable-cell')) || transTd) : null;
                 var transContent = transCell ? (transCell.textContent || transCell.innerText || "").trim() : "";
-                if (!transContent || transContent === 'Loading' || transContent.indexOf('...') !== -1 || (transCell && (transCell.classList.contains('skeleton-loader') || /** @type {HTMLElement|null} */ (transCell.querySelector('.skeleton-loader'))))) {
+                if (!transContent || transContent === 'Loading' || transContent.indexOf('...') !== -1 || (transCell && (transCell.classList.contains('skeleton-loader') ||  (transCell.querySelector('.skeleton-loader'))))) {
                     if (rId !== null && rId !== undefined) {
                         untranslatedRowIds.push(rId);
                     }
@@ -9047,7 +8975,7 @@
 
             var actions = [];
             if (needsRetext) {
-                var /** @type {Desk.CommandRequest} */ retextBody = { session_zid: sZid, language: getSessionLang() };
+                var retextBody = { session_zid: sZid, language: getSessionLang() };
                 if (tok) retextBody.token = tok;
                 actions.push(
                     fetch('/session/retext', {
@@ -9058,7 +8986,7 @@
                 );
             }
             if (untranslatedRowIds.length > 0) {
-                var /** @type {Desk.CommandRequest} */ rewordBody = { session_zid: sZid, row_ids: untranslatedRowIds, language: getSessionLang() };
+                var rewordBody = { session_zid: sZid, row_ids: untranslatedRowIds, language: getSessionLang() };
                 if (tok) rewordBody.token = tok;
                 actions.push(
                     fetch('/session/reword', {
@@ -9124,14 +9052,14 @@
                 window.showToast("Session ZID missing.", "error");
                 return;
             }
-            var retextBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-retext'));
+            var retextBtn = (document.getElementById('kw-btn-retext'));
             setButtonLoading(retextBtn, true, "Retexting...", "Re-text");
 
             window.showToast("Retexting session...", "info");
             var tok = getApiToken();
-            var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
+            var headers = { 'Content-Type': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
-            var /** @type {Desk.CommandRequest} */ bodyPayload = {
+            var bodyPayload = {
                 session_zid: sZid,
                 language: getSessionLang()
             };
@@ -9353,12 +9281,12 @@
                 window.showToast("Session ZID missing.", "error");
                 return;
             }
-            var rewordBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-reword'));
+            var rewordBtn = (document.getElementById('kw-btn-reword'));
             setButtonLoading(rewordBtn, true, "Rewording...", "Re-word");
 
             window.showToast("Re-wording " + (tokenOrders.length || rows.length) + " rows...", "info");
             var tok = getApiToken();
-            var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
+            var headers = { 'Content-Type': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
             var actCard = (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function')
                 ? window.WorkspaceTabs.getActiveCard()
@@ -9366,7 +9294,7 @@
             var curSentIdx = (actCard && actCard.sentence_idx !== undefined && actCard.sentence_idx !== null)
                 ? actCard.sentence_idx
                 : 0;
-            var /** @type {Desk.CommandRequest} */ bodyPayload = {
+            var bodyPayload = {
                 session_zid: sZid,
                 row_ids: rows,
                 token_orders: tokenOrders,
@@ -9501,8 +9429,8 @@
                 var activeCard = window.WorkspaceTabs.getActiveCard();
                 var activeSentIdx = (activeCard && activeCard.sentence_idx !== undefined) ? activeCard.sentence_idx : 0;
                 if (activeSentIdx > 0 && activeCard && activeCard.words) {
-                    var /** @type {Desk.Membership} */ cardRowIds = {};
-                    var /** @type {Desk.Membership} */ cardTokenOrders = {};
+                    var cardRowIds = {};
+                    var cardTokenOrders = {};
                     for (var w = 0; w < activeCard.words.length; w++) {
                         var wObj = activeCard.words[w];
                         cardRowIds[String(wObj.row_id)] = true;
@@ -9533,14 +9461,14 @@
                 window.showToast("Session ZID missing.", "error");
                 return;
             }
-            var exportBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-export'));
+            var exportBtn = (document.getElementById('kw-btn-export'));
             setButtonLoading(exportBtn, true, "Sending...", "Send to Anki");
 
             window.showToast("Exporting to Anki...", "info");
             var tok = getApiToken();
-            var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
+            var headers = { 'Content-Type': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
-            var /** @type {Desk.CommandRequest} */ bodyPayload = {
+            var bodyPayload = {
                 session_zid: sZid,
                 row_ids: rows,
                 selected_row_ids: rows,
@@ -9576,7 +9504,7 @@
         window.onHandToolClick = function() {
             var newMode = !window.__persistentSelectableMode;
             window.setSelectableTextMode(newMode, newMode);
-            var handBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-hand-tool'));
+            var handBtn = (document.getElementById('kw-btn-hand-tool'));
             if (handBtn) {
                 if (newMode) handBtn.classList.add('active');
                 else handBtn.classList.remove('active');
@@ -9595,7 +9523,7 @@
             window.showToast("Deleted " + rows.length + " rows (Ctrl+Z to undo)", "info", 2000);
         };
 
-        var /** @type {Record<string,string>} */ LANGUAGE_NAME_MAP = {
+        var LANGUAGE_NAME_MAP = {
             "en": "English",
             "de": "German",
             "ru": "Russian",
@@ -9647,7 +9575,7 @@
             if (modal) {
                 modal.style.display = 'flex';
                 window.__langMismatchInfo = info;
-                var yesBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-yes'));
+                var yesBtn = (document.getElementById('kw-btn-lang-yes'));
                 if (yesBtn) yesBtn.focus();
             }
         };
@@ -9659,17 +9587,17 @@
 
         /** @param {boolean} loading */
         function setLangModalLoading(loading) {
-            var yesBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-yes'));
-            var noBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-no'));
-            var cancelBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-cancel'));
+            var yesBtn = (document.getElementById('kw-btn-lang-yes'));
+            var noBtn = (document.getElementById('kw-btn-lang-no'));
+            var cancelBtn = (document.getElementById('kw-btn-lang-cancel'));
             if (yesBtn) yesBtn.disabled = !!loading;
             if (noBtn) noBtn.disabled = !!loading;
             if (cancelBtn) cancelBtn.disabled = !!loading;
         }
 
-        /** @param {string|Array<string|Desk.ChildSession>} children */
+        /** @param {string|Array<string|ChildSession>} children */
         function extractChildSessions(children) {
-            /** @type {Array<{zid: string, seq_num: string|number}>} */ var results = [];
+             var results = [];
             if (!children) return results;
             if (typeof children === 'string') {
                 try { children = JSON.parse(children); } catch(e) { console.error('[extractChildSessions] Failed to parse children JSON:', e); return results; }
@@ -9711,13 +9639,11 @@
             return results;
         }
 
-
-
         function getWebTabMode() {
             return getDeliveryMode() === 'container' ? 'container' : 'tabs';
         }
 
-        /** @param {Desk.ChildSession[]} children */
+        /** @param {ChildSession[]} children */
         function spawnChildTabs(children) {
             if (getDeliveryMode() === 'container') {
                 return;
@@ -9726,7 +9652,7 @@
             if (!childSessions || childSessions.length === 0) return;
             var tok = getApiToken();
             var tokenQuery = tok ? '&token=' + encodeURIComponent(tok) : '';
-            /** @type {string[]} */ var urls = [];
+             var urls = [];
             for (var i = 0; i < childSessions.length; i++) {
                 var c = childSessions[i];
                 var childUrl = '/session/render?session_zid=' + encodeURIComponent(c.zid) + '&seq_num=' + encodeURIComponent(c.seq_num) + '&bypass_lang_check=true' + tokenQuery;
@@ -9745,9 +9671,9 @@
             };
 
             if (typeof fetch !== 'undefined') {
-                var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
+                var headers = { 'Content-Type': 'application/json' };
                 if (tok) headers['X-API-Token'] = tok;
-                var /** @type {Desk.CommandRequest} */ bodyPayload = { urls: urls, children: childSessions };
+                var bodyPayload = { urls: urls, children: childSessions };
                 if (tok) bodyPayload.token = tok;
                 fetch('/api/v1/spawn-tabs', {
                     method: 'POST',
@@ -9772,7 +9698,7 @@
         /* WorkspaceTabs loaded from WorkspaceTabs.js */
 
         window.onLangYes = function() {
-            var yesBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-yes'));
+            var yesBtn = (document.getElementById('kw-btn-lang-yes'));
             if (yesBtn && yesBtn.disabled) return;
 
             var info = window.__langMismatchInfo || {};
@@ -9806,10 +9732,10 @@
             setLangModalLoading(true);
 
             if (typeof fetch !== 'undefined') {
-                var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
+                var headers = { 'Content-Type': 'application/json' };
                 if (tok) headers['X-API-Token'] = tok;
 
-                var /** @type {Desk.CommandRequest} */ langPayload = { language: detLang };
+                var langPayload = { language: detLang };
                 if (tok) langPayload.token = tok;
 
                 fetch('/api/v1/set-language', {
@@ -9820,7 +9746,7 @@
                     console.warn("Failed to synchronize language with controller:", e);
                 });
 
-                var /** @type {Desk.CommandRequest} */ renderPayload = {
+                var renderPayload = {
                     session_zid: sZid,
                     zid: sZid,
                     language: detLang,
@@ -9869,7 +9795,7 @@
         };
 
         window.onLangNo = function() {
-            var noBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-lang-no'));
+            var noBtn = (document.getElementById('kw-btn-lang-no'));
             if (noBtn && noBtn.disabled) return;
             if (typeof window.hideLanguageVerificationModal === 'function') {
                 window.hideLanguageVerificationModal();
@@ -9899,10 +9825,10 @@
             setLangModalLoading(true);
 
             if (typeof fetch !== 'undefined') {
-                var /** @type {Record<string,string>} */ headers = { 'Content-Type': 'application/json' };
+                var headers = { 'Content-Type': 'application/json' };
                 if (tok) headers['X-API-Token'] = tok;
 
-                var /** @type {Desk.CommandRequest} */ renderPayload = {
+                var renderPayload = {
                     session_zid: sZid,
                     zid: sZid,
                     language: expLang,
@@ -9970,7 +9896,7 @@
             try {
                 localStorage.setItem('kw_highlight_same_lemma', String(!!active));
             } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-            var btn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-same-lemma'));
+            var btn = (document.getElementById('kw-btn-same-lemma'));
             if (btn) {
                 if (active) {
                     addClass(btn, 'active');
@@ -10001,7 +9927,7 @@
         }
         window.toggleHighlightSameLemma = toggleHighlightSameLemma;
 
-        var btnSameLemma = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-same-lemma'));
+        var btnSameLemma = (document.getElementById('kw-btn-same-lemma'));
         if (btnSameLemma) {
             if (window.AppState && window.AppState.highlightSameLemma) {
                 addClass(btnSameLemma, 'active');
@@ -10036,7 +9962,7 @@
                     removeClass(lemmaTable, 'kw-filter-selected-only');
                 }
             }
-            var filterBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-filter-selected'));
+            var filterBtn = (document.getElementById('kw-btn-filter-selected'));
             if (filterBtn) {
                 if (active) {
                     addClass(filterBtn, 'btn-filter-active');
@@ -10067,7 +9993,7 @@
         }
         window.toggleFilterSelectedOnly = toggleFilterSelectedOnly;
 
-        var btnFilterSelected = /** @type {HTMLButtonElement|null} */ (document.getElementById('kw-btn-filter-selected'));
+        var btnFilterSelected = (document.getElementById('kw-btn-filter-selected'));
         if (btnFilterSelected) {
             if (window.AppState && window.AppState.filterSelectedOnly) {
                 addClass(btnFilterSelected, 'btn-filter-active');
@@ -10090,8 +10016,8 @@
         }
 
         addEvent(document, 'click', /** @param {MouseEvent} e */ function(e) {
-            e = /** @type {MouseEvent} */ (e || window.event);
-            var target = /** @type {HTMLElement|null} */ (e.target || e.srcElement);
+            e = (e || window.event);
+            var target = (e.target || e.srcElement);
             if (target && (target.id === 'kw-btn-empty-clear-filter' || (target.closest && target.closest('#kw-btn-empty-clear-filter')))) {
                 if (typeof window.setFilterSelectedOnly === 'function') {
                     window.setFilterSelectedOnly(false);
@@ -10106,8 +10032,8 @@
         }
 
         addEvent(document, 'keydown', function(e) {
-            e = /** @type {KeyboardEvent} */ (e || window.event);
-            var target = /** @type {HTMLElement|null} */ (e.target || e.srcElement);
+            e = (e || window.event);
+            var target = (e.target || e.srcElement);
             var isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
 
             var langModal = document.getElementById('kw-lang-modal');
@@ -10228,13 +10154,13 @@
             }
         }
 
-        /** @type {Array<'onUpdateClick'|'onRetextClick'|'onRewordClick'|'onSendToAnkiClick'>} */ (['onUpdateClick', 'onRetextClick', 'onRewordClick', 'onSendToAnkiClick']).forEach(function(name) {
+         (['onUpdateClick', 'onRetextClick', 'onRewordClick', 'onSendToAnkiClick']).forEach(function(name) {
             var command = window[name];
             if (typeof command !== 'function') return;
             window[name] = function() {
                 var args = arguments;
                 return window.flushPendingSaves().then(function() {
-                    return command.apply(window, /** @type {[]} */ (Array.prototype.slice.call(args)));
+                    return command.apply(window,  (Array.prototype.slice.call(args)));
                 }).catch(function(err) {
                     window.showToast('Save failed; action stopped: ' + formatErrorWithTrace(err, 'Network error'), 'error');
                 });
@@ -10280,11 +10206,11 @@
 
     /** @param {WheelEvent} e */
     function handleHorizontalScroll(e) {
-        e = /** @type {WheelEvent} */ (e || window.event);
+        e = (e || window.event);
         if (e.shiftKey || e.altKey) {
             var delta = e.wheelDelta ? -e.wheelDelta : (e.detail ? e.detail * 40 : 0);
 
-            var target = /** @type {HTMLElement|null} */ (e.target || e.srcElement);
+            var target = (e.target || e.srcElement);
             var scrollCell = null;
             var curr = target;
             while (curr) {

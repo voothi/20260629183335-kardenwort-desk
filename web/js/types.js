@@ -1,8 +1,8 @@
 
 /**
  * @file types.js
- * Comprehensive normative JSDoc type definitions for Kardenwort client domain entities.
- * Compile-free static type safety without external build tools.
+ * Canonical descriptive JSDoc for shared client records and coordinate meanings.
+ * Documentation only: runtime boundaries validate inputs; no compiler or build step is required.
  */
 
 /**
@@ -17,6 +17,11 @@
  * @property {string} [lower_clean] - Lowercased sanitized token string
  * @property {Array<string|number>} [atomic_row_ids] - Linked row IDs for compound tokens
  * @property {Array<string|number>} [row_ids] - Array of all linked row IDs
+ * @property {number|string|null} [atomic_id] - Occurrence identity; never a sentence-local offset
+ * @property {Array<string|number>} [all_row_ids] - Row identities represented by an aggregate token
+ * @property {Array<string|number>} [compound_row_ids] - Rows represented by a compound token
+ * @property {string} [text] - Original text when supplied separately from the surface word
+ * @property {string} [pos] - Part-of-speech label used by token interaction
  * @property {string} [highlight_class] - Active highlight CSS class name
  * @property {string} [mvp_type] - 'source' | 'trans'
  * @property {number} [mvp_idx] - Index within MVP bookmarking stream
@@ -40,6 +45,13 @@
  * @property {boolean|number|string} [selected] - Row selection state
  * @property {string|null} [row_html] - Pre-rendered cached HTML representation
  * @property {boolean} [is_dirty] - Row dirty edit flag
+ * @property {string} [word]
+ * @property {string} [highlight_class]
+ * @property {Array<string|number>} [all_row_ids]
+ * @property {string} [sentence_text]
+ * @property {string} [inflected_tooltip]
+ * @property {Object} [occurrence_data]
+ * @property {string} [dynamic_tds]
  */
 
 /**
@@ -67,6 +79,10 @@
  * @property {string} [audio_source_range_mode] - 'all' | 'sentence'
  * @property {string} [audio_table_range_mode] - 'none' | 'row'
  * @property {number} [zoom_scale] - UI scale factor
+ * @property {boolean} [auto_save_on_edit] - Cell-edit autosave; selection persistence is independent
+ * @property {boolean} [auto_save_on_close] - Persist current pending edits when closing
+ * @property {Object} [grammar] - Shared grammar labels and classification tables
+ * @property {Object<string,number>} [pos_display_order] - Configured part-of-speech order
  */
 
 /**
@@ -85,11 +101,14 @@
  * @property {string} [sourceText] - Alias for source_text
  * @property {string} [text_provenance] - Source translation provenance label
  * @property {string} [textProvenance] - Alias for text_provenance
- * @property {Object<string, any>} [rows] - Delta row updates keyed by token_order or row_id
- * @property {Array<any>} [sentence_cards] - Multi-sentence workspace cards
+ * @property {Object<string, VocabularyRow>} [rows] - Delta row updates keyed by token_order or row_id
+ * @property {Array<WorkspaceCard>} [sentence_cards] - Multi-sentence workspace cards
  * @property {Array<any>} [sentences] - Updated sentence strings
  * @property {string} [session_zid] - Active session ZID
  * @property {string} [error] - Error message if stage is 'error'
+ * @property {Object<string,boolean>} [shared_selection] - Authoritative normalized lemma membership
+ * @property {Object<string,string>} [row_provenances] - Per-occurrence provenance labels
+ * @property {Object<string,string>} [rowProvenances] - Legacy ingress alias for row_provenances
  */
 
 /**
@@ -102,19 +121,21 @@
  * @property {string} [source_text] - Raw source text
  * @property {string} [sourceText] - Legacy source projection alias
  * @property {string} [translated_text] - Full translated text
+ * @property {string|null} [translatedText] - Live translation projection; null means no replacement
  * @property {string} [sentence_translation] - Translated text alias
- * @property {string} [text_mode] - 'single' | 'multi' | 'container'
- * @property {string} [delivery_mode] - 'container' | 'direct' | 'offline'
+ * @property {string} [text_mode] - 'single' | 'multi'; independent of window delivery
+ * @property {string} [delivery_mode] - 'container' | 'multi_window' (legacy host alias: 'tabs')
  * @property {boolean} [server_enabled] - Whether background API server is connected
  * @property {string} [server_url] - HTTP API server endpoint base URL
  * @property {string} [api_token] - Authentication bearer token
  * @property {string} [fingerprint] - Content integrity hash
  * @property {Array<string>} [headers] - Vocabulary table column headers
  * @property {Array<Array<any>>} [data_rows] - Raw matrix rows
- * @property {Array<any>} [sentence_cards] - Sentence card array
+ * @property {Array<WorkspaceCard>} [sentence_cards] - Sentence card array
  * @property {UIConfig} [config] - UI configuration settings
  * @property {UIConfig} [ui_config] - UI configuration settings alias
  * @property {Object} [bootstrap] - Bootstrap session data payload
+ * @property {Object<string,VocabularyRow>} [rows] - Live row projections keyed by occurrence identity
  * @property {Object<string, boolean>} [selectedLemmas] - Set of active lemma selections
  * @property {boolean} [highlightSameLemma] - Same-lemma highlighting active
  * @property {boolean} [filterSelectedOnly] - Filter selected rows active
@@ -125,6 +146,92 @@
  * @property {number|null} [activeSentenceIdx] - Active sentence index
  * @property {number|null} [activeTabSeq] - Active workspace tab sequence number
  * @property {function(any): void} [applyDeltas] - Legacy delta merger attached by app.js
+ * @property {string|null} [stage] - Current processing stage
+ * @property {string|null} [textProvenance] - Provenance of the visible text translation
+ * @property {string|null} [textTranslationStatus] - Current text translation status
+ * @property {boolean} [textTranslationFailed] - Terminal text translation failure
+ * @property {Array<WorkspaceCard>} [sentenceCards] - Legacy ingress alias for sentence_cards
+ */
+
+/**
+ * A persisted edit addresses one occurrence. sentence_idx is the stored sentence
+ * coordinate (including overview 0), while token_order is the stored token coordinate.
+ * @typedef {Object} Delta
+ * @property {number|string} row_id - UI row identity
+ * @property {number|string} token_order - Stored token coordinate
+ * @property {number} sentence_idx - Stored sentence coordinate
+ * @property {string} column - Persisted field or deletion command
+ * @property {string|boolean} value - Submitted value
+ * @property {Object} [restore] - Exact deleted-record restoration data
+ */
+
+/**
+ * Edit actions carry rowId/tokenOrder/sentenceIdx, column, oldValue/newValue and cell.
+ * Delete actions carry matching rowIds/tokenOrders/sentenceIndices arrays.
+ * History records retain user intent independently of save acknowledgments.
+ * @typedef {Object} HistoryAction
+ * @property {'edit'|'delete'} type - Action discriminator
+ */
+
+/**
+ * @typedef {Object} SaveState
+ * @property {'idle'|'saving'|'reconciling'|'reconcile_failed'} phase - Save coordinator phase
+ * @property {Promise|null} promise - Current serialized persistence/reconciliation work
+ * @property {Array<Delta>} [snapshot] - Submitted values while persistence is in flight
+ */
+
+/**
+ * @typedef {Object} SaveResponse
+ * @property {Array<Delta>} [deleted_rows] - Restorable records acknowledged by persistence
+ */
+
+/**
+ * @typedef {Object} ErrorResponse
+ * @property {string} [message] - User-facing failure detail
+ * @property {string} [error] - Compatible failure message alias
+ * @property {string} [error_trace] - Diagnostic detail
+ * @property {string} [trace_id] - Correlation identity
+ * @property {ErrorResponse} [data] - Optional response envelope
+ */
+
+/**
+ * @typedef {Object} ChildSession
+ * @property {string} [zid] - Session identity
+ * @property {string} [session_zid] - Compatible session identity alias
+ * @property {number|string} [seq_num] - Native child window sequence
+ */
+
+/**
+ * @typedef {Object} WorkspaceCard
+ * @property {number} seq_num
+ * @property {number} sentence_idx
+ * @property {Array<VocabularyRow>} [words]
+ * @property {string} [translated_text]
+ * @property {string} [source_text] - Card source sentence text
+ * @property {Array<string>} [selected_ids]
+ * @property {string} [tsv_filename]
+ * @property {string} [zid]
+ * @property {number} [index]
+ * @property {string} [label]
+ */
+
+/**
+ * @typedef {Object} TabNavigationState
+ * @property {number|null} activeTabSeq
+ * @property {number} activeSentenceIdx
+ * @property {Array<WorkspaceCard>} cards
+ * @property {string} masterSourceHtml
+ */
+
+/**
+ * @typedef {Object} SentenceSyncItem
+ * @property {number} [sentence_index]
+ * @property {string} [sentence_destination]
+ * @property {string} [translation]
+ */
+
+/**
+ * @typedef {Array<SentenceSyncItem|string> | Object<string, string|SentenceSyncItem>} SentenceSyncPayload
  */
 
 if (typeof module !== 'undefined' && module.exports) {

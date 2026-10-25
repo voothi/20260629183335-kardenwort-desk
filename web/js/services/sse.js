@@ -7,7 +7,6 @@
  */
 
 /**
- * @typedef {import('../types.js').UpdatePayload} UpdatePayload
  * @typedef {{type: 'ping'|'heartbeat'|'connected'|'disconnected'}} ConnectionEvent
  * @typedef {{type: 'provider_failover', task_type?: string, task?: string, new_provider?: string, to?: string, provider?: string}} ProviderFailoverEvent
  * @typedef {{type: 'tag_updated', row_id: string|number, status: boolean}} TagEvent
@@ -15,9 +14,9 @@
  */
 
 (function () {
-    /** @type {EventSource|null} */
+
     var activeEventSource = null;
-    /** @type {string|null} */
+
     var activeSessionZid = null;
 
     /**
@@ -25,7 +24,7 @@
      * @param {'connected'|'reconnecting'|'disconnected'|'error'} status
      */
     function updateConnectionIndicator(status) {
-        var w = /** @type {any} */ (window);
+        var w = (window);
         var header = document.getElementById('session-header');
         var indicator = document.getElementById('sse-status-indicator');
 
@@ -66,7 +65,7 @@
     function connect(sessionZid, serverUrl) {
         if (!sessionZid || typeof window.EventSource === 'undefined') return;
 
-        var w = /** @type {any} */ (window);
+        var w = (window);
         // Guard against file:/// filesystem URI errors
         if (window.location.protocol === 'file:' && !serverUrl) return;
 
@@ -146,7 +145,7 @@
                     }
 
                     if (data.type === 'tag_updated') {
-                        var cb = /** @type {HTMLInputElement|null} */ (document.querySelector('.kw-tag-checkbox[data-token-order="' + data.row_id + '"]'));
+                        var cb = (document.querySelector('.kw-tag-checkbox[data-token-order="' + data.row_id + '"]'));
                         if (cb && cb.checked !== data.status) {
                             cb.checked = data.status;
                             var r = cb.closest ? cb.closest('tr') : cb.parentElement ? cb.parentElement.parentElement : null;
@@ -181,7 +180,7 @@
             try { activeEventSource.close(); } catch (e) { console.warn('[SSEBridge] Error closing active EventSource:', e); }
             activeEventSource = null;
             activeSessionZid = null;
-            var w = /** @type {any} */ (window);
+            var w = (window);
             w.__sseActiveZid = null;
             updateConnectionIndicator('disconnected');
         }
@@ -194,7 +193,7 @@
         getActiveZid: function () { return activeSessionZid; }
     };
 
-    var w = /** @type {any} */ (typeof window !== 'undefined' ? window : null);
+    var w = (typeof window !== 'undefined' ? window : null);
     if (w) {
         w.SSEBridge = SSEBridge;
         w.initSSE = connect;
