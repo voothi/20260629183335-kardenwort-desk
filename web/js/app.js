@@ -1,16 +1,11 @@
 
 (function() {
-    window.reserveTextRegions = function(reset) {
+    window.reserveTextRegions = function() {
         ['source-container', 'translation-container'].forEach(function(id) {
             var element = document.getElementById(id);
-            if (!element) return;
-            if (reset) element.style.removeProperty('--kw-text-region-size');
-            if (!element.style.getPropertyValue('--kw-text-region-size')) {
-                element.style.setProperty('--kw-text-region-size', element.getBoundingClientRect().height + 'px');
-            }
+            if (element) element.style.removeProperty('--kw-text-region-size');
         });
     };
-    window.addEventListener('resize', function() { window.reserveTextRegions(true); });
     window.AppState = window.AppState || {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
     window.AppState.rows = window.AppState.rows || {};
 
@@ -3309,7 +3304,6 @@
         };
 
         window.receiveUpdate = function(data) {
-            window.reserveTextRegions(false);
             if (window.AppStore) window.AppStore.applyDeltas(data);
             else {
                 if (!window.AppState.applyDeltas) throw new Error('Required delta merger is unavailable');
@@ -10370,7 +10364,6 @@
         if (window.rebindMVPBookmarks) {
             window.rebindMVPBookmarks();
         }
-        window.reserveTextRegions(true);
     }
 
     /** @param {WheelEvent} e */

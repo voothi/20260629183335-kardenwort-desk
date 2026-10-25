@@ -262,6 +262,9 @@ def test_browser_windows_sync_without_echoes(page, running_controller, tmp_path)
     server.resolved_paths['storage_backend'] = 'sqlite'
     server.config.set('server', 'port', str(server.server_port))
     server.config.set('server', 'controller_port', str(server.server_port))
+    if not server.config.has_section('rendering'):
+        server.config.add_section('rendering')
+    server.config.set('rendering', 'filter_selected_only', 'false')
     headers = ['TokenOrder', 'SentenceSourceIndex', 'Quotation', 'WordSource', 'WordDestination', 'DeskSelected']
     rows = [['0', '1', 'Haus', 'Haus', 'house', '0'], ['1', '2', 'Haus', 'Haus', 'house', '0']]
     adapter.save_session(session_zid=zid, source_language='de', source_raw_text='Das Haus. Ein Haus.', headers=headers, data_rows=rows)
@@ -311,8 +314,15 @@ def test_layout_evidence_and_scoped_update_cost(page, tmp_path, theme, width, zo
     before=page.evaluate(measure)
     page.evaluate("receiveUpdate({translatedText:Array(40).fill('Complete multiline translated sentence.').join('\\n')})")
     after=page.evaluate(measure)
-    shift=max(abs(a-b) for left,right in zip(before,after) for a,b in zip(left,right))
-    assert shift < .01
+    assert all(abs(a - b) < .01 for a, b in zip(before[0], after[0])), "Source container geometry must remain invariant"
+    assert abs(before[1][0] - after[1][0]) < .01 and abs(before[1][2] - after[1][2]) < .01, "Translation container width must remain invariant"
+    assert after[1][3] > before[1][3], "Translation container height must grow naturally"
+    assert not page.locator('#translation-container').evaluate('el => el.scrollHeight > el.clientHeight'), "Translation container must not have internal scrollbars"
+    shift = max(
+        max(abs(a - b) for a, b in zip(before[0], after[0])),
+        abs(before[1][0] - after[1][0]),
+        abs(before[1][2] - after[1][2])
+    )
     result=page.evaluate("""() => {
         const node=document.querySelector('#source-container span');
         const start=performance.now();

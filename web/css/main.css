@@ -53,11 +53,11 @@ body.has-dock-bottom .container {
 
 td.editing input { border-color: var(--input-border, var(--accent-color)); }
 
-/* The active layout reserves its measured content boxes. Long responses scroll
-   inside those boxes; card/viewport changes establish a new layout reservation. */
+/* Text regions grow naturally with their content without internal scrollbars. */
 #source-container,
 #translation-container {
-    height: var(--kw-text-region-size, auto);
-    overflow: auto;
+    height: auto;
+    overflow: visible;
     box-sizing: border-box;
 }
+

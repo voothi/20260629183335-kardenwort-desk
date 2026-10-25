@@ -1093,7 +1093,6 @@
             }
             updateFavicon(activeTabSeq);
             updateTitle(targetCard);
-            if (w.reserveTextRegions) w.reserveTextRegions(true);
             if (typeof w.updateToolbarState === 'function') w.updateToolbarState();
             if (w.forceRepaint) w.forceRepaint();
 

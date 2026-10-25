@@ -342,21 +342,34 @@ span.not-connected:hover {
 }
 
 /* Hand Tool / Text Selection Mode Overrides (R2) */
+body.text-selection-mode-active .kw-source-text span.word,
+body.text-selection-mode-active .source-text span.word,
+body.text-selection-mode-active #source-container span.word,
+body.text-selection-mode-active #source-container span.not-connected,
+body.text-selection-mode-active #translation-container span.word,
+body.text-selection-mode-active #translation-container span.not-connected,
+body.text-selection-mode-active span.word,
+body.text-selection-mode-active span.not-connected,
 body.text-selection-mode-active span.highlight-orange-active,
 body.text-selection-mode-active span.highlight-purple-active,
 body.text-selection-mode-active span.hl-mvp-pin,
 body.text-selection-mode-active span.hl-mvp-hover,
 body.text-selection-mode-active span[class*="hl-mvp-"] {
     cursor: text !important;
+    -webkit-user-select: text !important;
+    user-select: text !important;
+}
+
+body.text-selection-mode-active span.highlight-orange-active,
+body.text-selection-mode-active span.highlight-purple-active,
+body.text-selection-mode-active span.hl-mvp-pin,
+body.text-selection-mode-active span.hl-mvp-hover,
+body.text-selection-mode-active span[class*="hl-mvp-"] {
     background-color: transparent !important;
     background: transparent !important;
     color: inherit !important;
-    border: none !important;
     outline: none !important;
-    padding: 0 !important;
-    margin: 0 !important;
     text-decoration: none !important;
-    border-radius: 0 !important;
     box-shadow: none !important;
 }
 
@@ -364,8 +377,6 @@ body.text-selection-mode-active span.word:hover,
 body.text-selection-mode-active #source-container span.word:hover,
 body.text-selection-mode-active #translation-container span.word:hover {
     background-color: transparent !important;
-    border: none !important;
-    outline: none !important;
 }
 
 /* Invariant Pin Strip / Frame Layout Metrics */

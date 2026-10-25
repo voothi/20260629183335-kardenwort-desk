@@ -161,8 +161,11 @@ def test_long_translation_update_preserves_active_layout(page, tmp_path, theme, 
     before = page.evaluate(measure)
     page.evaluate("receiveUpdate({translatedText: Array(40).fill('A complete multiline translated sentence.').join('\\n')})")
     after = page.evaluate(measure)
-    assert all(abs(a-b) < .01 for left, right in zip(before, after) for a, b in zip(left, right))
-    assert page.locator('#translation-container').evaluate('el => el.scrollHeight > el.clientHeight')
+    assert all(abs(a - b) < .01 for a, b in zip(before[0], after[0])), "Source container geometry must remain invariant"
+    assert abs(before[1][0] - after[1][0]) < .01, "Translation container x position must remain invariant"
+    assert abs(before[1][2] - after[1][2]) < .01, "Translation container width must remain invariant"
+    assert after[1][3] > before[1][3], "Translation container height must grow naturally to accommodate multiline text"
+    assert not page.locator('#translation-container').evaluate('el => el.scrollHeight > el.clientHeight'), "Translation container must not have internal scrollbars"
     assert 'A complete multiline translated sentence.' in page.locator('#translation-container').inner_text()
 
 
@@ -300,11 +303,16 @@ def test_loading_lifecycle_preserves_rows_wrapping_and_scroll(page, tmp_path, th
     for delta in transitions:
         page.evaluate('receiveUpdate', delta)
         after = page.evaluate(measure)
-        for kind in ('boxes', 'lines'):
-            assert len(before[kind]) == len(after[kind]), (delta, kind)
-            assert all(abs(a-b) < .01 for left, right in zip(before[kind], after[kind]) for a, b in zip(left, right)), (delta, kind)
-        assert before['scroll'] == after['scroll'], delta
-    assert page.locator('#translation-container').evaluate('el => el.scrollHeight > el.clientHeight')
+        if 'translatedText' not in delta:
+            for kind in ('boxes', 'lines'):
+                assert len(before[kind]) == len(after[kind]), (delta, kind)
+                assert all(abs(a-b) < .01 for left, right in zip(before[kind], after[kind]) for a, b in zip(left, right)), (delta, kind)
+            assert before['scroll'] == after['scroll'], delta
+        else:
+            assert len(before['lines']) == len(after['lines'])
+            assert all(abs(a-b) < .01 for left, right in zip(before['lines'], after['lines']) for a, b in zip(left, right))
+            assert not page.locator('#translation-container').evaluate('el => el.scrollHeight > el.clientHeight'), "Translation container must not have internal scrollbars"
+            assert 'Complete long translation.' in page.locator('#translation-container').inner_text()
 
 
 def test_edit_during_selection_save_survives_ack_and_offline_retry(page, tmp_path):
