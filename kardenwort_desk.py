@@ -13817,7 +13817,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    s_lang = bootstrap_payload.get("language") or "de"
+    s_lang = bootstrap_payload.get("language") or ""
     base_html = re.sub(
         r'<script id="session-lang" type="text/plain">.*?</script>',
         lambda _: f'<script id="session-lang" type="text/plain">{s_lang}</script>',
@@ -13825,7 +13825,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    t_lang = bootstrap_payload.get("target_language") or bootstrap_payload.get("target_lang") or "ru"
+    t_lang = bootstrap_payload.get("target_language") or bootstrap_payload.get("target_lang") or ""
     base_html = re.sub(
         r'<script id="session-target-lang" type="text/plain">.*?</script>',
         lambda _: f'<script id="session-target-lang" type="text/plain">{t_lang}</script>',
@@ -13967,11 +13967,14 @@ def render_declarative_web_shell(
 
     # Inlined modular CSS and components for offline WebView2 execution
     web_dir = Path(__file__).resolve().parent / "web"
-    if not disable_css:
+    if disable_css:
+        base_html = re.sub(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
+    else:
         combined_css = get_bundled_css(web_dir)
         if combined_css:
-            base_html = re.sub(r'<link\s+rel=["\']stylesheet["\']\s+href=["\']/css/[^"\']+["\']\s*/?>\s*', '', base_html)
+            base_html = re.sub(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
             base_html = base_html.replace('</head>', f'<style id="modular-css">\n{combined_css}\n</style>\n<style id="hl-mvp-style"></style>\n</head>')
+        base_html = base_html.replace('</head>', theme_style(bootstrap_payload.get("theme_colors", {}), theme) + '</head>')
 
     # Inlined modular component scripts for offline WebView2 execution (Task 1.3)
     for script_rel in (
@@ -14026,7 +14029,6 @@ setTimeout(function() {{
 </script>"""
         base_html = base_html.replace("</body>", f"{watchdog_js}\n</body>")
 
-    base_html = base_html.replace('</head>', theme_style(bootstrap_payload.get("theme_colors", {}), theme) + '</head>')
     return base_html
 
 def render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=False, fingerprint=""):
@@ -14160,6 +14162,28 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             f'<script id="kardenwort-bootstrap" type="application/json">\n{lookup_bootstrap_json}\n</script>'
         )
 
+    s_zid = str(session_zid or zid or "")
+    base_html = re.sub(
+        r'<script id="session-zid" type="text/plain">.*?</script>',
+        lambda _: f'<script id="session-zid" type="text/plain">{s_zid}</script>',
+        base_html,
+        flags=re.DOTALL
+    )
+    s_lang = str(language or "")
+    base_html = re.sub(
+        r'<script id="session-lang" type="text/plain">.*?</script>',
+        lambda _: f'<script id="session-lang" type="text/plain">{s_lang}</script>',
+        base_html,
+        flags=re.DOTALL
+    )
+    t_lang = str(target_lang or "")
+    base_html = re.sub(
+        r'<script id="session-target-lang" type="text/plain">.*?</script>',
+        lambda _: f'<script id="session-target-lang" type="text/plain">{t_lang}</script>',
+        base_html,
+        flags=re.DOTALL
+    )
+
     # Check if slot markers exist in base_html (modular shell)
     if '<!-- SECTION_SOURCE_START -->' in base_html:
         # 1. Configurable Zoom (Task 2.9, R50)
@@ -14277,12 +14301,16 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             base_html = base_html[:start_idx] + html_output + "\n\n    " + base_html[end_idx:]
 
     # Offline CSS embedding if not disabled (Task 3.9, R27)
-    if not (isinstance(goldendict, dict) and goldendict.get('disable_css', False)):
+    is_css_disabled = isinstance(goldendict, dict) and bool(goldendict.get('disable_css', False))
+    if is_css_disabled:
+        base_html = re.sub(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
+    else:
         combined_css = get_bundled_css(web_dir)
         if combined_css:
             # Strip external /css/ link tags to prevent 404 errors in offline/GoldenDict mode
-            base_html = re.sub(r'<link\s+rel=["\']stylesheet["\']\s+href=["\']/css/[^"\']+["\']\s*/?>\s*', '', base_html)
+            base_html = re.sub(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
             base_html = base_html.replace('</head>', f'<style id="modular-css">\n{combined_css}\n</style>\n</head>')
+        base_html = base_html.replace('</head>', theme_style(resolve_theme_colors(config, theme), theme) + '</head>')
 
     # Inlined modular component scripts for offline/GoldenDict execution
     for script_rel in (
@@ -14311,7 +14339,6 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         else:
             base_html = base_html.replace('</body>', f'<script>\n{app_js}\n</script>\n</body>')
 
-    base_html = base_html.replace('</head>', theme_style(resolve_theme_colors(config, theme), theme) + '</head>')
     return base_html
 
 def render_lookup_text(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):

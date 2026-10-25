@@ -50,7 +50,8 @@ window.EventSource = class {
 };
 window.fetch = function(url, options) {
     const body = options && options.body ? JSON.parse(options.body) : null;
-    window.__requests.push({url: String(url), body});
+    const headers = options && options.headers ? options.headers : {};
+    window.__requests.push({url: String(url), body, headers});
     const response = data => ({ok: true, status: 200, json: async () => data});
     if (String(url).includes('/session/save') && window.__holdSaves) {
         return new Promise(resolve => window.__pendingSaves.push(
@@ -158,24 +159,142 @@ def test_f5_status_with_optional_sse_overlap(audit_page, overlap):
     assert page.evaluate("__reloads") == 0
 
 
-def test_f1_non_german_lookup_language_metadata(page):
+@pytest.mark.parametrize("src_lang,tgt_lang,src_word,tgt_word,src_sent,tgt_sent", [
+    ("en", "fr", "house", "maison", "A house.", "Une maison."),
+    ("es", "it", "casa", "casa", "Una casa.", "Una casa."),
+])
+def test_f1_non_german_lookup_language_metadata(page, src_lang, tgt_lang, src_word, tgt_word, src_sent, tgt_sent):
     config, paths, goldendict, _ = kardenwort_desk.load_config()
     goldendict["server_enabled"] = True
     goldendict["server_api_key"] = "test-controller-api-key"
     zid = "20261025211003"
     html = kardenwort_desk.render_lookup_html(
+        src_sent, src_lang, tgt_lang, config, paths, zid, goldendict,
+        [], ["WordSource", "WordDestination", "DeskSelected"], [[src_word, tgt_word, "1"]], tgt_sent,
+        session_zid=zid, api_token="test-controller-api-key", server_enabled=True,
+    )
+    page.set_content(html.replace("<head>", "<head>" + TRANSPORT))
+    assert page.evaluate("document.getElementById('session-lang').textContent.trim()") == src_lang
+    assert page.evaluate("document.getElementById('session-target-lang').textContent.trim()") == tgt_lang
+    assert page.evaluate("getSessionLang()") == src_lang
+    assert page.evaluate("getSessionTargetLang()") == tgt_lang
+
+    # 1. Re-text request
+    page.evaluate("void onRetextClick()")
+    retext_req = page.evaluate("__requests.find(r => r.url.includes('/session/retext'))")
+    assert retext_req is not None
+    assert retext_req["body"]["language"] == src_lang
+    assert retext_req["body"]["session_zid"] == zid
+    assert retext_req["headers"].get("X-API-Token") == "test-controller-api-key"
+
+    # 2. Re-word request
+    page.evaluate("void onRewordClick()")
+    reword_req = page.evaluate("__requests.find(r => r.url.includes('/session/reword'))")
+    assert reword_req is not None
+    assert reword_req["body"]["language"] == src_lang
+    assert reword_req["body"]["session_zid"] == zid
+    assert reword_req["headers"].get("X-API-Token") == "test-controller-api-key"
+
+    # 3. Save request
+    page.locator('#lemma-table tr[data-row-id="0"]').click()
+    page.evaluate("void onSaveClick()")
+    save_req = page.evaluate("__requests.find(r => r.url.includes('/session/save'))")
+    assert save_req is not None
+    assert save_req["body"]["language"] == src_lang
+    assert save_req["body"]["session_zid"] == zid
+    assert save_req["headers"].get("X-API-Token") == "test-controller-api-key"
+
+    # 4. Export request
+    page.locator('#lemma-table tr[data-row-id="0"]').click()
+    page.evaluate("void onSendToAnkiClick()")
+    export_req = page.evaluate("__requests.find(r => r.url.includes('/session/export'))")
+    assert export_req is not None
+    assert export_req["body"]["language"] == src_lang
+    assert export_req["body"]["session_zid"] == zid
+    assert export_req["headers"].get("X-API-Token") == "test-controller-api-key"
+
+    # 5. Source audio playback
+    page.evaluate(f"() => window.playAudio('{src_word}', '{src_lang}')")
+    audio_src_req = page.evaluate(f"__requests.find(r => r.url.includes('/api/v1/audio/play') && r.body && r.body.language === '{src_lang}')")
+    assert audio_src_req is not None
+    assert audio_src_req["body"]["text"] == src_word
+    assert audio_src_req["headers"].get("X-API-Token") == "test-controller-api-key"
+
+    # 6. Target audio playback
+    page.evaluate(f"() => window.playAudio('{tgt_word}', '{tgt_lang}')")
+    audio_tgt_req = page.evaluate(f"__requests.find(r => r.url.includes('/api/v1/audio/play') && r.body && r.body.language === '{tgt_lang}')")
+    assert audio_tgt_req is not None
+    assert audio_tgt_req["body"]["text"] == tgt_word
+    assert audio_tgt_req["headers"].get("X-API-Token") == "test-controller-api-key"
+
+
+def test_phase2_missing_language_rejection_without_template_fallback(page):
+    config, paths, goldendict, _ = kardenwort_desk.load_config()
+    goldendict["server_enabled"] = True
+    goldendict["server_api_key"] = "test-controller-api-key"
+    zid = "20261025211003"
+    html = kardenwort_desk.render_lookup_html(
+        "Some text.", "", "", config, paths, zid, goldendict,
+        [], ["WordSource", "WordDestination", "DeskSelected"], [["some", "quelque", "0"]], "Quelque texte.",
+        session_zid=zid, api_token="test-controller-api-key", server_enabled=True,
+    )
+    page.set_content(html.replace("<head>", "<head>" + TRANSPORT))
+    assert page.evaluate("getSessionLang()") == ""
+    assert page.evaluate("getSessionTargetLang()") == ""
+    page.evaluate("void onRetextClick()")
+    retext_req = page.evaluate("__requests.find(r => r.url.includes('/session/retext'))")
+    assert retext_req is None
+
+    page.locator('#lemma-table tr[data-row-id="0"]').click()
+    error_msg = page.evaluate("""() => {
+        return window.flushPendingSaves().then(() => null).catch(e => e.message);
+    }""")
+    assert error_msg == "Session language missing"
+
+
+def test_phase2_css_enabled_and_disabled_renderers(page):
+    config, paths, goldendict, _ = kardenwort_desk.load_config()
+    zid = "20261025211003"
+
+    # 1. Lookup with CSS disabled
+    goldendict["disable_css"] = True
+    html_lookup_off = kardenwort_desk.render_lookup_html(
         "A house.", "en", "fr", config, paths, zid, goldendict,
         [], ["WordSource", "WordDestination"], [["house", "maison"]], "Une maison.",
         session_zid=zid, api_token="test-controller-api-key", server_enabled=True,
     )
-    page.set_content(html.replace("<head>", "<head>" + TRANSPORT))
-    assert page.evaluate("document.getElementById('session-lang').textContent.trim()") == "en"
-    assert page.evaluate("document.getElementById('session-target-lang').textContent.trim()") == "fr"
-    assert page.evaluate("getSessionLang()") == "en"
-    page.evaluate("void onRetextClick()")
-    retext_req = page.evaluate("__requests.find(r => r.url.includes('/session/retext'))")
-    assert retext_req is not None
-    assert retext_req["body"]["language"] == "en"
+    assert not any("<link" in l and "stylesheet" in l for l in html_lookup_off.splitlines())
+    assert '<style id="modular-css">' not in html_lookup_off
+    assert '<style id="configured-theme">' not in html_lookup_off
+
+    # 2. Lookup with CSS enabled
+    goldendict["disable_css"] = False
+    html_lookup_on = kardenwort_desk.render_lookup_html(
+        "A house.", "en", "fr", config, paths, zid, goldendict,
+        [], ["WordSource", "WordDestination"], [["house", "maison"]], "Une maison.",
+        session_zid=zid, api_token="test-controller-api-key", server_enabled=True,
+    )
+    assert not any("<link" in l and "/css/" in l for l in html_lookup_on.splitlines())
+    assert '<style id="modular-css">' in html_lookup_on
+
+    # 3. Declarative web shell with CSS disabled
+    shell_off = kardenwort_desk.render_declarative_web_shell(
+        {"session_zid": zid, "language": "en", "target_lang": "fr"},
+        theme="dark", disable_css=True,
+    )
+    assert not any("<link" in l and "stylesheet" in l for l in shell_off.splitlines())
+    assert '<style id="modular-css">' not in shell_off
+    assert '<style id="configured-theme">' not in shell_off
+
+    # 4. Declarative web shell with CSS enabled
+    shell_on = kardenwort_desk.render_declarative_web_shell(
+        {"session_zid": zid, "language": "en", "target_lang": "fr"},
+        theme="dark", disable_css=False,
+    )
+    assert not any("<link" in l and "/css/" in l for l in shell_on.splitlines())
+    assert '<style id="modular-css">' in shell_on
+
+
 
 
 def test_f2_browser_reconnect_recovers_durable_membership(page, tmp_path, running_controller):

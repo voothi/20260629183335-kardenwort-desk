@@ -27,8 +27,8 @@
     var SERVER_URL = window.location.origin || '';
     var SESSION_ZID = '';
     var API_TOKEN = '';
-    var LANGUAGE = 'de';
-    var TARGET_LANG = 'ru';
+    var LANGUAGE = '';
+    var TARGET_LANG = '';
     var FINGERPRINT = '';
     var SERVER_ENABLED = false;
     var IS_OFFLINE = false;
@@ -136,8 +136,8 @@
         setStatusMessage('Saving...', false);
 
         var payload = {
-            session_zid: SESSION_ZID,
-            language: LANGUAGE,
+            session_zid: getSessionZid() || SESSION_ZID,
+            language: getSessionLang() || LANGUAGE,
             row_id: rowId,
             token_order: rowId,
             status: newStatus,
@@ -207,8 +207,8 @@
         setStatusMessage('Exporting...', false);
 
         var payload = {
-            session_zid: SESSION_ZID,
-            language: LANGUAGE,
+            session_zid: getSessionZid() || SESSION_ZID,
+            language: getSessionLang() || LANGUAGE,
             selected_row_ids: selectedIds,
             fingerprint: FINGERPRINT
         };
@@ -789,8 +789,8 @@
 
             SESSION_ZID = session.session_zid || session.zid || '';
             API_TOKEN = session.api_token || '';
-            LANGUAGE = session.language || 'de';
-            TARGET_LANG = session.target_lang || session.target_language || 'ru';
+            LANGUAGE = session.language || (bootstrapPayload && (bootstrapPayload.language || bootstrapPayload.lang)) || '';
+            TARGET_LANG = session.target_lang || session.target_language || (bootstrapPayload && (bootstrapPayload.target_language || bootstrapPayload.target_lang)) || '';
             FINGERPRINT = session.fingerprint || '';
             SERVER_ENABLED = Boolean(session.server_enabled);
             if (session.server_url) {
@@ -806,6 +806,15 @@
                 window.AppState.source_text = session.source_text;
             }
 
+            var sLangEl = document.getElementById('session-lang');
+            if (sLangEl && LANGUAGE && !sLangEl.textContent.trim()) {
+                sLangEl.textContent = LANGUAGE;
+            }
+            var sTargetLangEl = document.getElementById('session-target-lang');
+            if (sTargetLangEl && TARGET_LANG && !sTargetLangEl.textContent.trim()) {
+                sTargetLangEl.textContent = TARGET_LANG;
+            }
+
             // Hydrate Header
             var titleEl = document.getElementById('session-title');
             if (titleEl && SESSION_ZID) {
@@ -813,7 +822,7 @@
             }
             var badgeEl = document.getElementById('lang-badge');
             if (badgeEl) {
-                badgeEl.textContent = LANGUAGE + ' \u2192 ' + TARGET_LANG;
+                badgeEl.textContent = (LANGUAGE || '') + ' \u2192 ' + (TARGET_LANG || '');
             }
 
             // Check mismatch
@@ -1270,7 +1279,7 @@
         if (!lemma) return "";
         var cleanLemma = String(lemma).trim();
         if (!cleanLemma) return "";
-        var currentLang = (lang || (window.AppConfig ? window.AppConfig.language : 'de') || 'de').toLowerCase();
+        var currentLang = (lang || (typeof getSessionLang === 'function' ? getSessionLang() : '') || (window.AppConfig ? window.AppConfig.language : '')).toLowerCase();
         if (currentLang === 'de') {
             var lowerLemma = cleanLemma.toLowerCase();
             var grammar = getGrammarConfig();
@@ -2931,7 +2940,7 @@
                                 updated = true;
                             }
                         }
-                        var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
+                        var activeLang = (typeof getSessionLang === 'function' ? getSessionLang() : '') || (window.AppConfig ? window.AppConfig.language : '');
                         var rawG = rowData.gender !== undefined ? rowData.gender : (rowData.WordSourceGender || "");
                         var curPosCell = (tr.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]'));
                         var rawPos = rowData.pos !== undefined ? rowData.pos : (rowData.WordSourcePos !== undefined ? rowData.WordSourcePos : (curPosCell ? (curPosCell.textContent || curPosCell.innerText || "").trim() : ""));
@@ -6237,7 +6246,7 @@
                 notifyAHKSelection();
             } else if (e.button === 2) { // RMB
                 if (audioRmbPlay) {
-                    var sourceLang = (requireElement('session-lang').textContent || requireElement('session-lang').innerText || 'en').trim();
+                    var sourceLang = getSessionLang();
                     var textToPlay = getTableRowWordsToPlay(row, audioLmbSource);
                     if (textToPlay) {
                         playAudio(textToPlay, sourceLang);
@@ -6458,7 +6467,7 @@
 
                 if (isDragSelecting && audioLmbPlay) {
                     if (dragSelectMode) {
-                        var sourceLang = (requireElement('session-lang').textContent || requireElement('session-lang').innerText || 'en').trim();
+                        var sourceLang = getSessionLang();
                         if (!dragOccurred && !isShiftClick) {
                             var targetRow = mousedownTargetRow;
                             if (targetRow) {
@@ -6517,7 +6526,7 @@
                                 }
                             }
                             if (dragWords.length > 0) {
-                                var sourceLang = (requireElement('session-lang').textContent || requireElement('session-lang').innerText || 'en').trim();
+                                var sourceLang = getSessionLang();
                                 if (audioLmbChainMode === 'separate' || audioLmbChainMode === 'per_word') {
                                     playAudio(dragWords.join(' ||| '), sourceLang);
                                 } else {
@@ -6533,7 +6542,7 @@
                         if (targetSpan) {
                             var singleText = getSingleTokenWordsToPlay(targetSpan, audioLmbSource, audioLmbChainMode);
                             if (singleText) {
-                                var sourceLang = (requireElement('session-lang').textContent || requireElement('session-lang').innerText || 'en').trim();
+                                var sourceLang = getSessionLang();
                                 playAudio(singleText, sourceLang);
                             }
                         }
@@ -6541,7 +6550,7 @@
                 } else if (isRmbDragFlipping && rmbFlipMode && audioRmbPlay && tokenDragStartIdx !== -1) {
                     var minIdx = (tokenDragLastIdx !== -1) ? Math.min(tokenDragStartIdx, tokenDragLastIdx) : tokenDragStartIdx;
                     var maxIdx = (tokenDragLastIdx !== -1) ? Math.max(tokenDragStartIdx, tokenDragLastIdx) : tokenDragStartIdx;
-                    var targetLang = (requireElement('session-target-lang').textContent || requireElement('session-target-lang').innerText || 'ru').trim();
+                    var targetLang = getSessionTargetLang();
 
                     if (dragOccurred && minIdx !== maxIdx) {
                         var dragTranslations = [];
@@ -7758,7 +7767,7 @@
                     var curGen = curGenCell ? (curGenCell.textContent || curGenCell.innerText || "").trim() : "";
                     var curPosCell = trParent ?  (trParent.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]')) : null;
                     var curPos = curPosCell ? (curPosCell.textContent || curPosCell.innerText || "").trim() : "";
-                    var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
+                    var activeLang = (typeof getSessionLang === 'function' ? getSessionLang() : '') || (window.AppConfig ? window.AppConfig.language : '');
                     var origTip = formatLemmaTooltip(originalValue, curGen, activeLang, curPos);
                     if (origTip) {
                         cell.setAttribute('title', String(origTip));
@@ -7808,7 +7817,7 @@
                     var curGen = curGenCell ? (curGenCell.textContent || curGenCell.innerText || "").trim() : "";
                     var curPosCell = trParent ?  (trParent.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]')) : null;
                     var curPos = curPosCell ? (curPosCell.textContent || curPosCell.innerText || "").trim() : "";
-                    var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
+                    var activeLang = (typeof getSessionLang === 'function' ? getSessionLang() : '') || (window.AppConfig ? window.AppConfig.language : '');
                     var newTip = formatLemmaTooltip(newValue, curGen, activeLang, curPos);
                     if (newTip) {
                         cell.setAttribute('title', String(newTip));
@@ -8490,13 +8499,32 @@
         }
 
         function getSessionLang() {
+            if (window.AppState && window.AppState.bootstrap && (window.AppState.bootstrap.language || window.AppState.bootstrap.lang)) {
+                return window.AppState.bootstrap.language || window.AppState.bootstrap.lang;
+            }
+            if (window.AppState && window.AppState.language) return window.AppState.language;
+            if (typeof LANGUAGE !== 'undefined' && LANGUAGE) return LANGUAGE;
             var el = document.getElementById('session-lang');
             var l = el ? (el.textContent || el.innerText || "").trim() : "";
             if (l) return l;
-            if (LANGUAGE) return LANGUAGE;
-            if (window.AppState && window.AppState.language) return window.AppState.language;
-            return "en";
+            return "";
         }
+        window.getSessionLang = getSessionLang;
+
+        function getSessionTargetLang() {
+            if (window.AppState && window.AppState.bootstrap && (window.AppState.bootstrap.target_language || window.AppState.bootstrap.target_lang)) {
+                return window.AppState.bootstrap.target_language || window.AppState.bootstrap.target_lang;
+            }
+            if (window.AppState && (window.AppState.target_lang || window.AppState.target_language)) {
+                return window.AppState.target_lang || window.AppState.target_language;
+            }
+            if (typeof TARGET_LANG !== 'undefined' && TARGET_LANG) return TARGET_LANG;
+            var el = document.getElementById('session-target-lang');
+            var l = el ? (el.textContent || el.innerText || "").trim() : "";
+            if (l) return l;
+            return "";
+        }
+        window.getSessionTargetLang = getSessionTargetLang;
 
         function getApiToken() {
             if (typeof API_TOKEN !== 'undefined' && API_TOKEN && API_TOKEN !== '__API_TOKEN__') {
@@ -8811,6 +8839,7 @@
             var retryRead = saveState.phase === 'reconcile_failed';
             if (!snapshot.length && !retryRead) return Promise.resolve();
             if (!getSessionZid()) return Promise.reject(new Error('Session ZID missing'));
+            if (!getSessionLang()) return Promise.reject(new Error('Session language missing'));
             var button = (document.getElementById('kw-btn-save'));
             setButtonLoading(button, true, 'Saving...', 'Save (Ctrl+S)');
             var context = {session: getSessionZid(), revision: membershipRevision};
@@ -9038,6 +9067,11 @@
             var sZid = getSessionZid();
             if (!sZid) {
                 window.showToast("Session ZID missing.", "error");
+                return;
+            }
+            var sLang = getSessionLang();
+            if (!sLang) {
+                window.showToast("Session language missing.", "error");
                 return;
             }
             var retextBtn = (document.getElementById('kw-btn-retext'));
@@ -9269,6 +9303,11 @@
                 window.showToast("Session ZID missing.", "error");
                 return;
             }
+            var sLang = getSessionLang();
+            if (!sLang) {
+                window.showToast("Session language missing.", "error");
+                return;
+            }
             var rewordBtn = (document.getElementById('kw-btn-reword'));
             setButtonLoading(rewordBtn, true, "Rewording...", "Re-word");
 
@@ -9447,6 +9486,11 @@
             var sZid = getSessionZid();
             if (!sZid) {
                 window.showToast("Session ZID missing.", "error");
+                return;
+            }
+            var sLang = getSessionLang();
+            if (!sLang) {
+                window.showToast("Session language missing.", "error");
                 return;
             }
             var exportBtn = (document.getElementById('kw-btn-export'));

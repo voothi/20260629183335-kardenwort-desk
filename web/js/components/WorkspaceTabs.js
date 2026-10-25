@@ -752,7 +752,12 @@
                     var provTitle = transTooltip ? (' title="' + escapeHtml(transTooltip) + '"') : '';
                     var provAttr = provData + provTitle;
                     var allIdsAttr = (wordObj.all_row_ids && wordObj.all_row_ids.length > 0) ? (' data-all-row-ids="' + escapeHtml(wordObj.all_row_ids.join(',')) + '"') : '';
-                    var activeLang = 'de';
+                    var activeLang = '';
+                    try {
+                        activeLang = getSessionLang();
+                    } catch (e) {
+                        activeLang = '';
+                    }
                     var cardSentenceText = (wordObj.sentence_text || (w.AppState ? w.AppState.sourceText : '') || '');
                     var infTooltip = wordObj.inflected_tooltip || (appRow && appRow.inflected_tooltip) || formatInflectedTooltip(cardSentenceText, wordObj.inflected || '', wordObj.token_order || rIdStr, wordObj.lemma || '');
                     var lemTooltip = formatLemmaTooltip(wordObj.lemma || '', wordObj.gender || '', activeLang, wordObj.pos || '');

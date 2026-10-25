@@ -19,8 +19,8 @@
     var state = {
         zid: '',
         session_zid: '',
-        language: 'de',
-        target_lang: 'ru',
+        language: '',
+        target_lang: '',
         source_text: '',
         translated_text: '',
         text_mode: 'single',
@@ -96,8 +96,8 @@
                 var firstInitialization = initializedSession !== sessionKey;
                 state.zid = p.zid || p.session_zid || state.zid;
                 state.session_zid = p.session_zid || p.zid || state.session_zid;
-                state.language = p.language || p.lang || state.language;
-                state.target_lang = p.target_lang || p.target_language || state.target_lang;
+                state.language = p.language || p.lang || (p.session_data && (p.session_data.language || p.session_data.lang)) || state.language;
+                state.target_lang = p.target_lang || p.target_language || (p.session_data && (p.session_data.target_lang || p.session_data.target_language)) || state.target_lang;
                 state.source_text = p.source_text || p.sourceText || state.source_text;
                 state.translated_text = p.translated_text || p.sentence_translation || p.translatedText || state.translated_text;
                 state.sentence_translation = state.translated_text;

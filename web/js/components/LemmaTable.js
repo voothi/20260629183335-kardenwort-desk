@@ -122,7 +122,7 @@
                         var transCell = row.querySelector('.col-translation');
                         var isTrans = (uiCfg.audio_rmb_source === 'word_translation');
                         var text = isTrans ? (transCell ? (transCell.textContent || '').trim() : '') : (lemCell ? (lemCell.textContent || '').trim() : '');
-                        var lang = isTrans ? (w.AppState && (w.AppState.target_lang || w.AppState.target_language)) || 'ru' : (typeof w.getSessionLang === 'function' ? w.getSessionLang() : (w.AppState && w.AppState.language) || 'de');
+                        var lang = isTrans ? ((typeof w.getSessionTargetLang === 'function') ? w.getSessionTargetLang() : (w.AppState && (w.AppState.target_lang || w.AppState.target_language || (w.AppState.bootstrap && (w.AppState.bootstrap.target_language || w.AppState.bootstrap.target_lang)))) || '') : ((typeof w.getSessionLang === 'function') ? w.getSessionLang() : (w.AppState && (w.AppState.language || (w.AppState.bootstrap && w.AppState.bootstrap.language))) || '');
                         if (text && typeof w.playAudio === 'function') {
                             w.playAudio(text, lang);
                         }

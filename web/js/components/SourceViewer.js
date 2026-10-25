@@ -122,7 +122,7 @@
                     if (uiCfg.audio_rmb_play) {
                         e.preventDefault();
                         var text = span.getAttribute('data-word') || span.textContent || '';
-                        var lang = (typeof w.getSessionLang === 'function') ? w.getSessionLang() : (w.AppState && w.AppState.language) || 'de';
+                        var lang = (typeof w.getSessionLang === 'function') ? w.getSessionLang() : (w.AppState && (w.AppState.language || (w.AppState.bootstrap && w.AppState.bootstrap.language))) || '';
                         if (typeof w.playAudio === 'function') {
                             w.playAudio(text, lang);
                         }

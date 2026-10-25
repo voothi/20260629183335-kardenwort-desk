@@ -111,7 +111,7 @@
                     if (uiCfg.audio_rmb_play) {
                         e.preventDefault();
                         var text = span.getAttribute('data-word') || span.textContent || '';
-                        var lang = (w.AppState && (w.AppState.target_lang || w.AppState.target_language)) || 'ru';
+                        var lang = (typeof w.getSessionTargetLang === 'function') ? w.getSessionTargetLang() : (w.AppState && (w.AppState.target_lang || w.AppState.target_language || (w.AppState.bootstrap && (w.AppState.bootstrap.target_language || w.AppState.bootstrap.target_lang)))) || '';
                         if (typeof w.playAudio === 'function') {
                             w.playAudio(text, lang);
                         }
