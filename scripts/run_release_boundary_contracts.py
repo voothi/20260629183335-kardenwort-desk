@@ -50,6 +50,8 @@ OWNERSHIP = ['tests/test_intent_architecture.py', 'tests/test_static_web_shell.p
              'tests/test_release_audit_boundaries.py::test_canonical_grammar_browser_server_parity',
              'tests/test_release_audit_boundaries.py::test_pairwise_shell_preferences',
              'tests/test_release_audit_boundaries.py::test_long_translation_update_preserves_active_layout']
+UPDATE_RECOVERY = ['tests/test_release_update_recovery.py',
+                   'tests/test_release_save_convergence.py::test_command_waits_for_save_and_reconciliation']
 
 
 def digest(path):
@@ -62,6 +64,7 @@ def copy_checkout(target):
     names.append('tests/test_release_membership_reads.py')
     names.append('tests/test_release_save_convergence.py')
     names.append('tests/test_release_component_ownership.py')
+    names.append('tests/test_release_update_recovery.py')
     for name in names:
         source = ROOT / name
         if not source.is_file():
@@ -162,7 +165,7 @@ def temporary_checkout(scratch):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('suite', choices=('contracts', 'controls', 'membership', 'storage', 'convergence', 'watchdog', 'ownership'))
+    parser.add_argument('suite', choices=('contracts', 'controls', 'membership', 'storage', 'convergence', 'watchdog', 'ownership', 'update', 'all'))
     parser.add_argument('--filter', help='Optional pytest expression for fixture diagnosis')
     parser.add_argument('--evidence-dir', type=Path, default=EVIDENCE)
     parser.add_argument('--run-label', default='', help='Unique suffix for retained run evidence')
@@ -184,7 +187,7 @@ def main():
         copy_checkout(checkout)
         guard_external_databases(checkout)
         configure_fixture_browser(checkout)
-        selected = {'contracts': CONTRACTS, 'controls': CONTROLS, 'membership': MEMBERSHIP, 'storage': STORAGE, 'convergence': CONVERGENCE, 'watchdog': WATCHDOG, 'ownership': OWNERSHIP}[args.suite]
+        selected = {'contracts': CONTRACTS, 'controls': CONTROLS, 'membership': MEMBERSHIP, 'storage': STORAGE, 'convergence': CONVERGENCE, 'watchdog': WATCHDOG, 'ownership': OWNERSHIP, 'update': UPDATE_RECOVERY, 'all': ['tests']}[args.suite]
         command = [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', *selected,
                    '--tb=short', '--basetemp=' + str(checkout / 'pytest-temp'),
                    '--junitxml=' + str(evidence / (evidence_name + '.xml'))]
@@ -202,13 +205,16 @@ def main():
             ('web/js/app.js', 'web/js/types.js', 'web/js/state/store.js', 'web/js/services/sse.js',
              'web/js/components/SourceViewer.js', 'web/js/components/TranslationView.js',
              'web/js/components/LemmaTable.js', 'web/js/components/WorkspaceTabs.js',
-             'kardenwort_controller.py', 'kardenwort_events.py', 'tests/test_release_save_convergence.py',
-             'tests/test_release_component_ownership.py')}
+             'kardenwort_desk.py', 'kardenwort_controller.py', 'kardenwort_events.py', 'scripts/run_release_boundary_contracts.py', 'tests/test_release_save_convergence.py',
+             'tests/test_release_component_ownership.py', 'tests/test_release_update_recovery.py')}
         metadata['native_host_sha256'] = digest(Path(env['KARDENWORT_NATIVE_REPO']) / 'kardenwort-window/kardenwort-window.ahk')
         guard_log = checkout / 'database-guard.jsonl'
         metadata['external_database_attempts'] = [json.loads(line) for line in guard_log.read_text(encoding='utf8').splitlines()] if guard_log.exists() else []
         tooling_log = checkout / 'tooling-guard.jsonl'
         metadata['compiler_tooling_attempts'] = [json.loads(line) for line in tooling_log.read_text(encoding='utf8').splitlines()] if tooling_log.exists() else []
+        # Preserve test proof even if Windows delays releasing a checkout handle.
+        metadata['temporary_checkout_removed'] = False
+        (evidence / (evidence_name + '-execution.json')).write_text(json.dumps(metadata, indent=2), encoding='utf-8')
     metadata['temporary_checkout_removed'] = not checkout.exists()
     (evidence / (evidence_name + '-execution.json')).write_text(json.dumps(metadata, indent=2), encoding='utf-8')
     print((evidence / (evidence_name + '.log')).read_text(encoding='utf-8').splitlines()[-1])

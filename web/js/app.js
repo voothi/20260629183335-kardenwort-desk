@@ -8973,28 +8973,23 @@
                 }
             }
 
-            var actions = [];
             if (needsRetext) {
                 var retextBody = { session_zid: sZid, language: getSessionLang() };
                 if (tok) retextBody.token = tok;
-                actions.push(
-                    fetch('/session/retext', {
-                        method: 'POST',
-                        headers: postHeaders,
-                        body: JSON.stringify(retextBody)
-                    }).catch(function(e) { return null; })
-                );
+                fetch('/session/retext', {
+                    method: 'POST',
+                    headers: postHeaders,
+                    body: JSON.stringify(retextBody)
+                }).catch(function(e) { return null; });
             }
             if (untranslatedRowIds.length > 0) {
                 var rewordBody = { session_zid: sZid, row_ids: untranslatedRowIds, language: getSessionLang() };
                 if (tok) rewordBody.token = tok;
-                actions.push(
-                    fetch('/session/reword', {
-                        method: 'POST',
-                        headers: postHeaders,
-                        body: JSON.stringify(rewordBody)
-                    }).catch(function(e) { return null; })
-                );
+                fetch('/session/reword', {
+                    method: 'POST',
+                    headers: postHeaders,
+                    body: JSON.stringify(rewordBody)
+                }).catch(function(e) { return null; });
             }
 
             var proceedWithStatus = function() {
@@ -9030,15 +9025,8 @@
                     });
             };
 
-            if (actions.length > 0) {
-                Promise.all(actions).then(function() {
-                    proceedWithStatus();
-                }).catch(function() {
-                    proceedWithStatus();
-                });
-            } else {
-                proceedWithStatus();
-            }
+            // Provider recovery can remain pending; status and its watchdog must stay usable.
+            proceedWithStatus();
         };
 
         window.onRetextClick = function() {
