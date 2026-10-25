@@ -1,4 +1,3 @@
-// @ts-check
 /// <reference path="host.d.ts" />
 (function() {
     window.reserveTextRegions = function(reset) {
