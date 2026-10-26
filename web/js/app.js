@@ -4278,11 +4278,30 @@
             var pending = JSON.parse(window.getDeltas());
             if (saveState && saveState.phase === 'saving') pending = pending.concat(saveState.snapshot);
             if (nativeSaveSnapshot) pending = pending.concat(nativeSaveSnapshot.deltas);
-            var overlay = {};
+            var pendingIds = {};
             pending.forEach(function(delta) {
-                if (delta.column !== 'DeskSelected') return;
-                var lemma = getLemmaByRowId(delta.row_id);
-                if (lemma) overlay[lemma] = !!window.AppState.selectedLemmas[lemma];
+                if (delta.column === 'DeskSelected') pendingIds[String(delta.row_id)] = true;
+            });
+            var overlay = {};
+            if (!Object.keys(pendingIds).length) return overlay;
+            function project(rowIds, lemma) {
+                if (!lemma) return;
+                rowIds.forEach(function(rowId) {
+                    var id = String(rowId);
+                    if (!pendingIds[id]) return;
+                    overlay[lemma] = !!window.AppState.selectedLemmas[lemma];
+                    delete pendingIds[id];
+                });
+            }
+            tableRows.forEach(function(row) {
+                project(getRowGroupIds(row), getRowLemma(row));
+            });
+            if (!Object.keys(pendingIds).length) return overlay;
+            var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
+            cards.forEach(function(card) {
+                (card.words || []).forEach(function(word) {
+                    project([word.row_id].concat(word.all_row_ids || []), String(word.lemma || '').trim().toLowerCase());
+                });
             });
             return overlay;
         }

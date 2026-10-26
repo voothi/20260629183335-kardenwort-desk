@@ -17,6 +17,76 @@ from tests.test_release_boundary_contracts import (
 )
 
 
+@pytest.mark.parametrize('mode', ['lookup', 'container'])
+@pytest.mark.parametrize('local_selected', [False, True])
+def test_membership_with_many_pending_selections_has_linear_dom_work(page, mode, local_selected):
+    from scripts.benchmark_release_interactions import render_fixture, TRANSPORT
+    import kardenwort_desk as desk
+
+    count = 256
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.set_content(render_fixture(desk, count, mode).replace('<head>', '<head>' + TRANSPORT))
+    page.wait_for_function('typeof applySharedSelection === "function"')
+    page.clock.install()
+    page.clock.pause_at(page.evaluate('Date.now()') + 1000)
+    result = page.evaluate('''localSelected => {
+        const membership = {};
+        document.querySelectorAll('#lemma-table tbody tr[data-row-id] .col-lemma').forEach(
+            cell => membership[cell.textContent.trim().toLowerCase()] = !localSelected);
+        applySharedSelection(membership);
+        if(localSelected) selectAllRows(); else clearAllSelections();
+        const boxes = () => Array.from(document.querySelectorAll('#source-container .word, #lemma-table tbody tr[data-row-id]'))
+            .map(el => {const r=el.getBoundingClientRect();return [r.x,r.y,r.width,r.height];});
+        const before = boxes();
+        const original = Element.prototype.getAttribute;
+        let reads = 0;
+        Element.prototype.getAttribute = function(name) {
+            reads++;
+            return original.call(this, name);
+        };
+        try { applySharedSelection(membership); }
+        finally { Element.prototype.getAttribute = original; }
+        return {reads, selected:Object.keys(AppState.selectedLemmas).length,
+                pending:JSON.parse(getDeltas()), dirty:isDirty(), requests:__requests,
+                before, after:boxes()};
+    }''', local_selected)
+    assert result['selected'] == (count if local_selected else 0)
+    assert result['dirty']
+    assert len(result['pending']) == count
+    assert all(delta['column'] == 'DeskSelected' and delta['value'] == ('1' if local_selected else '')
+               for delta in result['pending'])
+    assert not any('/session/save' in url for url in result['requests'])
+    assert errors == []
+    assert result['before'] == result['after']
+    assert result['reads'] < count * 48, result['reads']
+
+
+def test_membership_preserves_pending_selection_on_inactive_card(page, tmp_path):
+    from tests.test_release_audit_regressions import audit_html, TRANSPORT
+
+    page.set_content(audit_html(tmp_path, container=True).replace('<head>', '<head>' + TRANSPORT))
+    page.wait_for_function('typeof applySharedSelection === "function"')
+    page.clock.install()
+    page.clock.pause_at(page.evaluate('Date.now()') + 1000)
+    page.evaluate('''() => {
+        clearAllSelections(); clearDirty();
+        const cards = WorkspaceTabs.getCards();
+        const first = cards.find(card => card.sentence_idx === 1);
+        const second = cards.find(card => card.sentence_idx === 2);
+        WorkspaceTabs.switchToTab(second.seq_num);
+        selectAllRows();
+        WorkspaceTabs.switchToTab(first.seq_num);
+        window.__pendingBefore = JSON.parse(getDeltas());
+        applySharedSelection({haus:true,baum:false});
+    }''')
+    assert page.evaluate('!!AppState.selectedLemmas.haus && !!AppState.selectedLemmas.baum && isDirty()')
+    pending = page.evaluate('JSON.parse(getDeltas())')
+    assert pending == page.evaluate('__pendingBefore')
+    assert all(delta['value'] == '1' for delta in pending)
+    assert any(delta['sentence_idx'] == 2 for delta in pending)
+
+
 def held_selection_save(page, tmp_path, running_controller):
     url, server, adapter = running_controller
     use_backend(server, 'sqlite')

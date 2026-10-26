@@ -66,6 +66,7 @@ def copy_checkout(target, full_suite=False):
     names.append('tests/test_release_save_convergence.py')
     names.append('tests/test_release_component_ownership.py')
     names.append('tests/test_release_update_recovery.py')
+    names.append('scripts/benchmark_release_interactions.py')
     for name in names:
         source = ROOT / name
         if not source.is_file():
@@ -223,7 +224,8 @@ def main():
              'web/js/components/SourceViewer.js', 'web/js/components/TranslationView.js',
              'web/js/components/LemmaTable.js', 'web/js/components/WorkspaceTabs.js',
              'kardenwort_desk.py', 'kardenwort_controller.py', 'kardenwort_events.py', 'scripts/run_release_boundary_contracts.py', 'tests/test_release_save_convergence.py',
-             'tests/test_release_component_ownership.py', 'tests/test_release_update_recovery.py')}
+             'tests/test_release_component_ownership.py', 'tests/test_release_update_recovery.py',
+             'scripts/benchmark_release_interactions.py')}
         metadata['native_host_sha256'] = digest(Path(env['KARDENWORT_NATIVE_REPO']) / 'kardenwort-window/kardenwort-window.ahk')
         if args.suite == 'all':
             metadata['translation_service'] = dict(path=str(translator), sha256=digest(translator / 'translate_server.py'))
