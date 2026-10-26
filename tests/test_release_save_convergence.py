@@ -443,3 +443,195 @@ def test_command_waits_for_save_and_reconciliation(page, tmp_path, running_contr
     assert len(commands) == 1
     assert restored_membership(running_controller[2]) == {'haus': True, 'baum': True}
     assert page.evaluate('!isDirty()')
+
+
+def hold_stream_recovery(page, tmp_path, running_controller):
+    url, server, adapter = running_controller
+    use_backend(server, 'sqlite')
+    seed_session(server, adapter, selected=True)
+    open_browser(page, tmp_path, url, selected=True)
+    page.wait_for_function("document.getElementById('sse-status-indicator').dataset.sync === 'synced'")
+    reads = []
+    page.route('**/internal/selection', lambda route: reads.append(route))
+    page.evaluate("""() => {
+        window.__recoveryResult = 'pending';
+        window.__recovery = reconcileStreamMembership({
+            session: SSEBridge.getActiveZid(), connectionId: SSEBridge.getActiveConnectionId()
+        }).then(() => { __recoveryResult = 'resolved'; }, () => { __recoveryResult = 'rejected'; });
+    }""")
+    wait_for_held(page, reads, 1)
+    return reads
+
+
+@pytest.mark.parametrize('command,path', [
+    ('onUpdateClick', '/session/status'), ('onRetextClick', '/session/retext'),
+    ('onRewordClick', '/session/reword'), ('onSendToAnkiClick', '/session/export'),
+])
+def test_stream_recovery_blocks_clean_commands(page, tmp_path, running_controller, command, path):
+    reads = hold_stream_recovery(page, tmp_path, running_controller)
+    url, _, adapter = running_controller
+    save_selection(url, 0, False)
+    save_selection(url, 1, True)
+    commands, saves = [], []
+
+    def receive_command(route):
+        commands.append(route.request)
+        route.fulfill(json={'ok': True, 'stage': 'finished'})
+
+    page.route('**' + path + '*', receive_command)
+    page.route('**/session/save', lambda route: saves.append(route))
+    page.evaluate('command => { void window[command](); }', command)
+    page.evaluate('Boolean(window.getDeltas)')
+    assert not commands, 'A clean page still needs its stream recovery barrier'
+    reads[0].fulfill(response=reads[0].fetch())
+    wait_for_held(page, commands, 1)
+    assert page.evaluate('!AppState.selectedLemmas.haus && !!AppState.selectedLemmas.baum && !isDirty()')
+    if path == '/session/export':
+        assert commands[0].post_data_json['selected_row_ids'] == [1]
+    assert not saves, 'Authoritative recovery must not echo a save'
+    assert restored_membership(adapter) == {'haus': False, 'baum': True}
+
+
+@pytest.mark.parametrize('lifecycle', ['disconnect', 'reconnect', 'error', 'remount', 'session'])
+def test_stream_recovery_rejects_inactive_completion(page, tmp_path, running_controller, lifecycle):
+    reads = hold_stream_recovery(page, tmp_path, running_controller)
+    save_selection(running_controller[0], 0, False)
+    # Capture the newer authoritative response, then make its lifecycle obsolete.
+    response = reads[0].fetch()
+    if lifecycle == 'disconnect':
+        page.evaluate('SSEBridge.disconnect()')
+    elif lifecycle == 'reconnect':
+        page.evaluate('url => { SSEBridge.disconnect(); SSEBridge.connect("' + ZID + '",url); }', running_controller[0])
+        wait_for_held(page, reads, 2)
+    elif lifecycle == 'remount':
+        page.add_script_tag(content=Path('web/js/app.js').read_text(encoding='utf-8-sig'))
+        wait_for_held(page, reads, 2)
+    elif lifecycle == 'error':
+        page.evaluate('__testStream.onerror({})')
+    else:
+        page.evaluate("zid => { document.getElementById('session-zid').textContent=zid; WorkspaceTabs.getCards().forEach(c=>c.zid=zid); }", OTHER_ZID)
+    before = page.evaluate("""() => ({selected:!!AppState.selectedLemmas.haus,
+        sync:document.getElementById('sse-status-indicator').getAttribute('data-sync')})""")
+    reads[0].fulfill(response=response)
+    page.wait_for_function("__recoveryResult !== 'pending'")
+    assert page.evaluate('__recoveryResult') == 'rejected'
+    assert page.evaluate("""() => ({selected:!!AppState.selectedLemmas.haus,
+        sync:document.getElementById('sse-status-indicator').getAttribute('data-sync')})""") == before
+    assert len(reads) == (2 if lifecycle in ('reconnect', 'remount') else 1)
+    if lifecycle in ('reconnect', 'remount'):
+        reads[1].fulfill(response=reads[1].fetch())
+        page.wait_for_function("document.getElementById('sse-status-indicator').dataset.sync === 'synced'")
+        assert page.evaluate('!AppState.selectedLemmas.haus')
+
+
+def test_stream_recovery_exhaustion_rejects_command_barrier(page, tmp_path, running_controller):
+    reads = hold_stream_recovery(page, tmp_path, running_controller)
+    commands = []
+    page.route('**/session/export', lambda route: (commands.append(route.request), route.fulfill(json={'ok': True})))
+    page.evaluate('void onSendToAnkiClick()')
+    for count in range(1, 4):
+        wait_for_held(page, reads, count)
+        reads[count - 1].fulfill(status=503, json={'ok': False})
+    page.wait_for_function("__recoveryResult !== 'pending'")
+    assert page.evaluate('__recoveryResult') == 'rejected'
+    assert page.locator('#sse-status-indicator').get_attribute('data-sync') == 'failed'
+    error = page.evaluate('flushPendingSaves().then(() => null, e => e.message)')
+    assert 'Selection reconciliation failed' in error
+    assert not commands
+    assert len(reads) == 3
+    assert page.evaluate('!!AppState.selectedLemmas.haus')
+
+
+def test_stream_recovery_and_membership_keep_save_disabled(page, tmp_path, running_controller):
+    reads = hold_stream_recovery(page, tmp_path, running_controller)
+    page.clock.install()
+    page.clock.pause_at(page.evaluate('Date.now()') + 1000)
+    saves = []
+    page.route('**/session/save', lambda route: saves.append(route))
+    page.evaluate('toggleRowSelection(1,true); void onSaveClick(true)')
+    page.evaluate('Boolean(window.getDeltas)')
+    assert not saves, 'A new save must await the authoritative read'
+    reads[0].fulfill(response=reads[0].fetch())
+    wait_for_held(page, saves, 1)
+    assert page.locator('#kw-btn-save').is_disabled()
+    page.clock.run_for(26000)
+    assert page.locator('#kw-btn-save').is_disabled()
+    assert 'Saving' in page.locator('#kw-btn-save').text_content()
+    page.clock.resume()
+    page.evaluate('applySharedSelection({haus:true,baum:false})')
+    assert page.locator('#kw-btn-save').is_disabled(), 'Membership projection cannot release an unacknowledged save'
+    saves[0].fulfill(response=saves[0].fetch())
+    wait_for_held(page, reads, 2)
+    reads[1].fulfill(response=reads[1].fetch())
+    page.wait_for_function('!isDirty()')
+    assert page.locator('#kw-btn-save').is_disabled()
+
+
+@pytest.mark.parametrize('reversal', [False, True])
+def test_stream_recovery_after_pending_save_converges_without_cycle(page, tmp_path, running_controller, reversal):
+    reads = hold_stream_recovery(page, tmp_path, running_controller)
+    reads[0].fulfill(response=reads[0].fetch())
+    page.wait_for_function("__recoveryResult === 'resolved'")
+    saves, commands = [], []
+    page.route('**/session/save', lambda route: saves.append(route))
+
+    def receive_export(route):
+        commands.append(route.request.post_data_json)
+        route.fulfill(json={'ok': True})
+
+    page.route('**/session/export', receive_export)
+    page.evaluate('toggleRowSelection(1,true); void onSaveClick(true)')
+    wait_for_held(page, saves, 1)
+    page.evaluate("""() => {
+        void reconcileStreamMembership({session:SSEBridge.getActiveZid(),connectionId:SSEBridge.getActiveConnectionId()});
+        void onSendToAnkiClick();
+    }""")
+    if reversal:
+        page.evaluate('toggleRowSelection(1,false)')
+    assert len(reads) == 1
+    assert not commands
+    saves[0].fulfill(response=saves[0].fetch())
+    wait_for_held(page, reads, 2)
+    assert not commands
+    reads[1].fulfill(response=reads[1].fetch())
+    if reversal:
+        wait_for_held(page, saves, 2)
+        saves[1].fulfill(response=saves[1].fetch())
+    wait_for_held(page, commands, 1)
+    assert commands[0]['selected_row_ids'] == ([0] if reversal else [0, 1])
+    assert page.evaluate('!isDirty()')
+    assert restored_membership(running_controller[2]) == {'haus': True, 'baum': not reversal}
+
+
+def test_stream_recovery_coalesces_pending_reads(page, tmp_path, running_controller):
+    reads = hold_stream_recovery(page, tmp_path, running_controller)
+    assert page.evaluate("""() => {
+        const context={session:SSEBridge.getActiveZid(),connectionId:SSEBridge.getActiveConnectionId()};
+        return reconcileStreamMembership(context) === reconcileStreamMembership(context);
+    }""")
+    assert len(reads) == 1
+    reads[0].fulfill(response=reads[0].fetch())
+    page.wait_for_function("__recoveryResult === 'resolved'")
+
+
+def test_stream_recovery_revision_churn_fails_without_claiming_synced(page, tmp_path, running_controller):
+    reads = hold_stream_recovery(page, tmp_path, running_controller)
+    for count in range(1, 4):
+        wait_for_held(page, reads, count)
+        response = reads[count - 1].fetch()
+        page.evaluate('applySharedSelection({haus:true,baum:false})')
+        reads[count - 1].fulfill(response=response)
+    page.wait_for_function("__recoveryResult !== 'pending'")
+    assert page.evaluate('__recoveryResult') == 'rejected'
+    assert page.locator('#sse-status-indicator').get_attribute('data-sync') == 'failed'
+    assert len(reads) == 3
+
+
+def test_stream_recovery_disconnect_after_sync_rejects_commands(page, tmp_path, running_controller):
+    reads = hold_stream_recovery(page, tmp_path, running_controller)
+    reads[0].fulfill(response=reads[0].fetch())
+    page.wait_for_function("__recoveryResult === 'resolved'")
+    page.evaluate('SSEBridge.disconnect()')
+    error = page.evaluate('flushPendingSaves().then(() => null, e => e.message)')
+    assert 'inactive connection' in error
+    assert page.locator('#sse-status-indicator').get_attribute('data-sync') is None

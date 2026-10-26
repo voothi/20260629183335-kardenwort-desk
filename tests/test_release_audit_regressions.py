@@ -535,7 +535,13 @@ def test_phase3_sync_feedback_and_failure_retry(page, tmp_path):
         };
     }""")
 
-    page.evaluate("() => window.reconcileStreamMembership({session: '20261023221555', connectionId: 1})")
+    error = page.evaluate("""() => {
+        SSEBridge.connect('20261023221555');
+        return window.reconcileStreamMembership({
+            session: SSEBridge.getActiveZid(), connectionId: SSEBridge.getActiveConnectionId()
+        }).then(() => null, error => error.message);
+    }""")
+    assert error == 'Selection reconciliation failed with status 503'
     page.wait_for_function("document.getElementById('sse-status-indicator') && document.getElementById('sse-status-indicator').getAttribute('data-sync') === 'failed'", timeout=5000)
     attempts = page.evaluate("window.__syncAttempts")
     assert attempts >= 3, f"Expected at least 3 bounded retries, got {attempts}"

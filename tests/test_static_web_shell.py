@@ -406,6 +406,9 @@ def test_playwright_table_inline_editing_history_and_navigation(page, test_serve
         content_type="application/json",
         body=json.dumps({"status": "success", "saved": True})
     ))
+    page.route("**/internal/selection", lambda route: route.fulfill(
+        json={"ok": True, "shared_selection": {"fuchs": False, "springen": False}}
+    ))
 
     page.goto(f"http://127.0.0.1:{port}/index.html")
 
@@ -557,6 +560,9 @@ def test_playwright_action_toolbar_shortcuts_modal_and_audio(page, test_server):
     page.route("**/api/v1/audio/play", lambda route: (
         calls.append(("audio", route.request.post_data)),
         route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok"}))
+    ))
+    page.route("**/internal/selection", lambda route: route.fulfill(
+        json={"ok": True, "shared_selection": {"fuchs": False, "springen": False}}
     ))
 
     page.goto(f"http://127.0.0.1:{port}/index.html")

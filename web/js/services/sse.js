@@ -25,6 +25,10 @@
 
     var activeConnectionId = 0;
 
+    function invalidateMembership() {
+        if (window.invalidateStreamMembership) window.invalidateStreamMembership();
+    }
+
     /**
      * Updates the SSE connection status badge in #session-header
      * @param {'connected'|'reconnecting'|'disconnected'|'error'} status
@@ -82,6 +86,7 @@
         // Repeated mounts preserve the existing session subscription.
         if (activeEventSource && activeSessionZid === sessionZid) return;
         if (activeEventSource) {
+            invalidateMembership();
             try { activeEventSource.close(); } catch (e) { console.warn('[SSE] Error closing active EventSource:', e); }
             activeEventSource = null;
             activeSessionZid = null;
@@ -115,6 +120,8 @@
                             session: sessionZid,
                             connectionId: activeConnectionId,
                             serverUrl: serverUrl
+                        }).catch(function(error) {
+                            console.debug('[SSE] Membership recovery stopped:', error.message);
                         });
                     }
                 }
@@ -127,8 +134,9 @@
             es.onerror = function () {
                 if (activeEventSource !== es) return;
                 isConnectionOpen = false;
+                invalidateMembership();
+                activeConnectionId = ++connectionCounter;
                 if (es.readyState === EventSource.CONNECTING) {
-                    activeConnectionId = ++connectionCounter;
                     updateConnectionIndicator('reconnecting');
                     var indicator = document.getElementById('sse-status-indicator');
                     if (indicator) {
@@ -214,6 +222,7 @@
      */
     function disconnect() {
         if (activeEventSource) {
+            invalidateMembership();
             try { activeEventSource.close(); } catch (e) { console.warn('[SSEBridge] Error closing active EventSource:', e); }
             activeEventSource = null;
             activeSessionZid = null;

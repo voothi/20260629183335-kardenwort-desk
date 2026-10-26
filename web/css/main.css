@@ -60,4 +60,3 @@ td.editing input { border-color: var(--input-border, var(--accent-color)); }
     overflow: visible;
     box-sizing: border-box;
 }
-

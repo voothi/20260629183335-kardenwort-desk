@@ -433,6 +433,7 @@ def test_coordinated_single_pass_pinning_and_table_coexistence(page, tmp_path):
     )
 
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set(SEC_RENDERING, 'filter_selected_only', 'false')
     config.set(SEC_RENDERING, 'hover_highlight', 'true')
     config.set(SEC_RENDERING, 'hover_highlight_rainbow', 'true')
     config.set(SEC_RENDERING, 'hover_highlight_bookmarks', '3')
@@ -526,6 +527,7 @@ def test_table_selected_token_click_deselection_and_two_step_esc(page, tmp_path)
     )
 
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set(SEC_RENDERING, 'filter_selected_only', 'false')
     config.set(SEC_RENDERING, 'hover_highlight', 'true')
     config.set(SEC_RENDERING, 'hover_highlight_rainbow', 'true')
     config.set(SEC_RENDERING, 'hover_highlight_bookmarks', '3')
@@ -616,6 +618,7 @@ def test_table_selected_word_deselection_with_concurrent_active_text_bookmarks(p
     )
 
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set(SEC_RENDERING, 'filter_selected_only', 'false')
     config.set(SEC_RENDERING, 'hover_highlight', 'true')
     config.set(SEC_RENDERING, 'hover_highlight_rainbow', 'true')
     config.set(SEC_RENDERING, 'hover_highlight_bookmarks', '4')

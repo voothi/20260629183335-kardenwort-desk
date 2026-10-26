@@ -2310,6 +2310,7 @@
     function init() {
         if (isInitialized) return;
         isInitialized = true;
+        if (window.invalidateStreamMembership) window.invalidateStreamMembership();
         window.__deskInstanceId = (window.__deskInstanceId || 0) + 1;
         var myDeskInstanceId = window.__deskInstanceId;
         checkAhkHost();
@@ -3473,6 +3474,37 @@
 
         var _lastEnsureRestartTime = 0;
          var _ensureDebounceTimer = null;
+        var lastManualStatusAt = null;
+        var statusRead = null;
+
+        function readSessionStatus(session, options) {
+            if (statusRead && statusRead.session === session) return statusRead.promise;
+            var pending = {session: session, promise: null};
+            statusRead = pending;
+            pending.promise = fetchSessionStatus(session, options).finally(function() {
+                if (statusRead === pending) statusRead = null;
+            });
+            return pending.promise;
+        }
+
+        function fetchSessionStatus(session, options) {
+            var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+            if (controller) options.signal = controller.signal;
+            var token = getApiToken();
+            if (token) options.headers['X-API-Token'] = token;
+            var timeout;
+            return new Promise(function(resolve, reject) {
+                timeout = setTimeout(function() {
+                    if (controller) controller.abort();
+                    reject(new Error('Session status request timed out'));
+                }, 4000);
+                fetch('/session/status?zid=' + encodeURIComponent(session), options).then(function(response) {
+                    return response.json().then(function(data) { return {ok: response.ok, status: response.status, data: data}; });
+                }).then(resolve, reject);
+            }).finally(function() {
+                clearTimeout(timeout);
+            });
+        }
         /** @param {string} reason */
         function ensureWatchdogActive(reason) {
             var isWebMode = (window.location.protocol !== 'file:') || (document.body && document.body.getAttribute('data-web-mode') === 'true');
@@ -3784,10 +3816,12 @@
                     if (document.hidden) {
                         return;
                     }
+                    if (isSavePending()) return;
                     if (resolved) {
                         stopPolling();
                         return;
                     }
+                    if (lastManualStatusAt !== null && Date.now() - lastManualStatusAt < pollIntervalMs) return;
                     var currentElapsed = getActiveElapsedMs();
                     if (currentElapsed >= maxBudgetMs) {
                         var remainingPendings = countPendingSkeletons();
@@ -3804,19 +3838,11 @@
                     if (isPolling) return;
                     isPolling = true;
 
-                    var statusUrl = "/session/status?zid=" + encodeURIComponent(curZid);
-                    var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-                    var timeoutId = controller ? setTimeout(function() {
-                        try { if (controller) controller.abort(); } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-                    }, 4000) : null;
                     var fetchOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
-                    if (controller) {
-                        fetchOpts.signal = controller.signal;
-                    }
 
-                    fetch(statusUrl, fetchOpts)
+                    readSessionStatus(curZid, fetchOpts)
                         .then(function(res) {
-                            if (res.ok) return res.json();
+                            if (res.ok) return res.data;
                             throw new Error("status endpoint error");
                         })
                         .then(function(resObj) {
@@ -3907,7 +3933,6 @@
                                 });
                         })
                         .finally(function() {
-                            if (timeoutId) clearTimeout(timeoutId);
                             isPolling = false;
                         });
                 };
@@ -8314,10 +8339,14 @@
         function updateToolbarState() {
             var saveBtn = (document.getElementById('kw-btn-save'));
             if (saveBtn) {
-                saveBtn.disabled = (typeof window.isDirty === 'function') ? !window.isDirty() : true;
+                saveBtn.disabled = isSavePending() || typeof window.isDirty !== 'function' || !window.isDirty();
             }
         }
         window.updateToolbarState = updateToolbarState;
+
+        function isSavePending() {
+            return !!(nativeSaveSnapshot || (saveState && saveState.promise));
+        }
 
         /** @param {HTMLButtonElement|null} btn @param {boolean} isLoading @param {string} loadingText @param {string} defaultText */
         function setButtonLoading(btn, isLoading, loadingText, defaultText) {
@@ -8335,6 +8364,11 @@
                     clearTimeout(btn._recoveryTimer);
                 }
                 btn._recoveryTimer = setTimeout(function() {
+                    if (btn.id === 'kw-btn-save' && isSavePending()) {
+                        btn._recoveryTimer = null;
+                        window.showToast('Save is still pending acknowledgment.', 'warning');
+                        return;
+                    }
                     btn.disabled = false;
                     var original = btn.getAttribute('data-default-text') || defaultText;
                     if (original) {
@@ -8679,12 +8713,14 @@
         window.retrySession = retrySession;
 
         var saveState = {phase: 'idle', promise: null};
+        var streamRecovery = null;
          var selectionSaveTimer = null;
          var nativeSaveSnapshot = null;
 
         window.captureSaveSnapshot = function() {
             if (saveState.promise) throw new Error('A save is already pending');
             if (nativeSaveSnapshot) throw new Error('A native save is already pending');
+            statusRead = null;
             nativeSaveSnapshot = {deltas: JSON.parse(window.getDeltas()), revision: membershipRevision, session: getSessionZid()};
             return JSON.stringify(nativeSaveSnapshot.deltas);
         };
@@ -8753,6 +8789,16 @@
         function reconcileSelections(context) {
             assertCurrentSave(context);
             saveState.phase = 'reconciling';
+            return readSharedSelections(context).then(function(membership) {
+                assertCurrentSave(context);
+                window.applySharedSelection(membership);
+            }).catch(function(err) {
+                if (isCurrentSaveSession(context)) saveState.phase = 'reconcile_failed';
+                throw err;
+            });
+        }
+
+        function readSharedSelections(context) {
             var body = JSON.stringify({session_zid: context.session, accept_updates: false});
             var request;
             if (window.ahkCall && (document.documentMode || typeof fetch === 'undefined')) {
@@ -8760,8 +8806,7 @@
                     return JSON.parse(window.ahkCall('get_shared_selection', body));
                 });
             } else {
-                var baseUrl = (context.serverUrl || (typeof SERVER_URL !== 'undefined' ? SERVER_URL : '') || (window.location && window.location.origin) || '').replace(/\/+$/, '');
-                var endpoint = (baseUrl ? baseUrl : '') + '/internal/selection';
+                var endpoint = (context.serverUrl || SERVER_URL).replace(/\/+$/, '') + '/internal/selection';
                 var headers = {'Content-Type': 'application/json'};
                 var token = getApiToken();
                 if (token) headers['X-API-Token'] = token;
@@ -8770,13 +8815,7 @@
                     return res.json();
                 });
             }
-            return request.then(function(response) {
-                assertCurrentSave(context);
-                window.applySharedSelection(selectionReadResult(response));
-            }).catch(function(err) {
-                if (isCurrentSaveSession(context)) saveState.phase = 'reconcile_failed';
-                throw err;
-            });
+            return request.then(selectionReadResult);
         }
 
         function updateSyncFeedback(status, message) {
@@ -8802,114 +8841,92 @@
             }
         }
 
-        /**
-         * Reconcile membership from authoritative backend on persistent stream attachment or reconnect.
-         * Guards against inactive session, unmounted instance, stale connection generation, or racing updates.
-         * @param {{session?: string, connectionId?: number, serverUrl?: string}} [context]
-         * @param {number} [attempt]
-         * @returns {Promise<void>}
-         */
-        function reconcileStreamMembership(context, attempt) {
-            context = context || {};
-            attempt = attempt || 1;
-            var session = context.session || getSessionZid();
-            if (!session) return Promise.resolve();
-
-            // 1. Session and mount guards
-            if (window.__deskInstanceId !== myDeskInstanceId || getSessionZid() !== session) {
-                return Promise.resolve();
+        function assertCurrentRecovery(recovery) {
+            assertCurrentSave(recovery.context);
+            if (recovery !== streamRecovery || recovery.phase === 'cancelled') {
+                throw new Error('Membership recovery was cancelled');
             }
-
-            // 2. Connection generation guard: if initiated for a specific connection, verify it's still current
-            var currentConnId = (window.SSEBridge && typeof window.SSEBridge.getActiveConnectionId === 'function')
-                ? window.SSEBridge.getActiveConnectionId()
-                : 0;
-            if (context.connectionId && currentConnId && context.connectionId !== currentConnId) {
-                return Promise.resolve();
+            var bridge = window.SSEBridge;
+            if (!bridge || bridge.getActiveConnectionId() !== recovery.context.connectionId ||
+                    bridge.getActiveZid() !== recovery.context.session) {
+                throw new Error('Membership recovery belongs to an inactive connection');
             }
+        }
 
-            // 3. Save barrier: if a save is currently in flight, chain after it completes
-            if (saveState && saveState.promise) {
-                return saveState.promise.then(
-                    function() { return reconcileStreamMembership(context, attempt); },
-                    function() { return reconcileStreamMembership(context, attempt); }
-                );
-            }
+        function invalidateStreamMembership() {
+            if (!streamRecovery) return;
+            streamRecovery.phase = 'cancelled';
+            clearTimeout(streamRecovery.timer);
+            streamRecovery.cancel(new Error('Membership recovery belongs to an inactive connection'));
+        }
+        window.invalidateStreamMembership = invalidateStreamMembership;
 
-            var startRevision = membershipRevision;
-            updateSyncFeedback('syncing', 'Synchronizing membership...');
-
-            var body = JSON.stringify({session_zid: session, accept_updates: false});
-            var request;
-            if (window.ahkCall && (document.documentMode || typeof fetch === 'undefined')) {
-                request = Promise.resolve().then(function() {
-                    return JSON.parse(window.ahkCall('get_shared_selection', body));
-                });
-            } else {
-                var baseUrl = (context.serverUrl || (typeof SERVER_URL !== 'undefined' ? SERVER_URL : '') || (window.location && window.location.origin) || '').replace(/\/+$/, '');
-                var endpoint = (baseUrl ? baseUrl : '') + '/internal/selection';
-                var headers = {'Content-Type': 'application/json'};
-                var token = getApiToken();
-                if (token) headers['X-API-Token'] = token;
-                request = fetch(endpoint, {method: 'POST', headers: headers, body: body}).then(function(res) {
-                    if (!res.ok) throw new Error('Selection reconciliation failed with status ' + res.status);
-                    return res.json();
-                });
-            }
-
-            return request.then(function(response) {
-                // Re-verify session and mount guards
-                if (window.__deskInstanceId !== myDeskInstanceId || getSessionZid() !== session) {
-                    return;
-                }
-                var nowConnId = (window.SSEBridge && typeof window.SSEBridge.getActiveConnectionId === 'function')
-                    ? window.SSEBridge.getActiveConnectionId()
-                    : 0;
-                if (context.connectionId && nowConnId && context.connectionId !== nowConnId) {
-                    return;
-                }
-
-                // If membershipRevision changed while this query was in flight (e.g. newer live event arrived),
-                // an older read must not overwrite the newer state. Bounded retry up to 3 attempts.
-                if (membershipRevision !== startRevision) {
-                    if (attempt < 3) {
-                        return reconcileStreamMembership(context, attempt + 1);
-                    }
-                    updateSyncFeedback('synced', 'Membership synchronized');
-                    return;
-                }
-
-                var membership = selectionReadResult(response);
+        function readStreamMembership(recovery, attempt) {
+            assertCurrentRecovery(recovery);
+            var revision = membershipRevision;
+            return readSharedSelections(recovery.context).then(function(membership) {
+                assertCurrentRecovery(recovery);
+                if (membershipRevision !== revision) throw new Error('Membership changed during synchronization');
                 window.applySharedSelection(membership);
-                updateSyncFeedback('synced', 'Membership synchronized');
             }).catch(function(err) {
-                // If context is no longer active, discard error silently
-                if (window.__deskInstanceId !== myDeskInstanceId || getSessionZid() !== session) {
-                    return;
-                }
-                var nowConnId = (window.SSEBridge && typeof window.SSEBridge.getActiveConnectionId === 'function')
-                    ? window.SSEBridge.getActiveConnectionId()
-                    : 0;
-                if (context.connectionId && nowConnId && context.connectionId !== nowConnId) {
-                    return;
-                }
-
-                if (attempt < 3) {
-                    updateSyncFeedback('syncing', 'Retrying synchronization (' + attempt + '/3)...');
-                    return new Promise(function(resolve) {
-                        setTimeout(function() {
-                            resolve(reconcileStreamMembership(context, attempt + 1));
-                        }, attempt * 500);
-                    });
-                }
-
-                updateSyncFeedback('failed', err && err.message ? err.message : 'Synchronization failed');
-                if (typeof window.showToast === 'function') {
-                    window.showToast('Membership synchronization incomplete: ' + (err && err.message ? err.message : 'network error'), 'warning');
-                }
+                assertCurrentRecovery(recovery);
+                if (attempt >= 3) throw err;
+                return new Promise(function(resolve) {
+                    recovery.timer = setTimeout(resolve, attempt * 500);
+                }).then(function() { return readStreamMembership(recovery, attempt + 1); });
             });
         }
+
+        function finishStreamRecovery(recovery, error) {
+            assertCurrentRecovery(recovery);
+            recovery.phase = error ? 'failed' : 'synced';
+            if (error) {
+                updateSyncFeedback('failed', error.message);
+                window.showToast('Membership synchronization incomplete: ' + error.message, 'warning');
+                throw error;
+            }
+            updateSyncFeedback('synced', 'Membership synchronized');
+        }
+
+        /** @param {{session?: string, connectionId?: number, serverUrl?: string}} [context] @returns {Promise<void>} */
+        function reconcileStreamMembership(context) {
+            context = context || {};
+            context.session = context.session || getSessionZid();
+            if (isPendingStreamRecovery(context)) return streamRecovery.promise;
+            invalidateStreamMembership();
+            var recovery = {context: context, phase: 'syncing', promise: null, cancel: null, timer: null};
+            streamRecovery = recovery;
+            var cancellation = new Promise(function(resolve, reject) { recovery.cancel = reject; });
+            // Capture only the earlier core save, never a later save waiting on this recovery.
+            var precedingSave = saveState.promise || Promise.resolve();
+            var operation = precedingSave.then(function() {
+                assertCurrentRecovery(recovery);
+                updateSyncFeedback('syncing', 'Synchronizing membership...');
+                return readStreamMembership(recovery, 1);
+            }).then(function() { finishStreamRecovery(recovery, null); }, function(err) {
+                finishStreamRecovery(recovery, err);
+            });
+            recovery.promise = Promise.race([operation, cancellation]);
+            return recovery.promise;
+        }
         window.reconcileStreamMembership = reconcileStreamMembership;
+
+        function isPendingStreamRecovery(context) {
+            return streamRecovery && streamRecovery.phase === 'syncing' &&
+                streamRecovery.context.session === context.session &&
+                streamRecovery.context.connectionId === context.connectionId;
+        }
+
+        function resumeMountedStream() {
+            var bridge = window.SSEBridge;
+            if (!bridge || bridge.getActiveZid() !== getSessionZid()) return;
+            var indicator = document.getElementById('sse-status-indicator');
+            if (!indicator || indicator.getAttribute('data-status') !== 'connected') return;
+            reconcileStreamMembership({session: bridge.getActiveZid(), connectionId: bridge.getActiveConnectionId(),
+                serverUrl: bridge.getServerUrl()}).catch(function(error) {
+                console.debug('[SSE] Mounted recovery stopped:', error.message);
+            });
+        }
 
         /** @param {Delta[]} snapshot */
         function acknowledgeSelections(snapshot) {
@@ -8965,12 +8982,20 @@
             if (saveState.promise) {
                 return saveState.promise.then(function() { return persistPending(selectionOnly); });
             }
+            if (streamRecovery && streamRecovery.phase === 'cancelled') {
+                return Promise.reject(new Error('Membership recovery belongs to an inactive connection'));
+            }
+            if (streamRecovery && streamRecovery.phase !== 'synced') {
+                return streamRecovery.promise.then(function() { return persistPending(selectionOnly); });
+            }
             var snapshot = JSON.parse(window.getDeltas());
             if (selectionOnly) snapshot = snapshot.filter(function(d) { return d.column === 'DeskSelected'; });
             var retryRead = saveState.phase === 'reconcile_failed';
             if (!snapshot.length && !retryRead) return Promise.resolve();
             if (!getSessionZid()) return Promise.reject(new Error('Session ZID missing'));
             if (!getSessionLang()) return Promise.reject(new Error('Session language missing'));
+            // A command after this save needs a status read started after the write.
+            statusRead = null;
             var button = (document.getElementById('kw-btn-save'));
             setButtonLoading(button, true, 'Saving...', 'Save (Ctrl+S)');
             var context = {session: getSessionZid(), revision: membershipRevision};
@@ -9153,10 +9178,8 @@
             }
 
             var proceedWithStatus = function() {
-                fetch('/session/status?zid=' + encodeURIComponent(sZid), { method: 'GET', headers: headers })
-                    .then(function(res) {
-                        return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
-                    })
+                lastManualStatusAt = Date.now();
+                readSessionStatus(sZid, { method: 'GET', headers: headers })
                     .then(function(resObj) {
                         setButtonLoading(updateBtn, false, "", "Update");
                         var payload = (resObj && resObj.data && resObj.data.data) ? resObj.data.data : ((resObj && resObj.data) ? resObj.data : resObj);
@@ -9182,6 +9205,8 @@
                         setButtonLoading(updateBtn, false, "", "Update");
                         if (window.onSessionReload) window.onSessionReload();
                         else if (window.location && window.location.reload) window.location.reload();
+                    }).finally(function() {
+                        lastManualStatusAt = Date.now();
                     });
             };
 
@@ -10364,6 +10389,7 @@
         if (window.rebindMVPBookmarks) {
             window.rebindMVPBookmarks();
         }
+        resumeMountedStream();
     }
 
     /** @param {WheelEvent} e */
