@@ -457,7 +457,8 @@ def test_native_http_windows_in_different_sessions_remain_isolated(browser, tmp_
 
 def test_native_host_allocates_unique_ids_and_disposes_without_document(running_controller, tmp_path):
     _, server, _ = running_controller
-    native = Path(os.environ['KARDENWORT_NATIVE_REPO'])
+    native = Path(os.environ.get('KARDENWORT_NATIVE_REPO',
+                                 Path(__file__).resolve().parents[2] / '20240411110510-autohotkey'))
     executable = next(Path('C:/AHK').glob('AutoHotkey_*/AutoHotkey64.exe'))
     dispatcher = EventDispatcher.get_instance()
     for consumer in ('host-current', 'host-other'):
