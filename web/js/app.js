@@ -42,9 +42,6 @@
         var checkedBoxes = (document.querySelectorAll('.kw-tag-checkbox:checked'));
         checkedBoxes.forEach(function (cb) {
             var rId = cb.getAttribute('data-row-id');
-            if (rId === null || rId === '') {
-                rId = cb.getAttribute('data-token-order');
-            }
             if (rId !== null && rId !== '') {
                 var num = parseInt(String(rId), 10);
                 if (!isNaN(num) && !seen[num]) {
@@ -57,9 +54,6 @@
         var selectedRows = (document.querySelectorAll('#lemma-table tbody tr.kw-row-selected, #lemma-table tbody tr.selected, #lemma-table tbody tr[data-selected="1"]'));
         selectedRows.forEach(function (row) {
             var rId = row.getAttribute('data-row-id');
-            if (rId === null || rId === '') {
-                rId = row.getAttribute('data-token-order');
-            }
             if (rId !== null && rId !== '') {
                 var num = parseInt(String(rId), 10);
                 if (!isNaN(num) && !seen[num]) {
@@ -115,12 +109,17 @@
 
     window.kwToggleTag = function (checkboxEl, rowId) {
         var newStatus = checkboxEl.checked;
+        var rowEl = checkboxEl.closest ? checkboxEl.closest('tr') : (checkboxEl.parentElement ? checkboxEl.parentElement.parentElement : null);
+        var resolvedRowId = (rowEl && rowEl.getAttribute('data-row-id') !== null)
+            ? rowEl.getAttribute('data-row-id')
+            : (checkboxEl.getAttribute && checkboxEl.getAttribute('data-row-id') !== null
+                ? checkboxEl.getAttribute('data-row-id')
+                : rowId);
         if (window.toggleRowSelection && window.notifyAHKSelection) {
-            window.toggleRowSelection(rowId, newStatus);
+            window.toggleRowSelection(resolvedRowId, newStatus);
             window.notifyAHKSelection();
             return;
         }
-        var rowEl = checkboxEl.closest ? checkboxEl.closest('tr') : (checkboxEl.parentElement && checkboxEl.parentElement.parentElement);
         if (rowEl) {
             if (newStatus) {
                 rowEl.classList.add('kw-row-selected');
@@ -130,11 +129,29 @@
         }
         setStatusMessage('Saving...', false);
 
+        var tokenOrderVal = (rowEl && rowEl.getAttribute('data-token-order') !== null)
+            ? rowEl.getAttribute('data-token-order')
+            : (checkboxEl.getAttribute && checkboxEl.getAttribute('data-token-order') !== null
+                ? checkboxEl.getAttribute('data-token-order')
+                : null);
+        var sentenceIdxVal = (rowEl && rowEl.getAttribute('data-sentence-idx') !== null)
+            ? rowEl.getAttribute('data-sentence-idx')
+            : (checkboxEl.getAttribute && checkboxEl.getAttribute('data-sentence-idx') !== null
+                ? checkboxEl.getAttribute('data-sentence-idx')
+                : null);
+
+        if (tokenOrderVal === null || tokenOrderVal === '' || sentenceIdxVal === null || sentenceIdxVal === '') {
+            console.error('[Kardenwort] Missing authoritative sentence or token coordinates on row', resolvedRowId);
+            setStatusMessage('Error: Missing row coordinates', true);
+            return;
+        }
+
         var payload = {
             session_zid: getSessionZid() || SESSION_ZID,
             language: getSessionLang() || LANGUAGE,
-            row_id: rowId,
-            token_order: rowId,
+            row_id: resolvedRowId,
+            token_order: tokenOrderVal,
+            sentence_idx: sentenceIdxVal,
             status: newStatus,
             fingerprint: FINGERPRINT
         };
@@ -6705,11 +6722,13 @@
 
             if (keyCode === 116 || e.key === 'F5') { // F5 -> update
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-                var updateBtn = (document.getElementById('kw-btn-update'));
-                if (updateBtn && !updateBtn.disabled) {
-                    updateBtn.click();
-                } else if (typeof window.onUpdateClick === 'function') {
+                if (typeof window.onUpdateClick === 'function') {
                     window.onUpdateClick();
+                } else {
+                    var updateBtn = (document.getElementById('kw-btn-update'));
+                    if (updateBtn && !updateBtn.disabled) {
+                        updateBtn.click();
+                    }
                 }
                 return false;
             }
@@ -6918,15 +6937,31 @@
             if (window.forceRepaint) window.forceRepaint();
         };
 
-        /** @param {number|string} rowId @param {boolean=} forceState */
-        function toggleRowSelection(rowId, forceState) {
+        /** @param {number|string} rowId @param {boolean=} forceState @param {boolean=} skipHistory */
+        function toggleRowSelection(rowId, forceState, skipHistory) {
             var rIdStr = String(rowId);
             var lem = getLemmaByRowId(rowId);
+            var wasSelected = selectedRowIdsMap.hasOwnProperty(rIdStr);
             var willSelect;
             if (forceState !== undefined) {
                 willSelect = Boolean(forceState);
             } else {
-                willSelect = !selectedRowIdsMap.hasOwnProperty(rIdStr);
+                willSelect = !wasSelected;
+            }
+            if (!skipHistory && willSelect !== wasSelected && typeof pushHistory === 'function') {
+                var rEl = (typeof findTableRowById === 'function') ? findTableRowById(rowId) : document.querySelector('#lemma-table tr[data-row-id="' + rowId + '"]');
+                var toAttr = rEl ? rEl.getAttribute('data-token-order') : null;
+                var siAttr = rEl ? rEl.getAttribute('data-sentence-idx') : null;
+                var tOrdVal = (toAttr !== null && toAttr !== '') ? parseInt(String(toAttr), 10) : parseInt(String(rowId), 10);
+                var sentIdxVal = (siAttr !== null && siAttr !== '') ? parseInt(String(siAttr), 10) : 1;
+                pushHistory({
+                    type: 'select',
+                    rowId: parseInt(String(rowId), 10),
+                    tokenOrder: tOrdVal,
+                    sentenceIdx: sentIdxVal,
+                    oldValue: wasSelected,
+                    newValue: willSelect
+                });
             }
             if (lem) {
                 setLemmaSelected(lem, willSelect);
@@ -7053,6 +7088,10 @@
                 var isAnyDragging = isDragSelecting || isTokenDragSelecting;
                 if (!isAnyDragging) {
                     row.setAttribute('data-filter-hidden', String(isSel ? '0' : '1'));
+                }
+                var cb = row.querySelector('input.kw-tag-checkbox') || row.querySelector('input[type="checkbox"]');
+                if (cb && cb.checked !== isSel) {
+                    cb.checked = isSel;
                 }
             }
             if (typeof updateToolbarState === 'function') {
@@ -7758,9 +7797,19 @@
             if (!trParent || !colName) throw new Error('Editable cell requires a row and column');
             var rowId = trParent.getAttribute('data-row-id');
             var tokenOrder = trParent.getAttribute('data-token-order');
-            var tokenOrderVal = (tokenOrder !== null && tokenOrder !== '') ? parseInt(String(tokenOrder), 10) : parseInt(String(rowId), 10);
             var sentenceIdx = trParent.getAttribute('data-sentence-idx');
-            var sentIdxVal = (sentenceIdx !== null && sentenceIdx !== '') ? parseInt(String(sentenceIdx), 10) : 1;
+
+            if (tokenOrder === null || tokenOrder === '' || isNaN(parseInt(String(tokenOrder), 10)) ||
+                sentenceIdx === null || sentenceIdx === '' || isNaN(parseInt(String(sentenceIdx), 10))) {
+                console.error('[Edit] Rejected edit on row lacking authoritative sentence or token coordinates:', trParent);
+                if (typeof setStatusMessage === 'function') {
+                    setStatusMessage('Cannot edit row: missing sentence or token coordinate', true);
+                }
+                return;
+            }
+
+            var tokenOrderVal = parseInt(String(tokenOrder), 10);
+            var sentIdxVal = parseInt(String(sentenceIdx), 10);
 
             var input = document.createElement('input');
             input.type = 'text';
@@ -8026,6 +8075,8 @@
             recordUserIntent(action, true, false);
             if (action.type === 'edit') {
                 projectEditedValue(action, action.newValue);
+            } else if (action.type === 'select') {
+                toggleRowSelection(action.rowId, action.newValue, true);
             } else if (action.type === 'delete') {
                 for (var j = 0; j < action.rowIds.length; j++) {
                     var rId = action.rowIds[j];
@@ -8046,6 +8097,8 @@
             recordUserIntent(action, false, false);
             if (action.type === 'edit') {
                 projectEditedValue(action, action.oldValue);
+            } else if (action.type === 'select') {
+                toggleRowSelection(action.rowId, action.oldValue, true);
             } else if (action.type === 'delete') {
                 for (var j = 0; j < action.rowIds.length; j++) {
                     var rId = action.rowIds[j];
@@ -8087,6 +8140,9 @@
         function historyValues(action) {
             if (action.type === 'edit') return [{row_id: action.rowId, token_order: action.tokenOrder,
                 sentence_idx: action.sentenceIdx, column: action.column, value: action.newValue, original: action.oldValue, element: action.cell}];
+            if (action.type === 'select') return [{row_id: action.rowId, token_order: action.tokenOrder,
+                sentence_idx: action.sentenceIdx, column: 'DeskSelected', value: action.newValue ? '1' : '', original: action.oldValue ? '1' : '',
+                element: (document.querySelector('#lemma-table tr[data-row-id="' + action.rowId + '"]'))}];
             return action.rowIds.map(function(id, index) {
                 return {row_id: id, token_order: action.tokenOrders[index], sentence_idx: action.sentenceIndices[index],
                     column: '_delete', value: true, original: false,

@@ -4553,7 +4553,22 @@ class SqliteStorageAdapter(StorageAdapter):
                         ef_dict = json.loads(raw_ef)
                     except Exception:
                         ef_dict = {}
-                ef_dict[field] = value
+                if field == "extra_fields":
+                    if isinstance(value, dict):
+                        ef_dict.update(value)
+                    elif isinstance(value, str):
+                        try:
+                            parsed = json.loads(value)
+                            if isinstance(parsed, dict):
+                                ef_dict.update(parsed)
+                            else:
+                                ef_dict[field] = value
+                        except Exception:
+                            ef_dict[field] = value
+                    else:
+                        ef_dict[field] = value
+                else:
+                    ef_dict[field] = value
                 cursor.execute(
                     "UPDATE words SET extra_fields = ? WHERE id = ?;",
                     (json.dumps(ef_dict, ensure_ascii=False), word_id),
@@ -13271,7 +13286,12 @@ INJECTED_JS_TEMPLATE = """
 
     window.kwToggleTag = function(checkboxEl, rowId) {
         var newStatus = checkboxEl.checked;
-        var rowEl = checkboxEl.closest ? checkboxEl.closest('tr') : checkboxEl.parentElement.parentElement;
+        var rowEl = checkboxEl.closest ? checkboxEl.closest('tr') : (checkboxEl.parentElement ? checkboxEl.parentElement.parentElement : null);
+        var resolvedRowId = (rowEl && rowEl.getAttribute('data-row-id') !== null)
+            ? rowEl.getAttribute('data-row-id')
+            : (checkboxEl.getAttribute && checkboxEl.getAttribute('data-row-id') !== null
+                ? checkboxEl.getAttribute('data-row-id')
+                : rowId);
         if (rowEl) {
             if (newStatus) {
                 rowEl.classList.add('kw-row-selected');
@@ -13281,11 +13301,28 @@ INJECTED_JS_TEMPLATE = """
         }
         setStatusMessage('Saving...', false);
 
+        var tokenOrderVal = (rowEl && rowEl.getAttribute('data-token-order') !== null)
+            ? rowEl.getAttribute('data-token-order')
+            : (checkboxEl.getAttribute && checkboxEl.getAttribute('data-token-order') !== null
+                ? checkboxEl.getAttribute('data-token-order')
+                : null);
+        var sentenceIdxVal = (rowEl && rowEl.getAttribute('data-sentence-idx') !== null)
+            ? rowEl.getAttribute('data-sentence-idx')
+            : (checkboxEl.getAttribute && checkboxEl.getAttribute('data-sentence-idx') !== null
+                ? checkboxEl.getAttribute('data-sentence-idx')
+                : null);
+
+        if (tokenOrderVal === null || tokenOrderVal === '' || sentenceIdxVal === null || sentenceIdxVal === '') {
+            setStatusMessage('Error: Missing row coordinates', true);
+            return;
+        }
+
         var payload = {
             session_zid: SESSION_ZID,
             language: LANGUAGE,
-            row_id: rowId,
-            token_order: rowId,
+            row_id: resolvedRowId,
+            token_order: tokenOrderVal,
+            sentence_idx: sentenceIdxVal,
             status: newStatus,
             fingerprint: FINGERPRINT
         };
@@ -13472,7 +13509,43 @@ def render_section(token, ctx):
             field = COLUMN_TOKEN_MAP[t]
             col_indices[t] = headers.index(field) if field in headers else -1
 
-        col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+        col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else (headers.index("token_order") if "token_order" in headers else -1)
+        col_sentence_idx = -1
+        if 'sentence_index' in role_fields and role_fields['sentence_index'] in headers:
+            col_sentence_idx = headers.index(role_fields['sentence_index'])
+        else:
+            for cand in ("SentenceSourceIndex", "SentenceIndex", "sentence_index", "sentence_idx"):
+                if cand in headers:
+                    col_sentence_idx = headers.index(cand)
+                    break
+                cand_lower = cand.lower()
+                matching = [idx for idx, h in enumerate(headers) if h.lower() == cand_lower]
+                if matching:
+                    col_sentence_idx = matching[0]
+                    break
+
+        col_all_row_ids = -1
+        for cand in ("all_row_ids", "data-all-row-ids", "all_ids"):
+            if cand in headers:
+                col_all_row_ids = headers.index(cand)
+                break
+            cand_lower = cand.lower()
+            matching = [idx for idx, h in enumerate(headers) if h.lower() == cand_lower]
+            if matching:
+                col_all_row_ids = matching[0]
+                break
+
+        col_occ = -1
+        for cand in ("occurrence_data", "occ", "data-occ"):
+            if cand in headers:
+                col_occ = headers.index(cand)
+                break
+            cand_lower = cand.lower()
+            matching = [idx for idx, h in enumerate(headers) if h.lower() == cand_lower]
+            if matching:
+                col_occ = matching[0]
+                break
+
         lookup_col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else (headers.index('WordSource') if 'WordSource' in headers else (headers.index('lemma') if 'lemma' in headers else -1))
         lookup_col_prov = headers.index(role_fields['provenance']) if 'provenance' in role_fields and role_fields['provenance'] in headers else (headers.index('Provenance') if 'Provenance' in headers else (headers.index('provenance') if 'provenance' in headers else -1))
         use_scroll = ctx.get('scrollable_cells', False)
@@ -13480,11 +13553,26 @@ def render_section(token, ctx):
             sel_val = row[selected_col_idx] if selected_col_idx != -1 and len(row) > selected_col_idx else ""
             is_checked_bool = str(sel_val).strip() in ("1", "true", "True")
             row_cls = ' class="kw-row-selected"' if is_checked_bool else ''
-            token_order_val = row[col_token_order] if col_token_order != -1 and len(row) > col_token_order and row[col_token_order].strip() else str(row_id)
-            html_output += f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}"{row_cls}>'
+            if col_token_order != -1 and len(row) > col_token_order and row[col_token_order] is not None and str(row[col_token_order]).strip() != "":
+                token_order_val = str(row[col_token_order]).strip()
+            else:
+                token_order_val = str(row_id)
+
+            if col_sentence_idx != -1 and len(row) > col_sentence_idx and row[col_sentence_idx] is not None and str(row[col_sentence_idx]).strip() != "":
+                sent_idx_val = str(row[col_sentence_idx]).strip()
+            else:
+                sent_idx_val = "1"
+
+            all_ids_val = str(row[col_all_row_ids]).strip() if col_all_row_ids != -1 and len(row) > col_all_row_ids and row[col_all_row_ids] is not None else ""
+            all_ids_attr = f' data-all-row-ids="{html.escape(all_ids_val)}"' if all_ids_val else ""
+
+            occ_val = str(row[col_occ]).strip() if col_occ != -1 and len(row) > col_occ and row[col_occ] is not None else ""
+            occ_attr = f' data-occ="{html.escape(occ_val)}"' if occ_val else ""
+
+            html_output += f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}"{all_ids_attr}{occ_attr}{row_cls}>'
             if server_enabled:
                 is_checked = "checked" if is_checked_bool else ""
-                html_output += f'<td class="kw-tag-control"><input type="checkbox" class="kw-tag-checkbox" data-row-id="{row_id}" data-token-order="{token_order_val}" {is_checked} onchange="kwToggleTag(this, {token_order_val})"></td>'
+                html_output += f'<td class="kw-tag-control"><input type="checkbox" class="kw-tag-checkbox" data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}"{all_ids_attr}{occ_attr} {is_checked} onchange="kwToggleTag(this, {row_id})"></td>'
             for t in valid_tokens:
                 idx = col_indices[t]
                 val = row[idx] if idx != -1 and len(row) > idx else ""
@@ -17436,12 +17524,37 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                     raise StructuredError(ErrorCode.DESK_FAILED, f"Column '{col_name}' is not inline-editable.")
 
                 if col_name in (selected_col_name, "DeskSelected", "selected"):
-                    storage_adapter.update_word_selection(session_zid, sentence_idx=sentence_idx, token_order=token_order, selected=val, zid=zid)
+                    t_order = token_order if token_order is not None else row_id
+                    storage_adapter.update_word_selection(session_zid, sentence_idx=sentence_idx, token_order=t_order, selected=val, zid=zid)
                 else:
+                    if sentence_idx is None or str(sentence_idx).strip() == "":
+                        raise StructuredError(ErrorCode.INVALID_STATE, f"Word-field edit for column '{col_name}' requires valid 'sentence_idx'")
+                    try:
+                        int_sentence_idx = int(str(sentence_idx).strip())
+                    except (ValueError, TypeError):
+                        raise StructuredError(ErrorCode.INVALID_STATE, f"Invalid sentence_idx: {sentence_idx}")
+
+                    if token_order is None or str(token_order).strip() == "":
+                        raise StructuredError(ErrorCode.INVALID_STATE, f"Word-field edit for column '{col_name}' requires valid 'token_order'")
+                    try:
+                        int_token_order = int(str(token_order).strip())
+                    except (ValueError, TypeError):
+                        raise StructuredError(ErrorCode.INVALID_STATE, f"Invalid token_order: {token_order}")
+
+                    with storage_adapter.db.get_connection(zid=zid) as conn:
+                        matches = conn.execute(
+                            "SELECT id FROM words WHERE session_zid = ? AND sentence_index = ? AND token_order = ?",
+                            (session_zid, int_sentence_idx, int_token_order)
+                        ).fetchall()
+                        if len(matches) == 0:
+                            raise StructuredError(ErrorCode.NOT_FOUND, f"Occurrence not found for session {session_zid}, sentence {int_sentence_idx}, token {int_token_order}")
+                        elif len(matches) > 1:
+                            raise StructuredError(ErrorCode.INVALID_STATE, f"Ambiguous occurrences ({len(matches)}) for session {session_zid}, sentence {int_sentence_idx}, token {int_token_order}")
+
                     if col_name.strip().lower() in ("gender", "wordsourcegender"):
                         g_clean = str(val).strip().lower() if val is not None else ""
                         val = g_clean if g_clean in ("m", "f", "n") else None
-                    storage_adapter.update_word(session_zid, sentence_idx=sentence_idx, token_order=token_order, field=col_name, value=val, zid=zid)
+                    storage_adapter.update_word(session_zid, sentence_idx=int_sentence_idx, token_order=int_token_order, field=col_name, value=val, zid=zid)
 
             updated_restored = storage_adapter.restore_session(session_zid)
             new_fingerprint = compute_content_fingerprint(updated_restored.get("data_rows", []))
@@ -17522,9 +17635,18 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
         if selected_col_name not in editable_cols:
             editable_cols.append(selected_col_name)
 
+        sent_header_idx = -1
+        for cand in ("SentenceSourceIndex", "SentenceIndex", "sentence_index", "sentence_idx"):
+            if cand in headers:
+                sent_header_idx = headers.index(cand)
+                break
+        to_header_idx = headers.index("TokenOrder") if "TokenOrder" in headers else (headers.index("token_order") if "token_order" in headers else -1)
+
         deleted_rows = []
         for delta in deltas:
             row_id = delta.get("row_id")
+            token_order = delta.get("token_order")
+            sentence_idx = delta.get("sentence_idx")
             col_name = delta.get("column")
             val = delta.get("value")
 
@@ -17547,11 +17669,29 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                 raise StructuredError(ErrorCode.DESK_FAILED, f"Column '{col_name}' not found in TSV headers.")
 
             col_idx = headers.index(col_name)
-            if 0 <= row_id < len(data_rows):
-                if data_rows[row_id] is not None:
-                    data_rows[row_id][col_idx] = val
-            else:
-                raise StructuredError(ErrorCode.DESK_FAILED, f"Row index {row_id} is out of bounds (total rows: {len(data_rows)})")
+
+            target_row_idx = None
+            if sent_header_idx != -1 and to_header_idx != -1 and sentence_idx is not None and token_order is not None:
+                s_str = str(sentence_idx).strip()
+                t_str = str(token_order).strip()
+                matching_indices = [
+                    idx_r for idx_r, r in enumerate(data_rows)
+                    if r is not None and len(r) > max(sent_header_idx, to_header_idx)
+                    and str(r[sent_header_idx]).strip() == s_str and str(r[to_header_idx]).strip() == t_str
+                ]
+                if len(matching_indices) == 1:
+                    target_row_idx = matching_indices[0]
+                elif len(matching_indices) > 1:
+                    raise StructuredError(ErrorCode.INVALID_STATE, f"Ambiguous occurrences ({len(matching_indices)}) in TSV for sentence {s_str}, token {t_str}")
+
+            if target_row_idx is None:
+                if 0 <= row_id < len(data_rows):
+                    target_row_idx = row_id
+                else:
+                    raise StructuredError(ErrorCode.DESK_FAILED, f"Row index {row_id} is out of bounds (total rows: {len(data_rows)})")
+
+            if data_rows[target_row_idx] is not None:
+                data_rows[target_row_idx][col_idx] = val
 
         data_rows = [r for r in data_rows if r is not None]
         save_tsv_rows_safely(tsv_path, comments, headers, data_rows)

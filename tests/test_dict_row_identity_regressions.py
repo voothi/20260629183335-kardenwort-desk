@@ -75,15 +75,15 @@ def test_1_2_checkbox_row_id_differs_from_token_order(page):
     the clicked checkbox must resolve the clicked row ID, select the row,
     and generate a persistence delta containing token order 9 and its sentence.
     """
-    # Display row 0: token_order 5, lemma "Baum"
-    # Display row 1: token_order 9, lemma "Haus"
+    # Display row 0: token_order 5, lemma "Haus"
+    # Display row 1: token_order 9, lemma "Baum"
     headers = [
         "Quotation", "WordSource", "WordDestination",
         "SentenceSourceIndex", "TokenOrder", "DeskSelected"
     ]
     data_rows = [
-        ["Baum", "Baum", "tree", "1", "5", "0"],
-        ["Haus", "Haus", "house", "1", "9", "0"],
+        ["Haus", "Haus", "house", "1", "5", "0"],
+        ["Baum", "Baum", "tree", "1", "9", "0"],
     ]
     make_lookup_page(page, data_rows, headers=headers)
 
