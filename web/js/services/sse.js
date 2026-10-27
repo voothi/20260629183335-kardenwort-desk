@@ -80,6 +80,12 @@
         if (!sessionZid || typeof window.EventSource === 'undefined') return;
 
         var w = (window);
+        var bootstrapSession = (w.__BOOTSTRAP__ && (w.__BOOTSTRAP__.session_data || w.__BOOTSTRAP__)) || null;
+        if (bootstrapSession && bootstrapSession.server_enabled === false) return;
+        if (!serverUrl && bootstrapSession && bootstrapSession.server_url) {
+            serverUrl = bootstrapSession.server_url;
+        }
+
         // Guard against file:/// filesystem URI errors
         if (window.location.protocol === 'file:' && !serverUrl) return;
 
@@ -96,7 +102,15 @@
         }
 
         try {
-            var base = (serverUrl || window.location.origin || '').replace(/\/+$/, '');
+            var base = (serverUrl || '').replace(/\/+$/, '');
+            if (!base && (!bootstrapSession || bootstrapSession.server_enabled !== false)) {
+                if (window.location && (window.location.protocol === 'http:' || window.location.protocol === 'https:')) {
+                    base = (window.location.origin || '').replace(/\/+$/, '');
+                }
+            }
+            if (!base && window.location && window.location.protocol !== 'http:' && window.location.protocol !== 'https:') {
+                return;
+            }
             var sseUrl = (base ? base : '') + '/api/v1/events?session=' + encodeURIComponent(sessionZid);
             var es = new EventSource(sseUrl);
 

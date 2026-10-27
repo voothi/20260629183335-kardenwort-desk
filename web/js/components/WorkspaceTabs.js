@@ -538,8 +538,13 @@
             var pendingCount = (typeof w.countPendingSkeletons === 'function') ? w.countPendingSkeletons() : 0;
             if (isWebMode && curZid && cards && cards.length > 1 && pendingCount === 0) {
                 if (typeof fetch !== 'undefined') {
-                    var probeUrl = "/session/status?zid=" + encodeURIComponent(curZid);
-                    fetch(probeUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
+                    var probeUrl = (typeof window.resolveBackendUrl === 'function')
+                        ? window.resolveBackendUrl("/session/status?zid=" + encodeURIComponent(curZid))
+                        : ("/session/status?zid=" + encodeURIComponent(curZid));
+                    var probeHeaders = { 'Accept': 'application/json' };
+                    var probeToken = (typeof window.getApiToken === 'function') ? window.getApiToken() : '';
+                    if (probeToken) probeHeaders['X-API-Token'] = probeToken;
+                    fetch(probeUrl, { method: 'GET', headers: probeHeaders })
                         .then(function(res) { if (res.ok) return res.json(); throw new Error("probe failed"); })
                         .then(function(resObj) {
                             var sData = (resObj && resObj.data) ? resObj.data : resObj;

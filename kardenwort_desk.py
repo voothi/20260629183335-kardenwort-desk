@@ -13252,178 +13252,7 @@ def normalize_blank_lines(text):
         normalized.pop()
     return "\n".join(normalized)
 
-INJECTED_JS_TEMPLATE = """
-<script>
-(function() {
-    var SERVER_URL = "__SERVER_URL__";
-    var SESSION_ZID = "__SESSION_ZID__";
-    var API_TOKEN = "__API_TOKEN__";
-    var LANGUAGE = "__LANGUAGE__";
-    var FINGERPRINT = "__FINGERPRINT__";
-    var IS_OFFLINE = false;
 
-    function getSelectedRowIds() {
-        var checkboxes = document.querySelectorAll('.kw-tag-checkbox');
-        var selected = [];
-        checkboxes.forEach(function(cb) {
-            if (cb.checked) {
-                var tOrd = cb.getAttribute('data-token-order');
-                var rId = cb.getAttribute('data-row-id');
-                selected.push(parseInt((tOrd !== null && tOrd !== '') ? tOrd : rId, 10));
-            }
-        });
-        return selected;
-    }
-
-    function setStatusMessage(msg, isError) {
-        var statusEl = document.getElementById('kw-interactive-status');
-        if (statusEl) {
-            statusEl.textContent = msg;
-            statusEl.style.color = isError ? '#f85149' : '#3fb950';
-            statusEl.style.display = msg ? 'inline-block' : 'none';
-        }
-    }
-
-    window.kwToggleTag = function(checkboxEl, rowId) {
-        var newStatus = checkboxEl.checked;
-        var rowEl = checkboxEl.closest ? checkboxEl.closest('tr') : (checkboxEl.parentElement ? checkboxEl.parentElement.parentElement : null);
-        var resolvedRowId = (rowEl && rowEl.getAttribute('data-row-id') !== null)
-            ? rowEl.getAttribute('data-row-id')
-            : (checkboxEl.getAttribute && checkboxEl.getAttribute('data-row-id') !== null
-                ? checkboxEl.getAttribute('data-row-id')
-                : rowId);
-        if (rowEl) {
-            if (newStatus) {
-                rowEl.classList.add('kw-row-selected');
-            } else {
-                rowEl.classList.remove('kw-row-selected');
-            }
-        }
-        setStatusMessage('Saving...', false);
-
-        var tokenOrderVal = (rowEl && rowEl.getAttribute('data-token-order') !== null)
-            ? rowEl.getAttribute('data-token-order')
-            : (checkboxEl.getAttribute && checkboxEl.getAttribute('data-token-order') !== null
-                ? checkboxEl.getAttribute('data-token-order')
-                : null);
-        var sentenceIdxVal = (rowEl && rowEl.getAttribute('data-sentence-idx') !== null)
-            ? rowEl.getAttribute('data-sentence-idx')
-            : (checkboxEl.getAttribute && checkboxEl.getAttribute('data-sentence-idx') !== null
-                ? checkboxEl.getAttribute('data-sentence-idx')
-                : null);
-
-        if (tokenOrderVal === null || tokenOrderVal === '' || sentenceIdxVal === null || sentenceIdxVal === '') {
-            setStatusMessage('Error: Missing row coordinates', true);
-            return;
-        }
-
-        var payload = {
-            session_zid: SESSION_ZID,
-            language: LANGUAGE,
-            row_id: resolvedRowId,
-            token_order: tokenOrderVal,
-            sentence_idx: sentenceIdxVal,
-            status: newStatus,
-            fingerprint: FINGERPRINT
-        };
-
-        fetch(SERVER_URL + '/api/v1/tag', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-API-Token': API_TOKEN
-            },
-            body: JSON.stringify(payload)
-        })
-        .then(function(res) {
-            if (res.status === 409) {
-                return res.json().then(function(data) {
-                    if (data.error_code === 'ROW_STALE') {
-                        setStatusMessage('Rows changed, reloading...', true);
-                        setTimeout(function() { window.location.reload(); }, 1200);
-                    } else if (data.error_code === 'ROW_BUSY') {
-                        setStatusMessage('Updating, retrying...', false);
-                        setTimeout(function() { kwToggleTag(checkboxEl, rowId); }, 1000);
-                    } else {
-                        setStatusMessage('Conflict: ' + (data.message || 'Stale data'), true);
-                        checkboxEl.checked = !newStatus;
-                        if (rowEl) {
-                            if (!newStatus) rowEl.classList.add('kw-row-selected');
-                            else rowEl.classList.remove('kw-row-selected');
-                        }
-                    }
-                });
-            }
-            if (!res.ok) {
-                return res.json().then(function(data) {
-                    setStatusMessage(data.message || 'Error updating tag', true);
-                    checkboxEl.checked = !newStatus;
-                    if (rowEl) {
-                        if (!newStatus) rowEl.classList.add('kw-row-selected');
-                        else rowEl.classList.remove('kw-row-selected');
-                    }
-                });
-            }
-            return res.json().then(function(data) {
-                if (data.data && data.data.fingerprint) {
-                    FINGERPRINT = data.data.fingerprint;
-                }
-                setStatusMessage('Saved', false);
-                setTimeout(function() { setStatusMessage('', false); }, 1500);
-            });
-        })
-        .catch(function(err) {
-            IS_OFFLINE = true;
-            setStatusMessage('Offline (tag failed)', true);
-            checkboxEl.checked = !newStatus;
-            if (rowEl) {
-                if (!newStatus) rowEl.classList.add('kw-row-selected');
-                else rowEl.classList.remove('kw-row-selected');
-            }
-        });
-    };
-
-    window.kwExportSelected = function() {
-        var selectedIds = getSelectedRowIds();
-        var btn = document.getElementById('kw-export-btn');
-        if (btn) btn.disabled = true;
-        setStatusMessage('Exporting...', false);
-
-        var payload = {
-            session_zid: SESSION_ZID,
-            language: LANGUAGE,
-            selected_row_ids: selectedIds,
-            fingerprint: FINGERPRINT
-        };
-
-        fetch(SERVER_URL + '/api/v1/export', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-API-Token': API_TOKEN
-            },
-            body: JSON.stringify(payload)
-        })
-        .then(function(res) {
-            if (btn) btn.disabled = false;
-            if (!res.ok) {
-                return res.json().then(function(data) {
-                    setStatusMessage('Export failed: ' + (data.message || res.statusText), true);
-                });
-            }
-            return res.json().then(function(data) {
-                setStatusMessage('Export started!', false);
-                setTimeout(function() { setStatusMessage('', false); }, 2500);
-            });
-        })
-        .catch(function(err) {
-            if (btn) btn.disabled = false;
-            setStatusMessage('Offline (export failed)', true);
-        });
-    };
-})();
-</script>
-"""
 
 
 def render_section(token, ctx):
@@ -13810,10 +13639,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
     if '<!-- KARDENWORT_BOOTSTRAP -->' in base_html:
-        base_html = base_html.replace(
-            '<!-- KARDENWORT_BOOTSTRAP -->',
-            f'<script id="kardenwort-bootstrap" type="application/json">\n{bootstrap_json}\n</script>'
-        )
+        base_html = base_html.replace('<!-- KARDENWORT_BOOTSTRAP -->', '')
 
     # Legacy & contract data islands for backward compatibility
     ui_cfg_val = bootstrap_payload.get("ui_config", {})
@@ -14147,8 +13973,10 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
 
     data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
 
-    effective_server_enabled = server_enabled or goldendict.get('server_enabled', False)
-    effective_api_token = api_token or goldendict.get('server_api_key', '')
+    effective_server_enabled = server_enabled or (isinstance(goldendict, dict) and goldendict.get('server_enabled', False))
+    effective_api_token = api_token or (isinstance(goldendict, dict) and goldendict.get('server_api_key', ''))
+    if not effective_server_enabled:
+        effective_api_token = ""
 
     ctx = {
         'text': text,
@@ -14179,6 +14007,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     session_payload = {
         "zid": str(zid or session_zid or ""),
         "session_zid": str(session_zid or zid or ""),
+        "is_lookup": True,
         "language": str(language or ""),
         "target_lang": str(target_lang or ""),
         "source_text": str(text or ""),
@@ -14215,6 +14044,8 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
 
     # Inject bootstrap payload into #kardenwort-bootstrap
     lookup_ui_config = dict(goldendict) if isinstance(goldendict, dict) else {}
+    if not effective_server_enabled:
+        lookup_ui_config.pop("server_api_key", None)
     lookup_ui_config["grammar"] = get_grammar_payload()
     lookup_ui_config["has_highlight_col"] = bool(
         headers and any(str(h).lower() in ('deskselected', 'selected', 'highlight') for h in headers)
@@ -14224,6 +14055,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         "session_data": session_payload,
         "sentence_cards": [],
         "delivery_mode": "container",
+        "is_lookup": True,
         "zid": session_payload["zid"],
         "session_zid": session_payload["session_zid"],
         "language": session_payload["language"],
@@ -14245,10 +14077,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         flags=re.DOTALL
     )
     if '<!-- KARDENWORT_BOOTSTRAP -->' in base_html:
-        base_html = base_html.replace(
-            '<!-- KARDENWORT_BOOTSTRAP -->',
-            f'<script id="kardenwort-bootstrap" type="application/json">\n{lookup_bootstrap_json}\n</script>'
-        )
+        base_html = base_html.replace('<!-- KARDENWORT_BOOTSTRAP -->', '')
 
     s_zid = str(session_zid or zid or "")
     base_html = re.sub(
@@ -14400,7 +14229,10 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             base_html = base_html.replace('</head>', f'<style id="modular-css">\n{combined_css}\n</style>\n</head>')
         base_html = base_html.replace('</head>', theme_style(resolve_theme_colors(config, theme), theme) + '</head>')
 
-    # Inlined modular component scripts for offline/GoldenDict execution
+    # Strip external /favicon.ico to prevent 404s in standalone/GoldenDict mode
+    base_html = re.sub(r'<link\b[^>]*\bhref=["\'][^"\']*favicon\.ico["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
+
+    # Inlined modular component scripts and application runtime for standalone execution
     for script_rel in (
         "types.js",
         "state/store.js",
@@ -14409,23 +14241,23 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         "components/LemmaTable.js",
         "components/WorkspaceTabs.js",
         "services/sse.js",
+        "app.js",
     ):
         p_script = web_dir / "js" / script_rel
         s_code = read_required_asset(p_script)
         tag_to_replace = f'<script src="/js/{script_rel}"></script>'
         if tag_to_replace in base_html:
             base_html = base_html.replace(tag_to_replace, f'<script>\n{s_code}\n</script>')
+        elif script_rel == "app.js":
+            base_html = base_html.replace('</body>', f'<script>\n{s_code}\n</script>\n</body>')
 
-    if effective_server_enabled and session_zid:
-        p_js = web_dir / "js" / "app.js"
-        app_js = read_required_asset(p_js)
-        if '<script src="/js/app.js"></script>' in base_html:
-            base_html = base_html.replace(
-                '<script src="/js/app.js"></script>',
-                f'<script>\n{app_js}\n</script>'
+    if not effective_server_enabled:
+        for btn_id in ('kw-btn-save', 'kw-btn-update', 'kw-btn-retext', 'kw-btn-reword', 'kw-btn-export'):
+            base_html = re.sub(
+                rf'(<button\b[^>]*id="{btn_id}"[^>]*)>',
+                lambda m: (m.group(1) if 'disabled' in m.group(1) else m.group(1) + ' disabled') + ' title="Server interaction is disabled in this mode">',
+                base_html
             )
-        else:
-            base_html = base_html.replace('</body>', f'<script>\n{app_js}\n</script>\n</body>')
 
     return base_html
 

@@ -19,7 +19,7 @@
             .replace(/'/g, '&#39;');
     };
 
-    var SERVER_URL = window.location.origin || '';
+    var SERVER_URL = '';
     var SESSION_ZID = '';
     var API_TOKEN = '';
     var LANGUAGE = '';
@@ -27,6 +27,47 @@
     var FINGERPRINT = '';
     var SERVER_ENABLED = false;
     var IS_OFFLINE = false;
+
+    function isLookupMode() {
+        if (window.AppState) {
+            if (window.AppState.is_lookup) return true;
+            if (window.AppState.bootstrap && window.AppState.bootstrap.is_lookup) return true;
+        }
+        var bootEl = typeof document !== 'undefined' && document.getElementById ? document.getElementById('kardenwort-bootstrap') : null;
+        if (bootEl) {
+            try {
+                var b = JSON.parse(bootEl.textContent || '{}');
+                if (b && b.is_lookup) return true;
+            } catch(e) {}
+        }
+        var sessEl = typeof document !== 'undefined' && document.getElementById ? document.getElementById('session-data') : null;
+        if (sessEl) {
+            try {
+                var s = JSON.parse(sessEl.textContent || '{}');
+                if (s && s.is_lookup) return true;
+            } catch(e) {}
+        }
+        return false;
+    }
+    window.isLookupMode = isLookupMode;
+
+    function isServerDisabled() {
+        return isLookupMode() && !SERVER_ENABLED;
+    }
+    window.isServerDisabled = isServerDisabled;
+
+    /** @param {string} path @returns {string} */
+    function resolveBackendUrl(path) {
+        if (!path) return '';
+        if (/^https?:\/\//i.test(path)) return path;
+        var cleanPath = path.charAt(0) === '/' ? path : '/' + path;
+        var base = (SERVER_URL || '').replace(/\/+$/, '');
+        if (base && base !== 'null' && !base.startsWith('about:')) {
+            return base + cleanPath;
+        }
+        return cleanPath;
+    }
+    window.resolveBackendUrl = resolveBackendUrl;
 
     /** @param {string} id @returns {HTMLElement} */
     function requireElement(id) {
@@ -156,7 +197,7 @@
             fingerprint: FINGERPRINT
         };
 
-        fetch(SERVER_URL + '/api/v1/tag', {
+        fetch(resolveBackendUrl('/api/v1/tag'), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -225,7 +266,7 @@
             fingerprint: FINGERPRINT
         };
 
-        fetch(SERVER_URL + '/api/v1/export', {
+        fetch(resolveBackendUrl('/api/v1/export'), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -253,6 +294,7 @@
 
     /** @param {string} sessionZid */
     function initSSE(sessionZid) {
+        if (isServerDisabled()) return;
         if (!window.SSEBridge) throw new Error('Required SSE bridge is unavailable');
         window.SSEBridge.connect(sessionZid, SERVER_URL);
     }
@@ -805,8 +847,13 @@
             TARGET_LANG = session.target_lang || session.target_language || (bootstrapPayload && (bootstrapPayload.target_language || bootstrapPayload.target_lang)) || '';
             FINGERPRINT = session.fingerprint || '';
             SERVER_ENABLED = Boolean(session.server_enabled);
-            if (session.server_url) {
-                SERVER_URL = session.server_url;
+            if (session.is_lookup || (bootstrapPayload && bootstrapPayload.is_lookup)) {
+                if (window.AppState) window.AppState.is_lookup = true;
+            }
+            if (session.server_url && typeof session.server_url === 'string') {
+                SERVER_URL = session.server_url.replace(/\/+$/, '');
+            } else if (bootstrapPayload && bootstrapPayload.server_url && typeof bootstrapPayload.server_url === 'string') {
+                SERVER_URL = bootstrapPayload.server_url.replace(/\/+$/, '');
             }
 
             if (session.sentence_translation || session.translated_text) {
@@ -898,7 +945,7 @@
                         tr.classList.add('selected', 'kw-row-selected');
                     }
 
-                    if (SERVER_ENABLED) {
+                    if (!isServerDisabled()) {
                         var tdTag = document.createElement('td');
                         tdTag.className = 'kw-tag-control';
                         var cb = document.createElement('input');
@@ -959,7 +1006,7 @@
             if (theadTr) {
                 var existingTagTh = (theadTr.querySelector('.kw-tag-header'));
                 var hasCheckboxes = !! (document.querySelector('#lemma-table tbody .kw-tag-control, #lemma-table tbody .kw-tag-checkbox'));
-                var shouldHaveTagHeader = SERVER_ENABLED && hasCheckboxes;
+                var shouldHaveTagHeader = !isServerDisabled() && hasCheckboxes;
                 if (!shouldHaveTagHeader && existingTagTh) {
                     if (existingTagTh.parentNode) existingTagTh.parentNode.removeChild(existingTagTh);
                 } else if (shouldHaveTagHeader && !existingTagTh) {
@@ -988,7 +1035,7 @@
                 window.WorkspaceTabs.init();
             }
 
-            if (SERVER_ENABLED && SESSION_ZID) {
+            if (!isServerDisabled() && SESSION_ZID) {
                 initSSE(SESSION_ZID);
             }
 
@@ -3515,7 +3562,7 @@
                     if (controller) controller.abort();
                     reject(new Error('Session status request timed out'));
                 }, 4000);
-                fetch('/session/status?zid=' + encodeURIComponent(session), options).then(function(response) {
+                fetch(resolveBackendUrl('/session/status?zid=' + encodeURIComponent(session)), options).then(function(response) {
                     return response.json().then(function(data) { return {ok: response.ok, status: response.status, data: data}; });
                 }).then(resolve, reject);
             }).finally(function() {
@@ -3572,6 +3619,7 @@
 
         // Progressive Skeleton Auto-Resolution Hook (SSE + Short-interval Watchdog Polling + 30s Safety Timeout)
         function initWatchdog() {
+            if (isServerDisabled()) return;
             window._kwWatchdogResolved = false;
             if (window._kwSkeletonPollTimer) {
                 clearInterval(window._kwSkeletonPollTimer);
@@ -3698,7 +3746,7 @@
                         window.showToast("Background loading timed out. Restored table editing.", "warning");
                     }
                     if (typeof fetch !== 'undefined' && curZid) {
-                        var recoveryUrl = "/session/status?zid=" + encodeURIComponent(curZid);
+                        var recoveryUrl = resolveBackendUrl("/session/status?zid=" + encodeURIComponent(curZid));
                         fetch(recoveryUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
                             .then(function(res) { if (res.ok) return res.json(); })
                             .then(function(resObj) {
@@ -3732,7 +3780,7 @@
                         return;
                     }
                     if (isWebMode && curZid && typeof fetch !== 'undefined') {
-                        var statusUrl = "/session/status?zid=" + encodeURIComponent(curZid);
+                        var statusUrl = resolveBackendUrl("/session/status?zid=" + encodeURIComponent(curZid));
                         var cController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
                         var cTimeoutId = cController ? setTimeout(function() {
                             try { if (cController) cController.abort(); } catch(e) { console.debug("[AbortController] Abort failed:", e); }
@@ -3920,7 +3968,7 @@
                                 enterHeartbeatFallback();
                                 return;
                             }
-                            var renderCheckUrl = "/?session_zid=" + encodeURIComponent(curZid);
+                            var renderCheckUrl = resolveBackendUrl("/?session_zid=" + encodeURIComponent(curZid));
                             var rcController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
                             var rcTimeoutId = rcController ? setTimeout(function() {
                                 try { if (rcController) rcController.abort(); } catch(e) { console.debug("[AbortController] Abort failed:", e); }
@@ -5363,7 +5411,7 @@
                 } else if (typeof API_TOKEN !== 'undefined' && API_TOKEN && API_TOKEN !== '__API_TOKEN__') {
                     headers['X-API-Token'] = API_TOKEN;
                 }
-                fetch('/api/v1/audio/play', {
+                fetch(resolveBackendUrl('/api/v1/audio/play'), {
                     method: 'POST',
                     headers: headers,
                     body: JSON.stringify({ text: clean, language: lang })
@@ -8378,8 +8426,41 @@
 
         function updateToolbarState() {
             var saveBtn = (document.getElementById('kw-btn-save'));
+            var hasNative = !!(window.ahkCall && (document.documentMode || typeof fetch === 'undefined'));
             if (saveBtn) {
-                saveBtn.disabled = isSavePending() || typeof window.isDirty !== 'function' || !window.isDirty();
+                if (isServerDisabled() && !hasNative) {
+                    saveBtn.disabled = true;
+                    saveBtn.title = 'Server interaction is disabled in configuration';
+                } else {
+                    saveBtn.disabled = isSavePending() || typeof window.isDirty !== 'function' || !window.isDirty();
+                }
+            }
+            if (isServerDisabled()) {
+                var btnRetext = document.getElementById('kw-btn-retext');
+                if (btnRetext) {
+                    btnRetext.disabled = true;
+                    btnRetext.title = 'Server interaction is disabled in configuration';
+                }
+                var btnReword = document.getElementById('kw-btn-reword');
+                if (btnReword) {
+                    btnReword.disabled = true;
+                    btnReword.title = 'Server interaction is disabled in configuration';
+                }
+                var btnAnki = document.getElementById('kw-btn-anki');
+                if (btnAnki) {
+                    btnAnki.disabled = true;
+                    btnAnki.title = 'Server interaction is disabled in configuration';
+                }
+                var btnExport = document.getElementById('kw-btn-export');
+                if (btnExport) {
+                    btnExport.disabled = true;
+                    btnExport.title = 'Server interaction is disabled in configuration';
+                }
+                var btnUpdate = document.getElementById('kw-btn-update') || document.getElementById('btn-update-all');
+                if (btnUpdate) {
+                    btnUpdate.disabled = true;
+                    btnUpdate.title = 'Server interaction is disabled in configuration';
+                }
             }
         }
         window.updateToolbarState = updateToolbarState;
@@ -8604,21 +8685,6 @@
             if (window.AppState && window.AppState.bootstrap && window.AppState.bootstrap.session_data && window.AppState.bootstrap.session_data.api_token) {
                 return window.AppState.bootstrap.session_data.api_token;
             }
-            try {
-                var params = new URLSearchParams(window.location.search);
-                var tok = params.get('token') || params.get('api_token') || "";
-                if (tok) {
-                    try {
-                        sessionStorage.setItem('kw_api_token', tok);
-                        localStorage.setItem('kw_api_token', tok);
-                    } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-                    return tok;
-                }
-                var stored = sessionStorage.getItem('kw_api_token') || localStorage.getItem('kw_api_token');
-                if (stored) return stored;
-            } catch(e) {
-                return "";
-            }
             return "";
         }
         window.getApiToken = getApiToken;
@@ -8670,7 +8736,7 @@
                 }
             }
 
-            fetch('/session/retry', {
+            fetch(resolveBackendUrl('/session/retry'), {
                 method: 'POST',
                 headers: headers,
                 body: JSON.stringify(retryPayload)
@@ -8684,7 +8750,7 @@
                 if (data && data.rows && window.receiveUpdate) {
                     window.receiveUpdate(data);
                 } else if (data && data.status === 'success') {
-                    fetch('/session/status?zid=' + encodeURIComponent(curZid), { method: 'GET', headers: { 'Accept': 'application/json' } })
+                    fetch(resolveBackendUrl('/session/status?zid=' + encodeURIComponent(curZid)), { method: 'GET', headers: { 'Accept': 'application/json' } })
                         .then(function(r) { if (r.ok) return r.json(); })
                         .then(function(d) {
                             var statusData = (d && d.data) ? d.data : d;
@@ -8721,7 +8787,7 @@
                 window.showToast("Retrying unresolved translations...", "info");
             }
 
-            fetch('/session/retry', {
+            fetch(resolveBackendUrl('/session/retry'), {
                 method: 'POST',
                 headers: headers,
                 body: JSON.stringify({
@@ -8845,6 +8911,8 @@
                 request = Promise.resolve().then(function() {
                     return JSON.parse(window.ahkCall('get_shared_selection', body));
                 });
+            } else if (!SERVER_ENABLED) {
+                return Promise.resolve({shared_selection: {selected_row_ids: [], revision: 0}}).then(selectionReadResult);
             } else {
                 var endpoint = (context.serverUrl || SERVER_URL).replace(/\/+$/, '') + '/internal/selection';
                 var headers = {'Content-Type': 'application/json'};
@@ -8990,7 +9058,9 @@
             var token = getApiToken();
             var headers = {'Content-Type': 'application/json'};
             if (token) headers['X-API-Token'] = token;
-            var body = JSON.stringify({session_zid: context.session, language: getSessionLang(), token: token, deltas: snapshot});
+            var bodyObj = {session_zid: context.session, language: getSessionLang(), deltas: snapshot};
+            if (token) bodyObj.token = token;
+            var body = JSON.stringify(bodyObj);
             var request;
             if (window.ahkCall && (document.documentMode || typeof fetch === 'undefined')) {
                 request = Promise.resolve().then(function() {
@@ -8999,9 +9069,10 @@
                     return {ok: data.ok !== false && !data.error, json: function() { return Promise.resolve(data); }};
                 });
             } else {
-                request = fetch('/session/save', {
-                method: 'POST', headers: headers,
-                body: body
+                request = fetch(resolveBackendUrl('/session/save'), {
+                    method: 'POST',
+                    headers: headers,
+                    body: body
                 });
             }
             return request.then(function(res) {
@@ -9054,6 +9125,8 @@
         }
 
         function scheduleSelectionSave() {
+            var hasNative = !!(window.ahkCall && (document.documentMode || typeof fetch === 'undefined'));
+            if (isServerDisabled() && !hasNative) return;
             if (selectionSaveTimer) clearTimeout(selectionSaveTimer);
             selectionSaveTimer = setTimeout(function() {
                 selectionSaveTimer = null;
@@ -9064,12 +9137,21 @@
         }
 
         window.flushPendingSaves = function() {
+            var hasNative = !!(window.ahkCall && (document.documentMode || typeof fetch === 'undefined'));
+            if (isServerDisabled() && !hasNative) {
+                return Promise.resolve();
+            }
             if (window.commitActiveEdit) window.commitActiveEdit();
             return persistPending(false).then(function() {
                 if (window.isDirty()) return window.flushPendingSaves();
             });
         };
         window.onSaveClick = function(quiet) {
+            var hasNative = !!(window.ahkCall && (document.documentMode || typeof fetch === 'undefined'));
+            if (isServerDisabled() && !hasNative) {
+                window.showToast('Action unavailable: server interaction is disabled', 'warning');
+                return Promise.resolve(false);
+            }
             if (window.commitActiveEdit) window.commitActiveEdit();
             return persistPending(false).then(function() {
                 if (!quiet) window.showToast('Edits saved successfully', 'success');
@@ -9095,6 +9177,7 @@
         };
 
         function performSilentAutoSaveOnClose() {
+            if (isServerDisabled()) return;
             var uiCfg = window.__CONFIG__ || {};
             if (!uiCfg.auto_save_on_close) return;
             if (typeof window.commitActiveEdit === 'function') {
@@ -9121,11 +9204,10 @@
                 deltas: deltasJson,
                 language: (typeof getSessionLang === 'function') ? getSessionLang() : ''
             };
-            if (tok) bodyPayload.token = tok;
             var bodyStr = JSON.stringify(bodyPayload);
 
             try {
-                fetch('/session/save', {
+                fetch(resolveBackendUrl('/session/save'), {
                     method: 'POST',
                     headers: headers,
                     body: bodyStr,
@@ -9135,7 +9217,7 @@
                 if (navigator && navigator.sendBeacon) {
                     try {
                         var blob = new Blob([bodyStr], { type: 'application/json' });
-                        navigator.sendBeacon('/session/save', blob);
+                        navigator.sendBeacon(resolveBackendUrl('/session/save'), blob);
                     } catch(e2) { console.debug("[Diagnostic] Handled exception:", e2); }
                 }
             }
@@ -9151,6 +9233,10 @@
         }
 
         window.onUpdateClick = function(forceReload) {
+            if (isServerDisabled()) {
+                window.showToast("Action unavailable: server interaction is disabled", "warning");
+                return;
+            }
             if (window.commitActiveEdit) window.commitActiveEdit();
             var sZid = getSessionZid();
             var isForce = (forceReload === true);
@@ -9200,8 +9286,7 @@
 
             if (needsRetext) {
                 var retextBody = { session_zid: sZid, language: getSessionLang() };
-                if (tok) retextBody.token = tok;
-                fetch('/session/retext', {
+                fetch(resolveBackendUrl('/session/retext'), {
                     method: 'POST',
                     headers: postHeaders,
                     body: JSON.stringify(retextBody)
@@ -9209,8 +9294,7 @@
             }
             if (untranslatedRowIds.length > 0) {
                 var rewordBody = { session_zid: sZid, row_ids: untranslatedRowIds, language: getSessionLang() };
-                if (tok) rewordBody.token = tok;
-                fetch('/session/reword', {
+                fetch(resolveBackendUrl('/session/reword'), {
                     method: 'POST',
                     headers: postHeaders,
                     body: JSON.stringify(rewordBody)
@@ -9255,6 +9339,10 @@
         };
 
         window.onRetextClick = function() {
+            if (isServerDisabled()) {
+                window.showToast("Action unavailable: server interaction is disabled", "warning");
+                return;
+            }
             if (window.commitActiveEdit) window.commitActiveEdit();
             if (typeof fetch === 'undefined') {
                 window.showToast("Retext unavailable in this environment.", "warning");
@@ -9283,7 +9371,7 @@
             };
             if (tok) bodyPayload.token = tok;
 
-            fetch('/session/retext', {
+            fetch(resolveBackendUrl('/session/retext'), {
                 method: 'POST',
                 headers: headers,
                 body: JSON.stringify(bodyPayload)
@@ -9390,6 +9478,10 @@
         };
 
         window.onRewordClick = function() {
+            if (isServerDisabled()) {
+                window.showToast("Action unavailable: server interaction is disabled", "warning");
+                return;
+            }
             if (window.commitActiveEdit) window.commitActiveEdit();
             var rows = [];
             var tokenOrders = [];
@@ -9530,7 +9622,7 @@
             }
             if (tok) bodyPayload.token = tok;
 
-            fetch('/session/reword', {
+            fetch(resolveBackendUrl('/session/reword'), {
                 method: 'POST',
                 headers: headers,
                 body: JSON.stringify(bodyPayload)
@@ -9560,6 +9652,10 @@
         window.onSelectedClick = window.onRewordClick;
 
         window.onSendToAnkiClick = function() {
+            if (isServerDisabled()) {
+                window.showToast("Action unavailable: server interaction is disabled", "warning");
+                return;
+            }
             if (window.commitActiveEdit) window.commitActiveEdit();
             var rows = [];
             var tokenOrders = [];
@@ -9705,7 +9801,7 @@
             };
             if (tok) bodyPayload.token = tok;
 
-            fetch('/session/export', {
+            fetch(resolveBackendUrl('/session/export'), {
                 method: 'POST',
                 headers: headers,
                 body: JSON.stringify(bodyPayload)
@@ -9873,17 +9969,17 @@
 
         /** @param {ChildSession[]} children */
         function spawnChildTabs(children) {
+            if (!SERVER_ENABLED) return;
             if (getDeliveryMode() === 'container') {
                 return;
             }
             var childSessions = extractChildSessions(children);
             if (!childSessions || childSessions.length === 0) return;
             var tok = getApiToken();
-            var tokenQuery = tok ? '&token=' + encodeURIComponent(tok) : '';
-             var urls = [];
+            var urls = [];
             for (var i = 0; i < childSessions.length; i++) {
                 var c = childSessions[i];
-                var childUrl = '/session/render?session_zid=' + encodeURIComponent(c.zid) + '&seq_num=' + encodeURIComponent(c.seq_num) + '&bypass_lang_check=true' + tokenQuery;
+                var childUrl = resolveBackendUrl('/session/render?session_zid=' + encodeURIComponent(c.zid) + '&seq_num=' + encodeURIComponent(c.seq_num) + '&bypass_lang_check=true');
                 urls.push(childUrl);
             }
             if (urls.length === 0) return;
@@ -9902,8 +9998,7 @@
                 var headers = { 'Content-Type': 'application/json' };
                 if (tok) headers['X-API-Token'] = tok;
                 var bodyPayload = { urls: urls, children: childSessions };
-                if (tok) bodyPayload.token = tok;
-                fetch('/api/v1/spawn-tabs', {
+                fetch(resolveBackendUrl('/api/v1/spawn-tabs'), {
                     method: 'POST',
                     headers: headers,
                     body: JSON.stringify(bodyPayload)
@@ -9928,6 +10023,10 @@
         window.onLangYes = function() {
             var yesBtn = (document.getElementById('kw-btn-lang-yes'));
             if (yesBtn && yesBtn.disabled) return;
+            if (isServerDisabled()) {
+                window.showToast("Action unavailable: server interaction is disabled", "warning");
+                return;
+            }
 
             var info = window.__langMismatchInfo || {};
             var detLang = info.detected_language;
@@ -9941,7 +10040,6 @@
             var detName = info.detected_name || getLanguageName(detLang) || detLang;
             var effMode = getTextMode();
             var tok = getApiToken();
-            var tokenQuery = tok ? '&token=' + encodeURIComponent(tok) : '';
 
             var cardTsv = "";
             var tsvPathEl = document.getElementById('tsv-path');
@@ -9964,9 +10062,8 @@
                 if (tok) headers['X-API-Token'] = tok;
 
                 var langPayload = { language: detLang };
-                if (tok) langPayload.token = tok;
 
-                fetch('/api/v1/set-language', {
+                fetch(resolveBackendUrl('/api/v1/set-language'), {
                     method: 'POST',
                     headers: headers,
                     body: JSON.stringify(langPayload)
@@ -9983,9 +10080,8 @@
                     theme: getTheme(),
                     text_mode: effMode
                 };
-                if (tok) renderPayload.token = tok;
 
-                fetch('/api/v1/render', {
+                fetch(resolveBackendUrl('/api/v1/render'), {
                     method: 'POST',
                     headers: headers,
                     body: JSON.stringify(renderPayload)
@@ -10009,7 +10105,7 @@
                             return;
                         }
                     }
-                    window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang || '') + '&bypass_lang_check=true' + tokenQuery;
+                    window.location.href = resolveBackendUrl('/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang || '') + '&bypass_lang_check=true');
                 })
                 .catch(function(err) {
                     setLangModalLoading(false);
@@ -10018,13 +10114,17 @@
             } else {
                 setLangModalLoading(false);
                 window.hideLanguageVerificationModal();
-                window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang || '') + '&bypass_lang_check=true' + tokenQuery;
+                window.location.href = resolveBackendUrl('/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang || '') + '&bypass_lang_check=true');
             }
         };
 
         window.onLangNo = function() {
             var noBtn = (document.getElementById('kw-btn-lang-no'));
             if (noBtn && noBtn.disabled) return;
+            if (isServerDisabled()) {
+                window.showToast("Action unavailable: server interaction is disabled", "warning");
+                return;
+            }
             if (typeof window.hideLanguageVerificationModal === 'function') {
                 window.hideLanguageVerificationModal();
             }
@@ -10037,7 +10137,6 @@
             var expName = info.expected_name || getLanguageName(expLang) || expLang;
             var effMode = getTextMode();
             var tok = getApiToken();
-            var tokenQuery = tok ? '&token=' + encodeURIComponent(tok) : '';
 
             var cardTsv = "";
             var tsvPathEl = document.getElementById('tsv-path');
@@ -10065,9 +10164,8 @@
                     theme: getTheme(),
                     text_mode: effMode
                 };
-                if (tok) renderPayload.token = tok;
 
-                fetch('/api/v1/render', {
+                fetch(resolveBackendUrl('/api/v1/render'), {
                     method: 'POST',
                     headers: headers,
                     body: JSON.stringify(renderPayload)
@@ -10093,7 +10191,7 @@
                         return;
                     }
                     if (!resObj.ok) {
-                        window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(expLang) + '&bypass_lang_check=true' + tokenQuery;
+                        window.location.href = resolveBackendUrl('/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(expLang) + '&bypass_lang_check=true');
                     }
                 })
                 .catch(function(err) {
@@ -10103,7 +10201,7 @@
             } else {
                 setLangModalLoading(false);
                 window.hideLanguageVerificationModal();
-                window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(expLang) + '&bypass_lang_check=true' + tokenQuery;
+                window.location.href = resolveBackendUrl('/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(expLang) + '&bypass_lang_check=true');
             }
         };
 
@@ -10135,13 +10233,15 @@
             if (typeof updateBidirectionalHighlights === 'function') {
                 updateBidirectionalHighlights();
             }
-            try {
-                fetch('/api/v1/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-API-Token': getApiToken() },
-                    body: JSON.stringify({ section: 'rendering', key: 'highlight_same_lemma', value: String(!!active) })
-                }).catch(function(err) { console.debug("[Async] Non-fatal operation caught:", err); });
-            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
+            if (!isServerDisabled()) {
+                try {
+                    fetch(resolveBackendUrl('/api/v1/config'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-API-Token': getApiToken() },
+                        body: JSON.stringify({ section: 'rendering', key: 'highlight_same_lemma', value: String(!!active) })
+                    }).catch(function(err) { console.debug("[Async] Non-fatal operation caught:", err); });
+                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
+            }
         }
         window.setHighlightSameLemma = setHighlightSameLemma;
 
@@ -10201,13 +10301,15 @@
             if (typeof updateEmptySelectionState === 'function') {
                 updateEmptySelectionState();
             }
-            try {
-                fetch('/api/v1/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-API-Token': getApiToken() },
-                    body: JSON.stringify({ section: 'rendering', key: 'filter_selected_only', value: String(!!active) })
-                }).catch(function(err) { console.debug("[Async] Non-fatal operation caught:", err); });
-            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
+            if (!isServerDisabled()) {
+                try {
+                    fetch(resolveBackendUrl('/api/v1/config'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-API-Token': getApiToken() },
+                        body: JSON.stringify({ section: 'rendering', key: 'filter_selected_only', value: String(!!active) })
+                    }).catch(function(err) { console.debug("[Async] Non-fatal operation caught:", err); });
+                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
+            }
         }
         window.setFilterSelectedOnly = setFilterSelectedOnly;
 
