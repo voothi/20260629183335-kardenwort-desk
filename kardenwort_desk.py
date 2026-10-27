@@ -17504,9 +17504,13 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                     raise StructuredError(ErrorCode.ROW_STALE, f"Row content hash mismatch. Rendered: {fingerprint}, Current: {current_fp}")
 
             deleted_rows = []
+            headers = restored.get("headers", [])
+            headers_lower = {str(h).strip().lower(): idx for idx, h in enumerate(headers)}
+            words_list = bundle.get("words", []) if bundle else []
+
             for delta in deltas:
                 row_id = delta.get("row_id")
-                token_order = delta.get("token_order") if delta.get("token_order") is not None else row_id
+                token_order = delta.get("token_order")
                 sentence_idx = delta.get("sentence_idx")
                 col_name = delta.get("column")
                 val = delta.get("value")
@@ -17515,7 +17519,7 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                     raise StructuredError(ErrorCode.INVALID_STATE, "Each delta must have 'row_id', 'column', and 'value'")
 
                 if col_name == "_delete":
-                    records = storage_adapter.persist_word_deletion(session_zid, sentence_idx, token_order,
+                    records = storage_adapter.persist_word_deletion(session_zid, sentence_idx, token_order if token_order is not None else row_id,
                                                                     val, delta.get('restore'), zid=zid)
                     deleted_rows.append(dict(delta, restore=records))
                     continue
@@ -17527,6 +17531,37 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                     t_order = token_order if token_order is not None else row_id
                     storage_adapter.update_word_selection(session_zid, sentence_idx=sentence_idx, token_order=t_order, selected=val, zid=zid)
                 else:
+                    if (sentence_idx is None or str(sentence_idx).strip() == "") and token_order is not None:
+                        raise StructuredError(ErrorCode.INVALID_STATE, f"Word-field edit for column '{col_name}' requires valid 'sentence_idx'")
+
+                    if sentence_idx is None or str(sentence_idx).strip() == "":
+                        try:
+                            int_row_id = int(row_id)
+                        except (ValueError, TypeError):
+                            int_row_id = None
+                        if int_row_id is not None and 0 <= int_row_id < len(current_data_rows):
+                            row_cells = current_data_rows[int_row_id]
+                            s_col = headers_lower.get("sentencesourceindex", headers_lower.get("sentence_index"))
+                            if s_col is not None and s_col < len(row_cells):
+                                raw_s = str(row_cells[s_col]).strip()
+                                if raw_s.isdigit():
+                                    sentence_idx = int(raw_s)
+                            if token_order is None:
+                                t_col = headers_lower.get("tokenorder", headers_lower.get("token_order"))
+                                if t_col is not None and t_col < len(row_cells):
+                                    raw_t = str(row_cells[t_col]).strip()
+                                    if raw_t.isdigit():
+                                        token_order = int(raw_t)
+                        if (sentence_idx is None or token_order is None) and int_row_id is not None and 0 <= int_row_id < len(words_list):
+                            w_rec = words_list[int_row_id]
+                            if sentence_idx is None:
+                                sentence_idx = w_rec.get("sentence_index")
+                            if token_order is None:
+                                token_order = w_rec.get("token_order")
+
+                    if token_order is None:
+                        token_order = row_id
+
                     if sentence_idx is None or str(sentence_idx).strip() == "":
                         raise StructuredError(ErrorCode.INVALID_STATE, f"Word-field edit for column '{col_name}' requires valid 'sentence_idx'")
                     try:

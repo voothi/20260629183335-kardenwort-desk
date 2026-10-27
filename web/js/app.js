@@ -7779,19 +7779,9 @@
             if (!trParent || !colName) throw new Error('Editable cell requires a row and column');
             var rowId = trParent.getAttribute('data-row-id');
             var tokenOrder = trParent.getAttribute('data-token-order');
+            var tokenOrderVal = (tokenOrder !== null && tokenOrder !== '' && !isNaN(parseInt(String(tokenOrder), 10))) ? parseInt(String(tokenOrder), 10) : parseInt(String(rowId), 10);
             var sentenceIdx = trParent.getAttribute('data-sentence-idx');
-
-            if (tokenOrder === null || tokenOrder === '' || isNaN(parseInt(String(tokenOrder), 10)) ||
-                sentenceIdx === null || sentenceIdx === '' || isNaN(parseInt(String(sentenceIdx), 10))) {
-                console.error('[Edit] Rejected edit on row lacking authoritative sentence or token coordinates:', trParent);
-                if (typeof setStatusMessage === 'function') {
-                    setStatusMessage('Cannot edit row: missing sentence or token coordinate', true);
-                }
-                return;
-            }
-
-            var tokenOrderVal = parseInt(String(tokenOrder), 10);
-            var sentIdxVal = parseInt(String(sentenceIdx), 10);
+            var sentIdxVal = (sentenceIdx !== null && sentenceIdx !== '' && !isNaN(parseInt(String(sentenceIdx), 10))) ? parseInt(String(sentenceIdx), 10) : 1;
 
             var input = document.createElement('input');
             input.type = 'text';
