@@ -108,9 +108,6 @@
                     base = (window.location.origin || '').replace(/\/+$/, '');
                 }
             }
-            if (!base && window.location && window.location.protocol !== 'http:' && window.location.protocol !== 'https:') {
-                return;
-            }
             var sseUrl = (base ? base : '') + '/api/v1/events?session=' + encodeURIComponent(sessionZid);
             var es = new EventSource(sseUrl);
 

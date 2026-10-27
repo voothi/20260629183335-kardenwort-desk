@@ -38,6 +38,7 @@ from kardenwort_desk import (
     core_lookup,
     core_export,
     core_edit_save,
+    resolve_occurrence_rows,
     query_spacy_server,
     query_translation_server,
     query_intellifiller_server,
@@ -2230,7 +2231,11 @@ class SessionArbiter:
         target_row_indices = []
         target_token_orders = []
 
-        if token_orders is not None and len(token_orders) > 0:
+        if target_coordinates:
+            target_row_indices = resolve_occurrence_rows(data_rows, headers, target_coordinates,
+                                                        role_fields.get('sentence_index', 'SentenceSourceIndex'))
+            target_token_orders = [str(data_rows[index][col_token_order]).strip() for index in target_row_indices]
+        elif token_orders is not None and len(token_orders) > 0:
             token_orders_set = {str(to).strip() for to in token_orders if to is not None and str(to).strip() != ""}
             for idx, r in enumerate(data_rows):
                 t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else str(idx)
@@ -2257,7 +2262,7 @@ class SessionArbiter:
         target_token_orders = list(dict.fromkeys(target_token_orders))
         selected_row_indices = set(target_row_indices)
 
-        is_master_overview = (sentence_idx is None or sentence_idx == 0)
+        is_master_overview = (sentence_idx is None or sentence_idx == 0) and not target_coordinates
 
         if selected_row_indices and provider != 'none':
             reword_prov_tag = f"live:{provider}"
@@ -3081,7 +3086,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Headers', 'X-API-Token, X-ZID, Content-Type, Authorization')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Private-Network', 'true')
 
     def do_OPTIONS(self):
         self.send_response(204)

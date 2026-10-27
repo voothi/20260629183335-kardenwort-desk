@@ -19,7 +19,7 @@
             .replace(/'/g, '&#39;');
     };
 
-    var SERVER_URL = '';
+    var SERVER_URL = window.location.origin || '';
     var SESSION_ZID = '';
     var API_TOKEN = '';
     var LANGUAGE = '';
@@ -62,7 +62,7 @@
         if (/^https?:\/\//i.test(path)) return path;
         var cleanPath = path.charAt(0) === '/' ? path : '/' + path;
         var base = (SERVER_URL || '').replace(/\/+$/, '');
-        if (base && base !== 'null' && !base.startsWith('about:')) {
+        if (base && base !== 'null' && base.indexOf('about:') !== 0) {
             return base + cleanPath;
         }
         return cleanPath;
@@ -1035,7 +1035,7 @@
                 window.WorkspaceTabs.init();
             }
 
-            if (!isServerDisabled() && SESSION_ZID) {
+            if (SERVER_ENABLED && SESSION_ZID) {
                 initSSE(SESSION_ZID);
             }
 
@@ -5393,6 +5393,10 @@
         /** @param {string} text @param {string} lang */
         function playAudio(text, lang) {
             if (!text || !lang) return;
+            if (isServerDisabled()) {
+                window.showToast('Audio unavailable: server interaction is disabled', 'warning');
+                return;
+            }
             var clean = sanitizeSpokenText(text);
             if (!clean) return;
             if (window.ahkCall && audioAnkiTtsCli && audioPythonExe) {
@@ -6985,6 +6989,16 @@
 
         /** @param {number|string} rowId @param {boolean=} forceState */
         function toggleRowSelection(rowId, forceState) {
+            if (isLookupMode()) {
+                var targetRow = document.querySelector('#lemma-table tr[data-row-id="' + rowId + '"]');
+                var targetSentence = targetRow && targetRow.getAttribute('data-sentence-idx');
+                var targetToken = targetRow && targetRow.getAttribute('data-token-order');
+                if (!/^[0-9]+$/.test(targetSentence || '') || Number(targetSentence) < 1 || !/^[0-9]+$/.test(targetToken || '')) {
+                    window.showToast('Selection unavailable: missing occurrence identity', 'error');
+                    updateRowStyles();
+                    return;
+                }
+            }
             var rIdStr = String(rowId);
             var lem = getLemmaByRowId(rowId);
             var willSelect;
@@ -7827,9 +7841,13 @@
             if (!trParent || !colName) throw new Error('Editable cell requires a row and column');
             var rowId = trParent.getAttribute('data-row-id');
             var tokenOrder = trParent.getAttribute('data-token-order');
-            var tokenOrderVal = (tokenOrder !== null && tokenOrder !== '' && !isNaN(parseInt(String(tokenOrder), 10))) ? parseInt(String(tokenOrder), 10) : parseInt(String(rowId), 10);
             var sentenceIdx = trParent.getAttribute('data-sentence-idx');
-            var sentIdxVal = (sentenceIdx !== null && sentenceIdx !== '' && !isNaN(parseInt(String(sentenceIdx), 10))) ? parseInt(String(sentenceIdx), 10) : 1;
+            if (!/^[0-9]+$/.test(tokenOrder || '') || !/^[0-9]+$/.test(sentenceIdx || '') || Number(sentenceIdx) < 1) {
+                window.showToast('Edit unavailable: missing or ambiguous occurrence identity', 'error');
+                return;
+            }
+            var tokenOrderVal = Number(tokenOrder);
+            var sentIdxVal = Number(sentenceIdx);
 
             var input = document.createElement('input');
             input.type = 'text';
@@ -8281,6 +8299,10 @@
                     var currentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr);
                     var initiallySelected = initialHighlights[rowIdStr] || false;
                     if (currentlySelected !== initiallySelected) {
+                        if (isLookupMode() && (!/^[0-9]+$/.test(sIdxStr || '') || Number(sIdxStr) < 1 || !/^[0-9]+$/.test(tOrdStr || ''))) {
+                            window.showToast('Selection unavailable: missing occurrence identity', 'error');
+                            continue;
+                        }
                         mergedDeltas.push({
                             row_id: parseInt(String(rowIdStr), 10),
                             token_order: tOrdVal,
@@ -8691,6 +8713,10 @@
 
         /** @param {number|string} rowId @param {HTMLButtonElement} btnElement */
         function retryRow(rowId, btnElement) {
+            if (isServerDisabled()) {
+                window.showToast('Retry unavailable: server interaction is disabled', 'warning');
+                return;
+            }
             var curZid = getSessionZid();
             if (!curZid) {
                 var sessZidEl = document.getElementById('session-zid');
@@ -8773,6 +8799,10 @@
 
         /** @param {string=} sessionZid */
         function retrySession(sessionZid) {
+            if (isServerDisabled()) {
+                window.showToast('Retry unavailable: server interaction is disabled', 'warning');
+                return;
+            }
             var curZid = sessionZid || getSessionZid();
             if (!curZid) return;
             window._kwRetryToastShown = false;
@@ -8911,8 +8941,8 @@
                 request = Promise.resolve().then(function() {
                     return JSON.parse(window.ahkCall('get_shared_selection', body));
                 });
-            } else if (!SERVER_ENABLED) {
-                return Promise.resolve({shared_selection: {selected_row_ids: [], revision: 0}}).then(selectionReadResult);
+            } else if (isServerDisabled()) {
+                return Promise.reject(new Error('Membership unavailable: server interaction is disabled'));
             } else {
                 var endpoint = (context.serverUrl || SERVER_URL).replace(/\/+$/, '') + '/internal/selection';
                 var headers = {'Content-Type': 'application/json'};
@@ -9141,6 +9171,7 @@
             if (isServerDisabled() && !hasNative) {
                 return Promise.resolve();
             }
+            if (!getSessionLang()) return Promise.reject(new Error('Session language missing'));
             if (window.commitActiveEdit) window.commitActiveEdit();
             return persistPending(false).then(function() {
                 if (window.isDirty()) return window.flushPendingSaves();
@@ -9565,6 +9596,15 @@
                         var trId = String(tr.getAttribute('data-row-id'));
                         var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(trId));
                         if (isTrSel) {
+                            var rowSentence = tr.getAttribute('data-sentence-idx');
+                            var rowToken = tr.getAttribute('data-token-order');
+                            if (isLookupMode()) {
+                                if (!/^[0-9]+$/.test(rowSentence || '') || Number(rowSentence) < 1 || !/^[0-9]+$/.test(rowToken || '')) {
+                                    window.showToast('Re-word unavailable: missing occurrence identity', 'error');
+                                    return;
+                                }
+                                targetCoordinates.push({sentence_idx: Number(rowSentence), token_order: Number(rowToken)});
+                            }
                             var grp = getRowGroupIds(tr);
                             for (var p = 0; p < grp.length; p++) {
                                 var pInt = parseInt(String(grp[p]), 10);
@@ -9618,7 +9658,8 @@
             };
             if (targetCoordinates.length > 0) {
                 bodyPayload.target_coordinates = targetCoordinates;
-                bodyPayload.visual_indices = targetCoordinates.map(function(c) { return c.visual_idx; });
+                var visualTargets = targetCoordinates.filter(function(c) { return c.visual_idx !== undefined && c.visual_idx !== null; });
+                if (visualTargets.length) bodyPayload.visual_indices = visualTargets.map(function(c) { return c.visual_idx; });
             }
             if (tok) bodyPayload.token = tok;
 

@@ -4464,6 +4464,7 @@ class SqliteStorageAdapter(StorageAdapter):
         field: str,
         value: Any,
         zid: Optional[str] = None,
+        _connection=None,
     ) -> bool:
         """
         Pinpoint atomic SQL update for a single word token cell.
@@ -4504,7 +4505,7 @@ class SqliteStorageAdapter(StorageAdapter):
         f_norm = field.strip().lower().replace("_", "")
         db_col = field_mapping.get(f_norm)
 
-        with self.db.get_connection(zid=zid) as conn:
+        with (contextlib.nullcontext(_connection) if _connection is not None else self.db.get_connection(zid=zid)) as conn:
             cursor = conn.cursor()
             if db_col and db_col not in ("wordsource2", "wordsourceinflectedform2"):
                 cast_val = value
@@ -4553,20 +4554,14 @@ class SqliteStorageAdapter(StorageAdapter):
                         ef_dict = json.loads(raw_ef)
                     except Exception:
                         ef_dict = {}
-                if field == "extra_fields":
-                    if isinstance(value, dict):
-                        ef_dict.update(value)
-                    elif isinstance(value, str):
-                        try:
-                            parsed = json.loads(value)
-                            if isinstance(parsed, dict):
-                                ef_dict.update(parsed)
-                            else:
-                                ef_dict[field] = value
-                        except Exception:
-                            ef_dict[field] = value
-                    else:
-                        ef_dict[field] = value
+                if f_norm == "extrafields":
+                    try:
+                        parsed = json.loads(value) if isinstance(value, str) else value
+                    except ValueError as exc:
+                        raise StructuredError(ErrorCode.INVALID_PAYLOAD, "extra_fields must be a JSON object") from exc
+                    if not isinstance(parsed, dict) or any(k.lower().replace('_', '') == 'extrafields' for k in parsed):
+                        raise StructuredError(ErrorCode.INVALID_PAYLOAD, "extra_fields must be an object without recursive extra_fields")
+                    ef_dict.update(parsed)
                 else:
                     ef_dict[field] = value
                 cursor.execute(
@@ -4582,10 +4577,11 @@ class SqliteStorageAdapter(StorageAdapter):
         token_order: int,
         selected: Union[int, bool, str],
         zid: Optional[str] = None,
+        _connection=None,
     ) -> bool:
         """Apply normalized-lemma membership to this reading session atomically."""
         selected_value = int(selection_is_selected(selected))
-        with self.db.get_connection(zid=zid) as conn:
+        with (contextlib.nullcontext(_connection) if _connection is not None else self.db.get_connection(zid=zid)) as conn:
             words = conn.execute("SELECT sentence_index, token_order, lemma FROM words WHERE session_zid = ? ORDER BY sentence_index, token_order",
                                  (session_zid,)).fetchall()
             target = self._selection_target(words, sentence_idx, token_order)
@@ -4628,9 +4624,9 @@ class SqliteStorageAdapter(StorageAdapter):
             except Exception:
                 return set()
 
-    def persist_word_deletion(self, session_zid, sentence_idx, token_order, deleted, restore=None, zid=None):
+    def persist_word_deletion(self, session_zid, sentence_idx, token_order, deleted, restore=None, zid=None, _connection=None):
         """Delete exact word records or restore an acknowledged Undo snapshot."""
-        with self.db.get_connection(zid=zid) as conn:
+        with (contextlib.nullcontext(_connection) if _connection is not None else self.db.get_connection(zid=zid)) as conn:
             if not deleted:
                 self._restore_deleted_words(conn, session_zid, token_order, restore)
                 return []
@@ -4790,7 +4786,10 @@ class SqliteStorageAdapter(StorageAdapter):
 
         # Determine target row indices in the scratch TSV
         target_scratch_indices: Optional[List[int]] = None
-        if token_orders is not None and len(token_orders) > 0:
+        if target_coordinates:
+            target_scratch_indices = resolve_occurrence_rows(data_rows, headers, target_coordinates,
+                                                             role_fields.get('sentence_index', 'SentenceSourceIndex'))
+        elif token_orders is not None and len(token_orders) > 0:
             token_orders_set = {str(to).strip() for to in token_orders if to is not None and str(to).strip() != ""}
             matched_indices = []
             for row_idx, r in enumerate(data_rows):
@@ -13385,13 +13384,15 @@ def render_section(token, ctx):
             if col_token_order != -1 and len(row) > col_token_order and row[col_token_order] is not None and str(row[col_token_order]).strip() != "":
                 token_order_val = str(row[col_token_order]).strip()
             else:
-                token_order_val = str(row_id)
+                token_order_val = ""
 
             if col_sentence_idx != -1 and len(row) > col_sentence_idx and row[col_sentence_idx] is not None and str(row[col_sentence_idx]).strip() != "":
                 sent_idx_val = str(row[col_sentence_idx]).strip()
             else:
-                sent_idx_val = "1"
+                sent_idx_val = ""
 
+            token_order_val = html.escape(token_order_val, quote=True)
+            sent_idx_val = html.escape(sent_idx_val, quote=True)
             all_ids_val = str(row[col_all_row_ids]).strip() if col_all_row_ids != -1 and len(row) > col_all_row_ids and row[col_all_row_ids] is not None else ""
             all_ids_attr = f' data-all-row-ids="{html.escape(all_ids_val)}"' if all_ids_val else ""
 
@@ -13963,13 +13964,6 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     if resolved_paths and 'anki_mapping_file' in resolved_paths:
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
-
-    col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-    if col_token_order == -1:
-        headers.append("TokenOrder")
-        col_token_order = len(headers) - 1
-        for r_i, r in enumerate(data_rows):
-            r.append(str(r_i))
 
     data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
 
@@ -17301,6 +17295,38 @@ def cmd_progressive_worker(args):
 
 
 
+def edit_occurrence_coordinates(sentence_idx, token_order):
+    """Parse explicit persistence coordinates without guessing display positions."""
+    values = []
+    for name, value, minimum in (("sentence_idx", sentence_idx, 1), ("token_order", token_order, 0)):
+        raw = str(value).strip()
+        if not raw.isascii() or not raw.isdigit() or int(raw) < minimum:
+            raise StructuredError(ErrorCode.INVALID_STATE, f"Invalid or missing {name}")
+        values.append(int(raw))
+    return tuple(values)
+
+
+def resolve_occurrence_rows(rows, headers, coordinates, sentence_field="SentenceSourceIndex"):
+    """Resolve complete occurrence descriptors to exactly one input row each."""
+    token_field = "TokenOrder" if "TokenOrder" in headers else "token_order"
+    if sentence_field not in headers or token_field not in headers:
+        raise StructuredError(ErrorCode.INVALID_STATE, "Missing occurrence manifest columns")
+    sentence_col, token_col = headers.index(sentence_field), headers.index(token_field)
+    manifest = {}
+    for index, row in enumerate(rows):
+        key = (str(row[sentence_col]).strip(), str(row[token_col]).strip())
+        manifest.setdefault(key, []).append(index)
+    result = []
+    for coordinate in coordinates:
+        sentence, token = edit_occurrence_coordinates(coordinate.get("sentence_idx"), coordinate.get("token_order"))
+        matches = manifest.get((str(sentence), str(token)), [])
+        if len(matches) != 1:
+            raise StructuredError(ErrorCode.INVALID_STATE, f"Expected one occurrence for sentence {sentence}, token {token}; found {len(matches)}")
+        if matches[0] not in result:
+            result.append(matches[0])
+    return result
+
+
 def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerprint=None, zid=None, language=None, trace_id=None):
     if zid is None:
         zid = generate_unique_zid()
@@ -17336,92 +17362,46 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                     raise StructuredError(ErrorCode.ROW_STALE, f"Row content hash mismatch. Rendered: {fingerprint}, Current: {current_fp}")
 
             deleted_rows = []
-            headers = restored.get("headers", [])
-            headers_lower = {str(h).strip().lower(): idx for idx, h in enumerate(headers)}
-            words_list = bundle.get("words", []) if bundle else []
-
-            for delta in deltas:
-                row_id = delta.get("row_id")
-                token_order = delta.get("token_order")
-                sentence_idx = delta.get("sentence_idx")
-                col_name = delta.get("column")
-                val = delta.get("value")
-
-                if row_id is None or col_name is None or val is None:
-                    raise StructuredError(ErrorCode.INVALID_STATE, "Each delta must have 'row_id', 'column', and 'value'")
-
-                if col_name == "_delete":
-                    records = storage_adapter.persist_word_deletion(session_zid, sentence_idx, token_order if token_order is not None else row_id,
-                                                                    val, delta.get('restore'), zid=zid)
-                    deleted_rows.append(dict(delta, restore=records))
-                    continue
-
-                if col_name not in editable_cols and col_name.lower() not in [c.lower() for c in editable_cols]:
-                    raise StructuredError(ErrorCode.DESK_FAILED, f"Column '{col_name}' is not inline-editable.")
-
-                if col_name in (selected_col_name, "DeskSelected", "selected"):
-                    t_order = token_order if token_order is not None else row_id
-                    storage_adapter.update_word_selection(session_zid, sentence_idx=sentence_idx, token_order=t_order, selected=val, zid=zid)
-                else:
-                    if (sentence_idx is None or str(sentence_idx).strip() == "") and token_order is not None:
-                        raise StructuredError(ErrorCode.INVALID_STATE, f"Word-field edit for column '{col_name}' requires valid 'sentence_idx'")
-
-                    if sentence_idx is None or str(sentence_idx).strip() == "":
-                        try:
-                            int_row_id = int(row_id)
-                        except (ValueError, TypeError):
-                            int_row_id = None
-                        if int_row_id is not None and 0 <= int_row_id < len(current_data_rows):
-                            row_cells = current_data_rows[int_row_id]
-                            s_col = headers_lower.get("sentencesourceindex", headers_lower.get("sentence_index"))
-                            if s_col is not None and s_col < len(row_cells):
-                                raw_s = str(row_cells[s_col]).strip()
-                                if raw_s.isdigit():
-                                    sentence_idx = int(raw_s)
-                            if token_order is None:
-                                t_col = headers_lower.get("tokenorder", headers_lower.get("token_order"))
-                                if t_col is not None and t_col < len(row_cells):
-                                    raw_t = str(row_cells[t_col]).strip()
-                                    if raw_t.isdigit():
-                                        token_order = int(raw_t)
-                        if (sentence_idx is None or token_order is None) and int_row_id is not None and 0 <= int_row_id < len(words_list):
-                            w_rec = words_list[int_row_id]
-                            if sentence_idx is None:
-                                sentence_idx = w_rec.get("sentence_index")
-                            if token_order is None:
-                                token_order = w_rec.get("token_order")
-
-                    if token_order is None:
-                        token_order = row_id
-
-                    if sentence_idx is None or str(sentence_idx).strip() == "":
-                        raise StructuredError(ErrorCode.INVALID_STATE, f"Word-field edit for column '{col_name}' requires valid 'sentence_idx'")
-                    try:
-                        int_sentence_idx = int(str(sentence_idx).strip())
-                    except (ValueError, TypeError):
-                        raise StructuredError(ErrorCode.INVALID_STATE, f"Invalid sentence_idx: {sentence_idx}")
-
-                    if token_order is None or str(token_order).strip() == "":
-                        raise StructuredError(ErrorCode.INVALID_STATE, f"Word-field edit for column '{col_name}' requires valid 'token_order'")
-                    try:
-                        int_token_order = int(str(token_order).strip())
-                    except (ValueError, TypeError):
-                        raise StructuredError(ErrorCode.INVALID_STATE, f"Invalid token_order: {token_order}")
-
-                    with storage_adapter.db.get_connection(zid=zid) as conn:
+            # Validate the complete request and apply it under one write transaction.
+            # A later invalid delta or failed update cannot commit earlier deltas.
+            with storage_adapter.db.get_connection(zid=zid) as conn:
+                targets = []
+                for delta in deltas:
+                    row_id, col_name, val = delta.get("row_id"), delta.get("column"), delta.get("value")
+                    if row_id is None or not isinstance(col_name, str) or val is None:
+                        raise StructuredError(ErrorCode.INVALID_STATE, "Each delta requires row_id, column and value")
+                    if col_name != "_delete" and col_name.lower() not in [c.lower() for c in editable_cols]:
+                        raise StructuredError(ErrorCode.DESK_FAILED, f"Column '{col_name}' is not inline-editable.")
+                    sentence_idx, token_order = delta.get("sentence_idx"), delta.get("token_order")
+                    if col_name not in (selected_col_name, "DeskSelected", "selected", "_delete"):
+                        sentence_idx, token_order = edit_occurrence_coordinates(sentence_idx, token_order)
                         matches = conn.execute(
-                            "SELECT id FROM words WHERE session_zid = ? AND sentence_index = ? AND token_order = ?",
-                            (session_zid, int_sentence_idx, int_token_order)
-                        ).fetchall()
-                        if len(matches) == 0:
-                            raise StructuredError(ErrorCode.NOT_FOUND, f"Occurrence not found for session {session_zid}, sentence {int_sentence_idx}, token {int_token_order}")
-                        elif len(matches) > 1:
-                            raise StructuredError(ErrorCode.INVALID_STATE, f"Ambiguous occurrences ({len(matches)}) for session {session_zid}, sentence {int_sentence_idx}, token {int_token_order}")
+                            "SELECT id FROM words WHERE session_zid=? AND sentence_index=? AND token_order=?",
+                            (session_zid, sentence_idx, token_order)).fetchall()
+                        if len(matches) != 1:
+                            code = ErrorCode.NOT_FOUND if not matches else ErrorCode.INVALID_STATE
+                            raise StructuredError(code, f"Expected one occurrence for sentence {sentence_idx}, token {token_order}; found {len(matches)}")
+                    elif token_order is None:
+                        token_order = row_id
+                    targets.append((delta, sentence_idx, token_order))
 
-                    if col_name.strip().lower() in ("gender", "wordsourcegender"):
-                        g_clean = str(val).strip().lower() if val is not None else ""
-                        val = g_clean if g_clean in ("m", "f", "n") else None
-                    storage_adapter.update_word(session_zid, sentence_idx=int_sentence_idx, token_order=int_token_order, field=col_name, value=val, zid=zid)
+                for delta, sentence_idx, token_order in targets:
+                    col_name, val = delta["column"], delta["value"]
+                    if col_name == "_delete":
+                        records = storage_adapter.persist_word_deletion(session_zid, sentence_idx, token_order,
+                            val, delta.get('restore'), zid=zid, _connection=conn)
+                        deleted_rows.append(dict(delta, restore=records))
+                    elif col_name in (selected_col_name, "DeskSelected", "selected"):
+                        if not storage_adapter.update_word_selection(session_zid, sentence_idx, token_order, val,
+                                                                     zid=zid, _connection=conn):
+                            raise StructuredError(ErrorCode.NOT_FOUND, "Selection occurrence not found")
+                    else:
+                        if col_name.strip().lower() in ("gender", "wordsourcegender"):
+                            g_clean = str(val).strip().lower()
+                            val = g_clean if g_clean in ("m", "f", "n") else None
+                        if not storage_adapter.update_word(session_zid, sentence_idx, token_order, col_name, val,
+                                                           zid=zid, _connection=conn):
+                            raise StructuredError(ErrorCode.NOT_FOUND, "Edited occurrence not found")
 
             updated_restored = storage_adapter.restore_session(session_zid)
             new_fingerprint = compute_content_fingerprint(updated_restored.get("data_rows", []))
@@ -17538,9 +17518,11 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
             col_idx = headers.index(col_name)
 
             target_row_idx = None
-            if sent_header_idx != -1 and to_header_idx != -1 and sentence_idx is not None and token_order is not None:
-                s_str = str(sentence_idx).strip()
-                t_str = str(token_order).strip()
+            if sentence_idx is not None or token_order is not None:
+                if sent_header_idx == -1 or to_header_idx == -1:
+                    raise StructuredError(ErrorCode.INVALID_STATE, "TSV has no complete occurrence manifest")
+                sentence_idx, token_order = edit_occurrence_coordinates(sentence_idx, token_order)
+                s_str, t_str = str(sentence_idx), str(token_order)
                 matching_indices = [
                     idx_r for idx_r, r in enumerate(data_rows)
                     if r is not None and len(r) > max(sent_header_idx, to_header_idx)
@@ -17550,6 +17532,8 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                     target_row_idx = matching_indices[0]
                 elif len(matching_indices) > 1:
                     raise StructuredError(ErrorCode.INVALID_STATE, f"Ambiguous occurrences ({len(matching_indices)}) in TSV for sentence {s_str}, token {t_str}")
+                else:
+                    raise StructuredError(ErrorCode.NOT_FOUND, f"TSV occurrence not found for sentence {s_str}, token {t_str}")
 
             if target_row_idx is None:
                 if 0 <= row_id < len(data_rows):
