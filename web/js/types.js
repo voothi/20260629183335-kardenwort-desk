@@ -28,6 +28,12 @@
  */
 
 /**
+ * @typedef {Object} OccurrenceTarget
+ * @property {number} sentence_idx - Positive persistence sentence index
+ * @property {number} token_order - Nonnegative token order within that sentence
+ */
+
+/**
  * @typedef {Object} VocabularyRow
  * @property {string|number} row_id - Unique table row identifier
  * @property {number} [token_order] - Ordering coordinate within sentence token stream

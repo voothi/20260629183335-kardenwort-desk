@@ -111,7 +111,7 @@ def test_session_status_fallback_to_persistent_storage(running_controller):
 
     # 1. Non-existent ZID returns 404
     non_existent_zid = f"999999{kardenwort_desk.generate_unique_zid()[6:]}"
-    req_404 = urllib.request.Request(f"{server_url}/session/status?zid={non_existent_zid}")
+    req_404 = urllib.request.Request(f"{server_url}/session/status?zid={non_existent_zid}", headers={"X-API-Token": "test-controller-api-key"})
     with pytest.raises(urllib.error.HTTPError) as exc_info:
         urllib.request.urlopen(req_404, timeout=5.0)
     assert exc_info.value.code == 404
@@ -130,7 +130,7 @@ def test_session_status_fallback_to_persistent_storage(running_controller):
     )
 
     try:
-        req_status = urllib.request.Request(f"{server_url}/session/status?zid={sess_zid}")
+        req_status = urllib.request.Request(f"{server_url}/session/status?zid={sess_zid}", headers={"X-API-Token": "test-controller-api-key"})
         with urllib.request.urlopen(req_status, timeout=5.0) as resp:
             assert resp.status == 200
             data = json.loads(resp.read().decode("utf-8"))
@@ -179,7 +179,7 @@ def test_session_status_tsv_fallback(running_controller):
         server.arbiter.sessions.pop(tsv_zid, None)
 
     try:
-        req_status = urllib.request.Request(f"{server_url}/session/status?zid={tsv_zid}")
+        req_status = urllib.request.Request(f"{server_url}/session/status?zid={tsv_zid}", headers={"X-API-Token": "test-controller-api-key"})
         with urllib.request.urlopen(req_status, timeout=5.0) as resp:
             assert resp.status == 200
             data = json.loads(resp.read().decode("utf-8"))
@@ -711,7 +711,7 @@ def test_session_status_worker_sentinel_lock_busy(running_controller):
     sentinel_path = (results_dir / f"{storage_zid}.worker.lock") if results_dir else Path(f"{storage_zid}.worker.lock")
     try:
         with storage_adapter.file_lock(sentinel_path):
-            req = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}")
+            req = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}", headers={"X-API-Token": "test-controller-api-key"})
             with urllib.request.urlopen(req, timeout=5.0) as resp:
                 assert resp.status == 200
                 res = json.loads(resp.read().decode("utf-8"))
@@ -746,7 +746,7 @@ def test_session_status_untranslated_lemmas_reports_translating(running_controll
         data_rows=[["Buch", "", "0"], ["liegt", "", "1"]],
     )
     try:
-        req = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}")
+        req = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}", headers={"X-API-Token": "test-controller-api-key"})
         with urllib.request.urlopen(req, timeout=5.0) as resp:
             assert resp.status == 200
             res = json.loads(resp.read().decode("utf-8"))

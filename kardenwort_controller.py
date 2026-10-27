@@ -14,6 +14,7 @@ import webbrowser
 import urllib.parse
 import urllib.request
 import urllib.error
+import ipaddress
 import concurrent.futures
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -3083,11 +3084,42 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         logger.info("%s - - [%s] %s" % (self.address_string(), self.log_date_time_string(), format_str % args))
 
     def _send_cors_headers(self):
-        self.send_header('Access-Control-Allow-Origin', '*')
+        origin = self.headers.get('Origin')
+        if origin and self._origin_allowed(origin):
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Vary', 'Origin')
         self.send_header('Access-Control-Allow-Headers', 'X-API-Token, X-ZID, Content-Type, Authorization')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
 
+    @staticmethod
+    def _origin_allowed(origin):
+        if origin == 'null':
+            return True  # Opaque article requests additionally require a token header.
+        parsed = urllib.parse.urlparse(origin)
+        if parsed.scheme not in ('http', 'https'):
+            return False
+        if parsed.hostname == 'localhost':
+            return True
+        try:
+            return ipaddress.ip_address(parsed.hostname or '').is_loopback
+        except ValueError:
+            return False
+
+    def _validate_request_origin(self):
+        if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+            raise StructuredError(ErrorCode.UNAUTHORIZED, 'Controller requires a loopback client')
+        origin = self.headers.get('Origin')
+        if origin and not self._origin_allowed(origin):
+            raise StructuredError(ErrorCode.UNAUTHORIZED, 'Article origin is not allowed')
+        if origin == 'null' and self.command != 'OPTIONS':
+            self._authenticate_token()
+
     def do_OPTIONS(self):
+        try:
+            self._validate_request_origin()
+        except StructuredError as error:
+            self._send_error_json(403, error.error_code, error.message)
+            return
         self.send_response(204)
         self._send_cors_headers()
         self.end_headers()
@@ -3246,6 +3278,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             dispatcher.unregister(zid, q)
 
     def _dispatch_route(self, method: str):
+        self._validate_request_origin()
         EventDispatcher.get_instance().controller_owned = True
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
@@ -3309,6 +3342,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if path in ('/events', '/api/v1/events'):
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            self._authenticate_token()
             zid = qs.get('session', [''])[0] or qs.get('zid', [''])[0]
             if not zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'session' or 'zid' query parameter for SSE stream")
@@ -3546,6 +3580,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if path == '/session/status':
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            self._authenticate_token()
             zid = qs.get('zid', [''])[0]
             if not zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'zid' query parameter")

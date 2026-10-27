@@ -3565,6 +3565,11 @@ class SqliteStorageAdapter(StorageAdapter):
     """
     backend_name: str = "sqlite"
 
+    def _role_fields(self, headers):
+        mapping_path = (self.resolved_paths or {}).get('anki_mapping_file')
+        mapping = load_anki_mapping(mapping_path) if mapping_path else None
+        return get_role_fields(mapping, headers)
+
     def __init__(self, config=None, resolved_paths=None, db_path=None, read_only=False):
         self.config = config
         self.resolved_paths = resolved_paths or {}
@@ -3692,6 +3697,7 @@ class SqliteStorageAdapter(StorageAdapter):
         # If headers and data_rows are provided, normalize into sentences and words
         if headers is not None and data_rows is not None and not (sentences and words):
             headers_lower = {h.lower(): idx for idx, h in enumerate(headers)}
+            selected_field = self._role_fields(headers).get('selected', 'DeskSelected').lower()
 
             def get_col_val(r: List[str], col_name: str, default: str = "") -> str:
                 idx = headers_lower.get(col_name.lower())
@@ -3818,7 +3824,7 @@ class SqliteStorageAdapter(StorageAdapter):
                 w_dest_inf = get_col_val(row, "worddestinationinflectedform")
                 if w_dest_inf and (w_dest_inf.strip() == "[FAILED]" or w_dest_inf.strip().startswith("[Error")):
                     w_dest_inf = ""
-                sel_raw = get_col_val(row, "deskselected")
+                sel_raw = get_col_val(row, selected_field)
                 selected = 1 if str(sel_raw).strip() in ("1", "true", "True") else 0
                 box_raw = get_col_val(row, "leitnerbox")
                 box = int(box_raw) if box_raw.isdigit() else 1
@@ -4113,6 +4119,7 @@ class SqliteStorageAdapter(StorageAdapter):
                     if t_ord_int is not None and t_ord_int in overview_selected_orders:
                         word["selected"] = 1
 
+            selected_field = self._role_fields(headers).get('selected', 'DeskSelected').lower()
             data_rows = []
             for word in unique_db_words:
                 s_idx = word.get("sentence_index", 1)
@@ -4187,7 +4194,7 @@ class SqliteStorageAdapter(StorageAdapter):
                         row_cells.append(str(word.get("morphology") or ""))
                     elif h_lower in ("wordsourceipa", "ipa"):
                         row_cells.append(str(word.get("ipa") or ""))
-                    elif h_lower in ("deskselected", "selected"):
+                    elif h_lower in ("deskselected", "selected", selected_field):
                         t_ord = word.get("token_order")
                         t_ord_int = int(t_ord) if (t_ord is not None and str(t_ord).strip().isdigit()) else None
                         is_sel = 1 if (word.get("selected", 0) or (include_overview_selections and t_ord_int is not None and t_ord_int in overview_selected_orders)) else 0
@@ -13254,6 +13261,39 @@ def normalize_blank_lines(text):
 
 
 
+def lookup_row_occurrence(row, sentence_col, token_col):
+    """Read a complete occurrence, or leave the row explicitly noninteractive."""
+    if min(sentence_col, token_col) < 0 or len(row) <= max(sentence_col, token_col):
+        return None
+    try:
+        sentence, token = edit_occurrence_coordinates(row[sentence_col], row[token_col])
+    except StructuredError:
+        return None
+    return {"sentence_idx": sentence, "token_order": token}
+
+
+def lookup_column(headers, candidates):
+    columns = {str(name).lower(): index for index, name in enumerate(headers)}
+    return next((columns[name.lower()] for name in candidates if name.lower() in columns), -1)
+
+
+def lookup_group_targets(row, index, all_col, atomic):
+    raw_ids = str(row[all_col]).strip() if all_col >= 0 and len(row) > all_col else ''
+    ids = [value.strip() for value in raw_ids.split(',')] if raw_ids else [str(index)]
+    targets = [atomic.get(value) for value in ids]
+    return targets if all(targets) else []
+
+
+def lookup_occurrence_targets(headers, rows, role_fields):
+    sentence_col = lookup_column(headers, (
+        role_fields.get('sentence_index', 'SentenceSourceIndex'), 'SentenceSourceIndex',
+        'SentenceIndex', 'sentence_index', 'sentence_idx'))
+    token_col = lookup_column(headers, ('TokenOrder', 'token_order'))
+    atomic = {str(index): lookup_row_occurrence(row, sentence_col, token_col) for index, row in enumerate(rows)}
+    all_col = lookup_column(headers, ('all_row_ids', 'data-all-row-ids', 'all_ids'))
+    return {id(row): lookup_group_targets(row, index, all_col, atomic) for index, row in enumerate(rows)}
+
+
 def render_section(token, ctx):
     import re
     html_output = ""
@@ -13399,12 +13439,15 @@ def render_section(token, ctx):
             occ_val = str(row[col_occ]).strip() if col_occ != -1 and len(row) > col_occ and row[col_occ] is not None else ""
             occ_attr = f' data-occ="{html.escape(occ_val)}"' if occ_val else ""
 
-            html_output += f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}"{all_ids_attr}{occ_attr}{row_cls}>'
+            targets = ctx.get('occurrence_targets', {}).get(id(row), [])
+            targets_attr = html.escape(json.dumps(targets, separators=(',', ':')), quote=True)
+            html_output += f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}" data-occurrence-targets="{targets_attr}"{all_ids_attr}{occ_attr}{row_cls}>'
             if server_enabled:
                 is_checked = "checked" if is_checked_bool else ""
                 html_output += f'<td class="kw-tag-control"><input type="checkbox" class="kw-tag-checkbox" data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}"{all_ids_attr}{occ_attr} {is_checked} onchange="kwToggleTag(this, {row_id})"></td>'
             for t in valid_tokens:
                 idx = col_indices[t]
+                field_attr = html.escape(COLUMN_TOKEN_MAP[t], quote=True)
                 val = row[idx] if idx != -1 and len(row) > idx else ""
                 if isinstance(val, str):
                     val = val.replace('\r', '')
@@ -13414,7 +13457,7 @@ def render_section(token, ctx):
                     inf_tooltip = format_inflected_sentence_tooltip(ctx.get('text', ''), val, token_order=token_order_val, lemma=lem_v)
                     inf_title_attr = f' title="{html.escape(inf_tooltip)}"' if inf_tooltip else ''
                     if use_scroll:
-                        html_output += f'<td class="editable col-inflected" data-col="WordSourceInflectedForm"{inf_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                        html_output += f'<td class="editable col-inflected" data-col="{field_attr}"{inf_title_attr}><div class="scrollable-cell">{val}</div></td>'
                     else:
                         html_output += f'<td class="col-inflected"{inf_title_attr}>{val}</td>'
                 elif t == "lemma":
@@ -13425,7 +13468,7 @@ def render_section(token, ctx):
                     lem_tooltip = format_lemma_article_tooltip(val, g_val, lang=ctx.get('language', 'de'), pos=pos_val_for_lem)
                     lem_title_attr = f' title="{html.escape(lem_tooltip)}"' if lem_tooltip else ''
                     if use_scroll:
-                        html_output += f'<td class="editable col-lemma" data-col="WordSource"{lem_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                        html_output += f'<td class="editable col-lemma" data-col="{field_attr}"{lem_title_attr}><div class="scrollable-cell">{val}</div></td>'
                     else:
                         html_output += f'<td class="col-lemma"{lem_title_attr}>{val}</td>'
                 elif t == "translation":
@@ -13433,7 +13476,7 @@ def render_section(token, ctx):
                     trans_tooltip = format_translation_cell_tooltip(val, prov_val)
                     trans_title_attr = f' title="{html.escape(trans_tooltip)}"' if trans_tooltip else ''
                     if use_scroll:
-                        html_output += f'<td class="editable col-translation" data-col="WordDestination"{trans_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                        html_output += f'<td class="editable col-translation" data-col="{field_attr}"{trans_title_attr}><div class="scrollable-cell">{val}</div></td>'
                     else:
                         html_output += f'<td class="col-translation"{trans_title_attr}>{val}</td>'
                 elif t == "ipa":
@@ -13965,6 +14008,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
 
+    occurrence_targets = lookup_occurrence_targets(headers, data_rows, role_fields)
     data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
 
     effective_server_enabled = server_enabled or (isinstance(goldendict, dict) and goldendict.get('server_enabled', False))
@@ -13987,6 +14031,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         'session_zid': session_zid,
         'api_token': effective_api_token,
         'fingerprint': fingerprint,
+        'occurrence_targets': occurrence_targets,
     }
 
     html_output = '<div class="kw-lookup-container">\n'
@@ -14041,9 +14086,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     if not effective_server_enabled:
         lookup_ui_config.pop("server_api_key", None)
     lookup_ui_config["grammar"] = get_grammar_payload()
-    lookup_ui_config["has_highlight_col"] = bool(
-        headers and any(str(h).lower() in ('deskselected', 'selected', 'highlight') for h in headers)
-    )
+    lookup_ui_config["has_highlight_col"] = role_fields.get('selected') in headers
     lookup_bootstrap = {
         "ui_config": lookup_ui_config,
         "session_data": session_payload,
@@ -17368,6 +17411,8 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                 targets = []
                 for delta in deltas:
                     row_id, col_name, val = delta.get("row_id"), delta.get("column"), delta.get("value")
+                    if col_name in ("DeskSelected", "selected"):
+                        col_name = selected_col_name
                     if row_id is None or not isinstance(col_name, str) or val is None:
                         raise StructuredError(ErrorCode.INVALID_STATE, "Each delta requires row_id, column and value")
                     if col_name != "_delete" and col_name.lower() not in [c.lower() for c in editable_cols]:
@@ -17496,6 +17541,9 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
             sentence_idx = delta.get("sentence_idx")
             col_name = delta.get("column")
             val = delta.get("value")
+
+            if col_name in ("DeskSelected", "selected"):
+                col_name = selected_col_name
 
             if row_id is None or col_name is None or val is None:
                 raise StructuredError(ErrorCode.INVALID_STATE, "Each delta must have 'row_id', 'column', and 'value'")

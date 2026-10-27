@@ -56,6 +56,32 @@
     }
     window.isServerDisabled = isServerDisabled;
 
+    /** @param {HTMLElement} row @returns {OccurrenceTarget[]} */
+    function getLookupRowTargets(row) {
+        var targets = JSON.parse((row && row.getAttribute('data-occurrence-targets')) || '[]');
+        if (!Array.isArray(targets) || !targets.every(function(target) {
+            return target && /^[0-9]+$/.test(String(target.sentence_idx)) && Number(target.sentence_idx) > 0 && /^[0-9]+$/.test(String(target.token_order));
+        })) throw new Error('Invalid lookup occurrence manifest');
+        return targets;
+    }
+
+    function getLookupEditTarget(row) {
+        var targets = getLookupRowTargets(row);
+        if (targets.length === 1) return targets[0];
+        var selections = (window.AppState && window.AppState.activeTokenSelections) || [];
+        var selected = targets.filter(function(target) {
+            return selections.some(function(selection) {
+                return Number(selection.sentence_idx) === target.sentence_idx && Number(selection.token_order) === target.token_order;
+            });
+        });
+        return selected.length === 1 ? selected[0] : null;
+    }
+
+    function isLookupOccurrenceEdit(row, target) {
+        return isLookupMode() && target && target.closest && target.closest('td.editable') &&
+            getLookupRowTargets(row).length > 1 && getLookupEditTarget(row);
+    }
+
     /** @param {string} path @returns {string} */
     function resolveBackendUrl(path) {
         if (!path) return '';
@@ -68,6 +94,13 @@
         return cleanPath;
     }
     window.resolveBackendUrl = resolveBackendUrl;
+
+    function backendHeaders(headers) {
+        var result = Object.assign({}, headers || {});
+        var token = window.getApiToken ? window.getApiToken() : API_TOKEN;
+        if (token) result['X-API-Token'] = token;
+        return result;
+    }
 
     /** @param {string} id @returns {HTMLElement} */
     function requireElement(id) {
@@ -296,7 +329,7 @@
     function initSSE(sessionZid) {
         if (isServerDisabled()) return;
         if (!window.SSEBridge) throw new Error('Required SSE bridge is unavailable');
-        window.SSEBridge.connect(sessionZid, SERVER_URL);
+        window.SSEBridge.connect(sessionZid, SERVER_URL, API_TOKEN);
     }
     window.initSSE = initSSE;
 
@@ -3545,17 +3578,23 @@
             if (statusRead && statusRead.session === session) return statusRead.promise;
             var pending = {session: session, promise: null};
             statusRead = pending;
-            pending.promise = fetchSessionStatus(session, options).finally(function() {
+            pending.promise = fetchSessionStatus(session, options).then(function(response) {
+                if (statusRead !== pending || window.__deskInstanceId !== myDeskInstanceId || getSessionZid() !== session) {
+                    var cancelled = new Error('Status read superseded by a save or session change');
+                    cancelled.name = 'StaleStatusRead';
+                    throw cancelled;
+                }
+                return response;
+            }).finally(function() {
                 if (statusRead === pending) statusRead = null;
             });
             return pending.promise;
         }
 
         function fetchSessionStatus(session, options) {
+            options = Object.assign({}, options, {headers: backendHeaders(options && options.headers)});
             var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
             if (controller) options.signal = controller.signal;
-            var token = getApiToken();
-            if (token) options.headers['X-API-Token'] = token;
             var timeout;
             return new Promise(function(resolve, reject) {
                 timeout = setTimeout(function() {
@@ -3747,7 +3786,7 @@
                     }
                     if (typeof fetch !== 'undefined' && curZid) {
                         var recoveryUrl = resolveBackendUrl("/session/status?zid=" + encodeURIComponent(curZid));
-                        fetch(recoveryUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
+                        fetch(recoveryUrl, { method: 'GET', headers: backendHeaders({ 'Accept': 'application/json' }) })
                             .then(function(res) { if (res.ok) return res.json(); })
                             .then(function(resObj) {
                                 var data = (resObj && resObj.data) ? resObj.data : resObj;
@@ -3785,7 +3824,7 @@
                         var cTimeoutId = cController ? setTimeout(function() {
                             try { if (cController) cController.abort(); } catch(e) { console.debug("[AbortController] Abort failed:", e); }
                         }, 4000) : null;
-                        var cOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
+                        var cOpts = { method: 'GET', headers: backendHeaders({ 'Accept': 'application/json' }) };
                         if (cController) cOpts.signal = cController.signal;
 
                         fetch(statusUrl, cOpts)
@@ -3903,7 +3942,7 @@
                     if (isPolling) return;
                     isPolling = true;
 
-                    var fetchOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
+                    var fetchOpts = { method: 'GET', headers: backendHeaders({ 'Accept': 'application/json' }) };
 
                     readSessionStatus(curZid, fetchOpts)
                         .then(function(res) {
@@ -3964,38 +4003,12 @@
                             }
                         })
                         .catch(function(err) {
+                            if (err.name === 'StaleStatusRead') return;
                             if (typeof navigator !== 'undefined' && navigator.onLine === false) {
                                 enterHeartbeatFallback();
                                 return;
                             }
-                            var renderCheckUrl = resolveBackendUrl("/?session_zid=" + encodeURIComponent(curZid));
-                            var rcController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-                            var rcTimeoutId = rcController ? setTimeout(function() {
-                                try { if (rcController) rcController.abort(); } catch(e) { console.debug("[AbortController] Abort failed:", e); }
-                            }, 4000) : null;
-                            var rcOpts = { method: 'GET' };
-                            if (rcController) rcOpts.signal = rcController.signal;
-
-                            fetch(renderCheckUrl, rcOpts)
-                                .then(function(res) { return res.text(); })
-                                .then(function(htmlText) {
-                                    if (htmlText && htmlText.indexOf('skeleton-loader') === -1 && countPendingSkeletons() === 0) {
-                                        resolved = true;
-                                        if (window._kwWatchdogMaxTimer) {
-                                            clearTimeout(window._kwWatchdogMaxTimer);
-                                            window._kwWatchdogMaxTimer = null;
-                                        }
-                                        closeEvtSource();
-                                        stopPolling();
-                                        if (window.onSessionReload) {
-                                            window.onSessionReload();
-                                        }
-                                    }
-                                })
-                                .catch(function(err) { console.debug("[Async] Non-fatal operation caught:", err); })
-                                .finally(function() {
-                                    if (rcTimeoutId) clearTimeout(rcTimeoutId);
-                                });
+                            updateSyncFeedback('failed', 'Session status unavailable: ' + err.message);
                         })
                         .finally(function() {
                             isPolling = false;
@@ -4074,8 +4087,8 @@
                         }
                     }
                     try {
-                        var sseUrl = "/events?zid=" + encodeURIComponent(curZid);
-                        var evtSource = new EventSource(sseUrl);
+                        var sseUrl = resolveBackendUrl("/events?zid=" + encodeURIComponent(curZid));
+                        var evtSource = window.SSEBridge.createSource(sseUrl, getApiToken());
                         window._kwEvtSource = evtSource;
 
                         if (evtSource.addEventListener) {
@@ -6212,6 +6225,7 @@
             if (target && target.tagName === 'INPUT') {
                 return;
             }
+            if (e.button === 0 && isLookupOccurrenceEdit(row, target)) return;
             if (e.button !== 0 && e.button !== 2) {
                 return;
             }
@@ -7842,6 +7856,15 @@
             var rowId = trParent.getAttribute('data-row-id');
             var tokenOrder = trParent.getAttribute('data-token-order');
             var sentenceIdx = trParent.getAttribute('data-sentence-idx');
+            if (isLookupMode()) {
+                var editTarget = getLookupEditTarget(trParent);
+                if (!editTarget) {
+                    window.showToast('Edit unavailable: select one occurrence before editing a merged row', 'error');
+                    return;
+                }
+                tokenOrder = String(editTarget.token_order);
+                sentenceIdx = String(editTarget.sentence_idx);
+            }
             if (!/^[0-9]+$/.test(tokenOrder || '') || !/^[0-9]+$/.test(sentenceIdx || '') || Number(sentenceIdx) < 1) {
                 window.showToast('Edit unavailable: missing or ambiguous occurrence identity', 'error');
                 return;
@@ -8776,7 +8799,7 @@
                 if (data && data.rows && window.receiveUpdate) {
                     window.receiveUpdate(data);
                 } else if (data && data.status === 'success') {
-                    fetch(resolveBackendUrl('/session/status?zid=' + encodeURIComponent(curZid)), { method: 'GET', headers: { 'Accept': 'application/json' } })
+                    fetch(resolveBackendUrl('/session/status?zid=' + encodeURIComponent(curZid)), { method: 'GET', headers: backendHeaders({ 'Accept': 'application/json' }) })
                         .then(function(r) { if (r.ok) return r.json(); })
                         .then(function(d) {
                             var statusData = (d && d.data) ? d.data : d;
@@ -9358,6 +9381,7 @@
                     })
                     .catch(function(err) {
                         setButtonLoading(updateBtn, false, "", "Update");
+                        if (err.name === 'StaleStatusRead') return;
                         if (window.onSessionReload) window.onSessionReload();
                         else if (window.location && window.location.reload) window.location.reload();
                     }).finally(function() {
@@ -9596,14 +9620,18 @@
                         var trId = String(tr.getAttribute('data-row-id'));
                         var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(trId));
                         if (isTrSel) {
-                            var rowSentence = tr.getAttribute('data-sentence-idx');
-                            var rowToken = tr.getAttribute('data-token-order');
                             if (isLookupMode()) {
-                                if (!/^[0-9]+$/.test(rowSentence || '') || Number(rowSentence) < 1 || !/^[0-9]+$/.test(rowToken || '')) {
+                                var rowTargets = getLookupRowTargets(tr);
+                                if (!rowTargets.length) {
                                     window.showToast('Re-word unavailable: missing occurrence identity', 'error');
                                     return;
                                 }
-                                targetCoordinates.push({sentence_idx: Number(rowSentence), token_order: Number(rowToken)});
+                                rowTargets.forEach(function(target) {
+                                    var exists = targetCoordinates.some(function(current) {
+                                        return current.sentence_idx === target.sentence_idx && current.token_order === target.token_order;
+                                    });
+                                    if (!exists) targetCoordinates.push(target);
+                                });
                             }
                             var grp = getRowGroupIds(tr);
                             for (var p = 0; p < grp.length; p++) {

@@ -176,7 +176,7 @@ def test_controller_session_lifecycle_and_sse_streaming(running_controller):
         import urllib.parse
         parsed = urllib.parse.urlparse(server_url)
         conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5.0)
-        conn.request("GET", f"/events?zid={test_zid}")
+        conn.request("GET", f"/events?zid={test_zid}", headers={"X-API-Token": "test-controller-api-key"})
         resp = conn.getresponse()
         sse_connected.set()
 
@@ -238,7 +238,7 @@ def test_controller_sse_stream_dynamic_skeleton_provider_labels(running_controll
         import urllib.parse
         parsed = urllib.parse.urlparse(server_url)
         conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5.0)
-        conn.request("GET", f"/events?zid={test_zid}")
+        conn.request("GET", f"/events?zid={test_zid}", headers={"X-API-Token": "test-controller-api-key"})
         resp = conn.getresponse()
         sse_connected.set()
 
@@ -329,7 +329,7 @@ def test_controller_session_status_and_sse_provider_failover(running_controller)
         import urllib.parse
         parsed = urllib.parse.urlparse(server_url)
         conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5.0)
-        conn.request("GET", f"/events?zid={test_zid}")
+        conn.request("GET", f"/events?zid={test_zid}", headers={"X-API-Token": "test-controller-api-key"})
         resp = conn.getresponse()
         sse_connected.set()
 
@@ -359,7 +359,7 @@ def test_controller_session_status_and_sse_provider_failover(running_controller)
 
     # Query /session/status endpoint
     url = f"{server_url}/session/status?zid={test_zid}"
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "X-API-Token": "test-controller-api-key"})
     with urllib.request.urlopen(req) as resp:
         data = json.loads(resp.read().decode('utf-8'))
 
@@ -1141,7 +1141,7 @@ def test_session_status_hydrated_rows_and_translated_text(running_controller):
         }
 
     try:
-        req_status = urllib.request.Request(f"{server_url}/session/status?zid={sess_zid}")
+        req_status = urllib.request.Request(f"{server_url}/session/status?zid={sess_zid}", headers={"X-API-Token": "test-controller-api-key"})
         with urllib.request.urlopen(req_status, timeout=5.0) as resp:
             assert resp.status == 200
             res = json.loads(resp.read().decode("utf-8"))
@@ -1178,7 +1178,7 @@ def test_session_status_hydrated_rows_and_translated_text(running_controller):
         data_rows=[["Hund", "dog", "0"], ["rennt", "runs", "1"]],
     )
     try:
-        req_storage = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}")
+        req_storage = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}", headers={"X-API-Token": "test-controller-api-key"})
         with urllib.request.urlopen(req_storage, timeout=5.0) as resp:
             assert resp.status == 200
             res = json.loads(resp.read().decode("utf-8"))
@@ -1221,7 +1221,7 @@ def test_controller_session_status_untranslated_lemmas_reports_translating(runni
         data_rows=[["Hund", "", "0"], ["rennt", "", "1"]],
     )
     try:
-        req_storage = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}")
+        req_storage = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}", headers={"X-API-Token": "test-controller-api-key"})
         with urllib.request.urlopen(req_storage, timeout=5.0) as resp:
             assert resp.status == 200
             res = json.loads(resp.read().decode("utf-8"))
@@ -1260,7 +1260,7 @@ def test_controller_session_status_worker_lock_held_reports_busy(running_control
     sentinel_lock_path = (results_dir / f"{storage_zid}.worker.lock") if results_dir else Path(f"{storage_zid}.worker.lock")
     try:
         with storage_adapter.file_lock(sentinel_lock_path):
-            req_storage = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}")
+            req_storage = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}", headers={"X-API-Token": "test-controller-api-key"})
             with urllib.request.urlopen(req_storage, timeout=5.0) as resp:
                 assert resp.status == 200
                 res = json.loads(resp.read().decode("utf-8"))
@@ -1270,7 +1270,7 @@ def test_controller_session_status_worker_lock_held_reports_busy(running_control
                 assert data.get("stage") == "translating"
 
         # Once lock is released, is_finished should be True
-        req_storage2 = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}")
+        req_storage2 = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}", headers={"X-API-Token": "test-controller-api-key"})
         with urllib.request.urlopen(req_storage2, timeout=5.0) as resp2:
             assert resp2.status == 200
             res2 = json.loads(resp2.read().decode("utf-8"))
@@ -1313,7 +1313,7 @@ def test_session_status_multi_sentence_preserves_stable_row_indices(running_cont
         }
 
     try:
-        req_status = urllib.request.Request(f"{server_url}/session/status?zid={sess_zid}")
+        req_status = urllib.request.Request(f"{server_url}/session/status?zid={sess_zid}", headers={"X-API-Token": "test-controller-api-key"})
         with urllib.request.urlopen(req_status, timeout=5.0) as resp:
             assert resp.status == 200
             res = json.loads(resp.read().decode("utf-8"))
@@ -1349,7 +1349,7 @@ def test_session_status_multi_sentence_preserves_stable_row_indices(running_cont
         ],
     )
     try:
-        req_storage = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}")
+        req_storage = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}", headers={"X-API-Token": "test-controller-api-key"})
         with urllib.request.urlopen(req_storage, timeout=5.0) as resp:
             assert resp.status == 200
             res = json.loads(resp.read().decode("utf-8"))
@@ -1786,7 +1786,7 @@ def test_controller_session_status_busy_when_in_active_progressive_sessions(runn
         eq._active_progressive_sessions[sess_zid] = True
 
     try:
-        req = urllib.request.Request(f"{server_url}/session/status?zid={sess_zid}")
+        req = urllib.request.Request(f"{server_url}/session/status?zid={sess_zid}", headers={"X-API-Token": "test-controller-api-key"})
         with urllib.request.urlopen(req, timeout=5.0) as resp:
             assert resp.status == 200
             res_obj = json.loads(resp.read().decode('utf-8'))

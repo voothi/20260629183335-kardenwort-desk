@@ -281,7 +281,7 @@ class TestCoreEditSaveSqlite:
 
         # Execute edit deltas through core_edit_save
         deltas = [
-            {"row_id": 0, "column": "WordDestination", "value": "котейки"},
+            {"row_id": 0, "sentence_idx": 1, "token_order": 0, "column": "WordDestination", "value": "котейки"},
             {"row_id": 0, "column": "DeskSelected", "value": "1"},
         ]
         res = core_edit_save(

@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -42,47 +43,57 @@ def protected_snapshot():
 def source_snapshot():
     source_root = Path(desk.__file__).parent
     files = [source_root / relative for relative in (
-        "kardenwort_desk.py", "kardenwort_controller.py", "web/js/app.js", "web/js/services/sse.js")]
-    files += [ROOT / "tests/test_dict_transport_audit_regressions.py", Path(__file__)]
+        "kardenwort_desk.py", "kardenwort_controller.py", "web/js/app.js", "web/js/services/sse.js", "web/js/types.js")]
+    files += [ROOT / relative for relative in ("tests/test_dict_transport_audit_regressions.py",
+        "tests/test_dict_completion_contracts.py", "tests/test_release_audit_regressions.py", "tests/test_sqlite_mutations.py",
+        "tests/test_controller.py", "tests/test_controller_api.py")]
+    files.append(Path(__file__))
     return {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
+
+
+_load_config = desk.load_config
+_get_connection = kardenwort_db.KardenwortDB.get_connection
+
+
+def load_owned_config(config_path, owner):
+    requested = Path(config_path).resolve() if config_path is not None else ROOT / "config.ini"
+    cfg, paths, gd, wordfill = _load_config(requested)
+    if requested != ROOT / "config.ini":
+        return cfg, paths, gd, wordfill
+    database = owner / "config-default.db"
+    owned_results = owner / "results"
+    owned_results.mkdir(parents=True, exist_ok=True)
+    cfg.set("storage", "sqlite_db_path", str(database))
+    cfg.set("project_structure", "generated_results_dir", str(owned_results))
+    paths.update(sqlite_db_path=database, results_dir=owned_results, generated_results_dir=owned_results)
+    if isinstance(wordfill, dict):
+        wordfill.update(sqlite_db_path=database, scan_roots=[owned_results])
+    return cfg, paths, gd, wordfill
+
+
+def guarded_connection(instance, *args, **kwargs):
+    if not Path(instance.db_path).resolve().is_relative_to(OUT):
+        raise AssertionError("Audit attempted database access outside its owned fixture directory")
+    return _get_connection(instance, *args, **kwargs)
 
 
 class Isolation:
     @pytest.fixture(autouse=True)
     def audit_owned_config(self, tmp_path, monkeypatch):
-        original_load = desk.load_config
-
-        def owned_load(*args, **kwargs):
-            if not args and not kwargs:
-                args = (ROOT / "config.ini",)
-            cfg, paths, gd, wordfill = original_load(*args, **kwargs)
-            database = tmp_path / "config-default.db"
-            owned_results = tmp_path / "results"
-            owned_results.mkdir(exist_ok=True)
-            cfg.set("storage", "sqlite_db_path", str(database))
-            cfg.set("project_structure", "generated_results_dir", str(owned_results))
-            paths.update(sqlite_db_path=database, results_dir=owned_results,
-                         generated_results_dir=owned_results)
-            if isinstance(wordfill, dict):
-                wordfill["sqlite_db_path"] = database
-                wordfill["scan_roots"] = [owned_results]
-            return cfg, paths, gd, wordfill
-
-        original_connection = kardenwort_db.KardenwortDB.get_connection
-
-        def guarded_connection(instance, *args, **kwargs):
-            if not Path(instance.db_path).resolve().is_relative_to(OUT):
-                raise AssertionError("Audit attempted database access outside its owned fixture directory")
-            return original_connection(instance, *args, **kwargs)
-
-        monkeypatch.setattr(desk, "load_config", owned_load)
-        monkeypatch.setattr(kardenwort_db.KardenwortDB, "get_connection", guarded_connection)
+        monkeypatch.setattr(desk, "load_config", lambda config_path=None: load_owned_config(config_path, tmp_path))
 
 
 if __name__ == "__main__":
     label = sys.argv[1]
     before = protected_snapshot()
     source_before = source_snapshot()
+    owner = OUT / (label + "-scratch")
+    owner.mkdir(exist_ok=True)
+    tempfile.tempdir = str(owner)
+    # These guards precede collection and module-scoped fixtures as well as test bodies.
+    desk.load_config = lambda config_path=None: load_owned_config(config_path, owner)
+    kardenwort_controller.load_config = desk.load_config
+    kardenwort_db.KardenwortDB.get_connection = guarded_connection
     args = sys.argv[2:] + ["-q", "-p", "no:cacheprovider", "--tb=short", "--basetemp", str(OUT / (label + "-tmp")),
                            "--junitxml", str(OUT / (label + ".xml"))]
     result = pytest.main(args, plugins=[Isolation()])

@@ -170,7 +170,7 @@ def test_f1_non_german_lookup_language_metadata(page, src_lang, tgt_lang, src_wo
     zid = "20261025211003"
     html = kardenwort_desk.render_lookup_html(
         src_sent, src_lang, tgt_lang, config, paths, zid, goldendict,
-        [], ["WordSource", "WordDestination", "DeskSelected"], [[src_word, tgt_word, "1"]], tgt_sent,
+        [], ["WordSource", "WordDestination", "DeskSelected", "SentenceSourceIndex", "TokenOrder"], [[src_word, tgt_word, "1", "1", "0"]], tgt_sent,
         session_zid=zid, api_token="test-controller-api-key", server_enabled=True,
     )
     page.set_content(html.replace("<head>", "<head>" + TRANSPORT))

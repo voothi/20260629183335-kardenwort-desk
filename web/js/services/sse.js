@@ -25,6 +25,95 @@
 
     var activeConnectionId = 0;
 
+    function authenticatedSource(url, token) {
+        var source = {readyState: 0, onopen: null, onerror: null, onmessage: null};
+        var controller = null, timer = null, closed = false, delay = 1000;
+        var listeners = {};
+        source.addEventListener = function(type, listener) {
+            (listeners[type] = listeners[type] || []).push(listener);
+        };
+        source.close = function() {
+            closed = true;
+            source.readyState = 2;
+            clearTimeout(timer);
+            if (controller) controller.abort();
+        };
+        function failed(error) {
+            if (closed) return;
+            source.readyState = error.terminal ? 2 : 0;
+            if (error.terminal && controller) controller.abort();
+            if (source.onerror) source.onerror(error);
+            if (!error.terminal) {
+                timer = setTimeout(start, delay);
+                delay = Math.min(delay * 2, 16000);
+            }
+        }
+        function consume(reader) {
+            var decoder = new TextDecoder('utf-8'), buffer = '', data = [], eventType = 'message';
+            function dispatch() {
+                if (!data.length || closed) return;
+                var event = {data: data.join('\n')};
+                if (eventType === 'message' && source.onmessage) source.onmessage(event);
+                (listeners[eventType] || []).forEach(function(listener) { listener(event); });
+            }
+            function line(value) {
+                value = value.replace(/\r$/, '');
+                if (!value) {
+                    dispatch();
+                    data = [];
+                    eventType = 'message';
+                } else if (value.indexOf('data:') === 0) {
+                    data.push(value.slice(5).replace(/^ /, ''));
+                } else if (value.indexOf('event:') === 0) {
+                    eventType = value.slice(6).replace(/^ /, '');
+                }
+            }
+            function read() {
+                return reader.read().then(function(chunk) {
+                    if (closed) return;
+                    if (chunk.done) throw new Error('Event stream closed');
+                    buffer += decoder.decode(chunk.value, {stream: true});
+                    var lines = buffer.split('\n');
+                    buffer = lines.pop();
+                    lines.forEach(line);
+                    return read();
+                });
+            }
+            return read();
+        }
+        function start() {
+            if (closed) return;
+            if (typeof AbortController === 'undefined' || typeof TextDecoder === 'undefined' || typeof fetch !== 'function') {
+                var unavailable = new Error('Authenticated event streaming is unavailable in this host');
+                unavailable.terminal = true;
+                failed(unavailable);
+                return;
+            }
+            controller = new AbortController();
+            var options = {headers: {'Accept': 'text/event-stream', 'X-API-Token': token}, cache: 'no-store'};
+            options.signal = controller.signal;
+            Promise.resolve().then(function() { return fetch(url, options); }).then(function(response) {
+                if (closed) return;
+                if (!response.ok || !response.body || !response.body.getReader || typeof TextDecoder === 'undefined') {
+                    var error = new Error('Authenticated event stream unavailable' + (response.status ? ' (' + response.status + ')' : ''));
+                    error.terminal = true;
+                    throw error;
+                }
+                source.readyState = 1;
+                delay = 1000;
+                if (source.onopen) source.onopen({});
+                return consume(response.body.getReader());
+            }).catch(failed);
+        }
+        timer = setTimeout(start, 0);
+        return source;
+    }
+
+    function createSource(url, token) {
+        token = token || (window.getApiToken ? window.getApiToken() : window.API_TOKEN) || '';
+        return token ? authenticatedSource(url, token) : new EventSource(url);
+    }
+
     function invalidateMembership() {
         if (window.invalidateStreamMembership) window.invalidateStreamMembership();
     }
@@ -76,7 +165,7 @@
      * @param {string} sessionZid
      * @param {string} [serverUrl]
      */
-    function connect(sessionZid, serverUrl) {
+    function connect(sessionZid, serverUrl, token) {
         if (!sessionZid || typeof window.EventSource === 'undefined') return;
 
         var w = (window);
@@ -109,7 +198,7 @@
                 }
             }
             var sseUrl = (base ? base : '') + '/api/v1/events?session=' + encodeURIComponent(sessionZid);
-            var es = new EventSource(sseUrl);
+            var es = createSource(sseUrl, token);
 
             activeConnectionId = ++connectionCounter;
             activeEventSource = es;
@@ -251,6 +340,7 @@
     }
 
     var SSEBridge = {
+        createSource: createSource,
         connect: connect,
         disconnect: disconnect,
         updateConnectionIndicator: updateConnectionIndicator,
