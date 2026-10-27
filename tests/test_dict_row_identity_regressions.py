@@ -315,7 +315,8 @@ def test_1_4_checkbox_synchronizes_on_local_deselection(page):
 
 def test_1_4_checkbox_synchronizes_on_undo(page):
     """
-    Checking a checkbox then performing Undo must revert the checkbox to unchecked.
+    Checking a checkbox, then editing a cell, then performing Undo must revert the cell
+    while preserving the checkbox projection as checked.
     """
     headers = ["Quotation", "WordSource", "WordDestination", "SentenceSourceIndex", "TokenOrder", "DeskSelected"]
     data_rows = [
@@ -330,9 +331,18 @@ def test_1_4_checkbox_synchronizes_on_undo(page):
     cb_row0.check()
     expect(cb_row0).to_be_checked()
 
-    # Undo the action
+    # Edit cell and then Undo
+    trans_cell = page.locator('tr[data-row-id="0"] td.col-translation')
+    trans_cell.dblclick()
+    input_box = trans_cell.locator('input.edit-input')
+    expect(input_box).to_be_visible()
+    input_box.fill("cottage")
+    input_box.press("Enter")
+    expect(trans_cell).to_have_text("cottage")
+
     page.evaluate("window.undo()")
-    expect(cb_row0).not_to_be_checked()
+    expect(trans_cell).to_have_text("house")
+    expect(cb_row0).to_be_checked()
 
 
 def test_1_4_checkbox_synchronizes_on_remote_membership(page):

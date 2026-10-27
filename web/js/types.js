@@ -168,10 +168,9 @@
 /**
  * Edit actions carry rowId/tokenOrder/sentenceIdx, column, oldValue/newValue and cell.
  * Delete actions carry matching rowIds/tokenOrders/sentenceIndices arrays.
- * Select actions carry rowId/tokenOrder/sentenceIdx, oldValue/newValue.
  * History records retain user intent independently of save acknowledgments.
  * @typedef {Object} HistoryAction
- * @property {'edit'|'delete'|'select'} type - Action discriminator
+ * @property {'edit'|'delete'} type - Action discriminator
  * @property {number} [rowId]
  * @property {number} [tokenOrder]
  * @property {number} [sentenceIdx]

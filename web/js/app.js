@@ -6722,13 +6722,11 @@
 
             if (keyCode === 116 || e.key === 'F5') { // F5 -> update
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-                if (typeof window.onUpdateClick === 'function') {
+                var updateBtn = (document.getElementById('kw-btn-update'));
+                if (updateBtn && !updateBtn.disabled) {
+                    updateBtn.click();
+                } else if (typeof window.onUpdateClick === 'function') {
                     window.onUpdateClick();
-                } else {
-                    var updateBtn = (document.getElementById('kw-btn-update'));
-                    if (updateBtn && !updateBtn.disabled) {
-                        updateBtn.click();
-                    }
                 }
                 return false;
             }
@@ -6937,31 +6935,15 @@
             if (window.forceRepaint) window.forceRepaint();
         };
 
-        /** @param {number|string} rowId @param {boolean=} forceState @param {boolean=} skipHistory */
-        function toggleRowSelection(rowId, forceState, skipHistory) {
+        /** @param {number|string} rowId @param {boolean=} forceState */
+        function toggleRowSelection(rowId, forceState) {
             var rIdStr = String(rowId);
             var lem = getLemmaByRowId(rowId);
-            var wasSelected = selectedRowIdsMap.hasOwnProperty(rIdStr);
             var willSelect;
             if (forceState !== undefined) {
                 willSelect = Boolean(forceState);
             } else {
-                willSelect = !wasSelected;
-            }
-            if (!skipHistory && willSelect !== wasSelected && typeof pushHistory === 'function') {
-                var rEl = (typeof findTableRowById === 'function') ? findTableRowById(rowId) : document.querySelector('#lemma-table tr[data-row-id="' + rowId + '"]');
-                var toAttr = rEl ? rEl.getAttribute('data-token-order') : null;
-                var siAttr = rEl ? rEl.getAttribute('data-sentence-idx') : null;
-                var tOrdVal = (toAttr !== null && toAttr !== '') ? parseInt(String(toAttr), 10) : parseInt(String(rowId), 10);
-                var sentIdxVal = (siAttr !== null && siAttr !== '') ? parseInt(String(siAttr), 10) : 1;
-                pushHistory({
-                    type: 'select',
-                    rowId: parseInt(String(rowId), 10),
-                    tokenOrder: tOrdVal,
-                    sentenceIdx: sentIdxVal,
-                    oldValue: wasSelected,
-                    newValue: willSelect
-                });
+                willSelect = !selectedRowIdsMap.hasOwnProperty(rIdStr);
             }
             if (lem) {
                 setLemmaSelected(lem, willSelect);
@@ -8075,8 +8057,6 @@
             recordUserIntent(action, true, false);
             if (action.type === 'edit') {
                 projectEditedValue(action, action.newValue);
-            } else if (action.type === 'select') {
-                toggleRowSelection(action.rowId, action.newValue, true);
             } else if (action.type === 'delete') {
                 for (var j = 0; j < action.rowIds.length; j++) {
                     var rId = action.rowIds[j];
@@ -8097,8 +8077,6 @@
             recordUserIntent(action, false, false);
             if (action.type === 'edit') {
                 projectEditedValue(action, action.oldValue);
-            } else if (action.type === 'select') {
-                toggleRowSelection(action.rowId, action.oldValue, true);
             } else if (action.type === 'delete') {
                 for (var j = 0; j < action.rowIds.length; j++) {
                     var rId = action.rowIds[j];
@@ -8140,9 +8118,6 @@
         function historyValues(action) {
             if (action.type === 'edit') return [{row_id: action.rowId, token_order: action.tokenOrder,
                 sentence_idx: action.sentenceIdx, column: action.column, value: action.newValue, original: action.oldValue, element: action.cell}];
-            if (action.type === 'select') return [{row_id: action.rowId, token_order: action.tokenOrder,
-                sentence_idx: action.sentenceIdx, column: 'DeskSelected', value: action.newValue ? '1' : '', original: action.oldValue ? '1' : '',
-                element: (document.querySelector('#lemma-table tr[data-row-id="' + action.rowId + '"]'))}];
             return action.rowIds.map(function(id, index) {
                 return {row_id: id, token_order: action.tokenOrders[index], sentence_idx: action.sentenceIndices[index],
                     column: '_delete', value: true, original: false,
