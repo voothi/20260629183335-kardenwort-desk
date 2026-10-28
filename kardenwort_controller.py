@@ -34,6 +34,7 @@ from kardenwort_desk import (
     load_tsv_rows,
     save_tsv_rows_safely,
     compute_content_fingerprint,
+    project_shared_selection,
     file_lock,
     check_coordination_busy,
     core_lookup,
@@ -3065,6 +3066,22 @@ class ControllerHTTPServer(ThreadingHTTPServer):
         EventDispatcher.get_instance().prune_polling_clients()
 
 
+def article_selection_state(config, paths, session_zid, language):
+    """Read one current projection after export, including its selection side effects."""
+    adapter = get_storage_adapter(config, paths, read_only=True)
+    if adapter.backend_name == 'tsv':
+        path = find_working_tsv(Path(paths['results_dir']), session_zid, language)
+        _, headers, rows = adapter.load_tsv_rows(path)
+    else:
+        restored = adapter.restore_session(session_zid)
+        headers, rows = restored['headers'], restored['data_rows']
+    roles = get_role_fields(load_anki_mapping(paths['anki_mapping_file']), headers)
+    lemma = headers.index(roles.get('lemma', 'WordSource'))
+    selected = headers.index(roles.get('selected', 'DeskSelected'))
+    return dict(session_zid=session_zid, fingerprint=compute_content_fingerprint(rows),
+                shared_selection=project_shared_selection((row[lemma], row[selected]) for row in rows))
+
+
 class ControllerRequestHandler(BaseHTTPRequestHandler):
     """
     Central Controller daemon request handler supporting REST API, process supervision,
@@ -3524,16 +3541,22 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             selected_rows = body.get('selected_row_ids') or body.get('row_ids') or []
             if not session_zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
+            if body.get('include_article_state') and not body.get('language'):
+                raise StructuredError(ErrorCode.MISSING_FIELD, 'Article export requires language')
 
             res = core_export(
                 tsv_path_or_session=session_zid,
                 selected_row_ids=selected_rows,
                 config=self.server.config,
                 resolved_paths=self.server.resolved_paths,
+                fingerprint=body.get('fingerprint'),
                 language=body.get('language'),
                 zid=body.get('zid') or session_zid,
                 trace_id=f"{session_zid}:export:selection",
             )
+            if body.get('include_article_state'):
+                res['article_state'] = article_selection_state(
+                    self.server.config, self.server.resolved_paths, session_zid, body['language'])
             self._send_json(200, res)
             return
 
@@ -4777,7 +4800,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
-        if path in ('/api/v1/export', '/session/export'):
+        if path == '/api/v1/export':
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
@@ -4786,6 +4809,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             for req_field in ('session_zid', 'selected_row_ids'):
                 if req_field not in body:
                     raise StructuredError(ErrorCode.MISSING_FIELD, f"Missing required payload field: '{req_field}'")
+            if body.get('include_article_state') and not body.get('language'):
+                raise StructuredError(ErrorCode.MISSING_FIELD, 'Article export requires language')
 
             req_zid = generate_server_zid(self.server)
             res = core_export(
@@ -4797,6 +4822,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 zid=req_zid,
                 language=body.get("language"),
             )
+            if body.get('include_article_state'):
+                res['article_state'] = article_selection_state(
+                    self.server.config, self.server.resolved_paths, body['session_zid'], body['language'])
             self._send_json(200, res)
             return
 

@@ -13286,11 +13286,16 @@ def lookup_group_targets(row, index, all_col, atomic):
     return targets if all(targets) else []
 
 
-def lookup_occurrence_targets(headers, rows, role_fields):
+def lookup_occurrence_columns(headers, role_fields):
     sentence_col = lookup_column(headers, (
         role_fields.get('sentence_index', 'SentenceSourceIndex'), 'SentenceSourceIndex',
         'SentenceIndex', 'sentence_index', 'sentence_idx'))
     token_col = lookup_column(headers, ('TokenOrder', 'token_order'))
+    return sentence_col, token_col
+
+
+def lookup_occurrence_targets(headers, rows, role_fields):
+    sentence_col, token_col = lookup_occurrence_columns(headers, role_fields)
     atomic = {str(index): lookup_row_occurrence(row, sentence_col, token_col) for index, row in enumerate(rows)}
     all_col = lookup_column(headers, ('all_row_ids', 'data-all-row-ids', 'all_ids'))
     return {id(row): lookup_group_targets(row, index, all_col, atomic) for index, row in enumerate(rows)}
@@ -13305,13 +13310,14 @@ def render_section(token, ctx):
         if h_text == '__default__':
             h_text = default_text
         if h_text:
-            return f"<h3>{h_text}</h3>\n"
+            return f"<h3>{html.escape(str(h_text))}</h3>\n"
         return ""
 
     if token == "source":
         heading = make_heading("source", "Source Text")
         normalized_text = normalize_blank_lines(ctx["text"])
         safe_text = normalized_text.replace('\r', '')
+        safe_text = html.escape(safe_text)
         html_output += f'<section class="kw-section source-section" id="source-section">{heading}<div class="kw-source-text source-text" id="source-container">{safe_text}</div></section>\n'
 
     elif token == "translation":
@@ -13336,7 +13342,6 @@ def render_section(token, ctx):
             'g': role_fields.get('gender') or ('WordSourceGender' if 'WordSourceGender' in ctx.get('headers', []) else ('gender' if 'gender' in ctx.get('headers', []) else None)),
             'translation': role_fields.get('word_translation') or ('WordDestination' if 'WordDestination' in ctx.get('headers', []) else None)
         }
-        COLUMN_TOKEN_MAP = {k: v for k, v in COLUMN_TOKEN_MAP.items() if v}
 
         server_enabled = ctx.get('server_enabled', False)
         headers = ctx['headers']
@@ -13418,7 +13423,6 @@ def render_section(token, ctx):
 
         lookup_col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else (headers.index('WordSource') if 'WordSource' in headers else (headers.index('lemma') if 'lemma' in headers else -1))
         lookup_col_prov = headers.index(role_fields['provenance']) if 'provenance' in role_fields and role_fields['provenance'] in headers else (headers.index('Provenance') if 'Provenance' in headers else (headers.index('provenance') if 'provenance' in headers else -1))
-        use_scroll = ctx.get('scrollable_cells', False)
         for row_id, row in enumerate(data_rows):
             sel_val = row[selected_col_idx] if selected_col_idx != -1 and len(row) > selected_col_idx else ""
             is_checked_bool = str(sel_val).strip() in ("1", "true", "True")
@@ -13446,22 +13450,20 @@ def render_section(token, ctx):
             html_output += f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}" data-occurrence-targets="{targets_attr}"{all_ids_attr}{occ_attr}{row_cls}>'
             if server_enabled:
                 is_checked = "checked" if is_checked_bool else ""
-                html_output += f'<td class="kw-tag-control"><input type="checkbox" class="kw-tag-checkbox" data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}"{all_ids_attr}{occ_attr} {is_checked} onchange="kwToggleTag(this, {row_id})"></td>'
+                html_output += f'<td class="kw-tag-control"><input type="checkbox" class="kw-tag-checkbox" data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}"{all_ids_attr}{occ_attr} {is_checked} disabled></td>'
             for t in valid_tokens:
                 idx = col_indices[t]
-                field_attr = html.escape(COLUMN_TOKEN_MAP[t], quote=True)
+                field_attr = html.escape(COLUMN_TOKEN_MAP[t] or t, quote=True)
                 val = row[idx] if idx != -1 and len(row) > idx else ""
                 if isinstance(val, str):
                     val = val.replace('\r', '')
+                display_val = html.escape(str(val))
                 if t == "inflected":
                     lem_idx = col_indices.get('lemma', -1)
                     lem_v = row[lem_idx] if lem_idx != -1 and len(row) > lem_idx else ""
                     inf_tooltip = format_inflected_sentence_tooltip(ctx.get('text', ''), val, token_order=token_order_val, lemma=lem_v)
                     inf_title_attr = f' title="{html.escape(inf_tooltip)}"' if inf_tooltip else ''
-                    if use_scroll:
-                        html_output += f'<td class="editable col-inflected" data-col="{field_attr}"{inf_title_attr}><div class="scrollable-cell">{val}</div></td>'
-                    else:
-                        html_output += f'<td class="col-inflected"{inf_title_attr}>{val}</td>'
+                    html_output += f'<td class="col-inflected"{inf_title_attr}>{display_val}</td>'
                 elif t == "lemma":
                     gender_idx = col_indices.get('gender', col_indices.get('g', -1))
                     g_val = row[gender_idx] if gender_idx != -1 and len(row) > gender_idx else ""
@@ -13469,66 +13471,42 @@ def render_section(token, ctx):
                     pos_val_for_lem = row[pos_idx] if pos_idx != -1 and len(row) > pos_idx else ""
                     lem_tooltip = format_lemma_article_tooltip(val, g_val, lang=ctx.get('language', 'de'), pos=pos_val_for_lem)
                     lem_title_attr = f' title="{html.escape(lem_tooltip)}"' if lem_tooltip else ''
-                    if use_scroll:
-                        html_output += f'<td class="editable col-lemma" data-col="{field_attr}"{lem_title_attr}><div class="scrollable-cell">{val}</div></td>'
-                    else:
-                        html_output += f'<td class="col-lemma"{lem_title_attr}>{val}</td>'
+                    html_output += f'<td class="col-lemma"{lem_title_attr}>{display_val}</td>'
                 elif t == "translation":
                     prov_val = row[lookup_col_prov] if lookup_col_prov != -1 and len(row) > lookup_col_prov else ""
                     trans_tooltip = format_translation_cell_tooltip(val, prov_val)
                     trans_title_attr = f' title="{html.escape(trans_tooltip)}"' if trans_tooltip else ''
-                    if use_scroll:
-                        html_output += f'<td class="editable col-translation" data-col="{field_attr}"{trans_title_attr}><div class="scrollable-cell">{val}</div></td>'
-                    else:
-                        html_output += f'<td class="col-translation"{trans_title_attr}>{val}</td>'
+                    html_output += f'<td class="col-translation"{trans_title_attr}>{display_val}</td>'
                 elif t == "ipa":
                     ipa_title_attr = f' title="{html.escape(val)}"' if val else ''
-                    if use_scroll:
-                        html_output += f'<td class="col-ipa" data-col="WordSourceIPA"{ipa_title_attr}><div class="scrollable-cell">{val}</div></td>'
-                    else:
-                        html_output += f'<td class="col-ipa"{ipa_title_attr}>{val}</td>'
+                    html_output += f'<td class="col-ipa"{ipa_title_attr}>{display_val}</td>'
                 elif t == "morphology":
                     morph_title_attr = f' title="{html.escape(val)}"' if val else ''
-                    if use_scroll:
-                        html_output += f'<td class="col-morphology" data-col="WordSourceMorphologyAI"{morph_title_attr}><div class="scrollable-cell">{val}</div></td>'
-                    else:
-                        html_output += f'<td class="col-morphology"{morph_title_attr}>{val}</td>'
+                    html_output += f'<td class="col-morphology"{morph_title_attr}>{display_val}</td>'
                 elif t == "pos":
-                    cell_val = format_pos_cell(val)
+                    cell_val = html.escape(format_pos_cell(val))
                     pos_tooltip = format_pos_tooltip(val)
                     pos_title_attr = f' title="{html.escape(pos_tooltip)}"' if pos_tooltip else ''
-                    if use_scroll:
-                        html_output += f'<td class="col-pos" data-col="WordSourcePOS"{pos_title_attr}><div class="scrollable-cell">{cell_val}</div></td>'
-                    else:
-                        html_output += f'<td class="col-pos"{pos_title_attr}>{cell_val}</td>'
+                    html_output += f'<td class="col-pos"{pos_title_attr}>{cell_val}</td>'
                 elif t in ("gender", "g"):
                     cell_val = format_gender_badge(val)
                     lem_val_for_g = row[lookup_col_lemma] if lookup_col_lemma != -1 and len(row) > lookup_col_lemma else ""
                     prov_val_for_g = row[lookup_col_prov] if lookup_col_prov != -1 and len(row) > lookup_col_prov else None
                     g_tooltip = format_gender_tooltip(val, lemma=lem_val_for_g, provenance=prov_val_for_g)
                     g_title_attr = f' title="{html.escape(g_tooltip)}"' if g_tooltip else ''
-                    if use_scroll:
-                        html_output += f'<td class="col-gender" data-col="WordSourceGender"{g_title_attr}><div class="scrollable-cell">{cell_val}</div></td>'
-                    else:
-                        html_output += f'<td class="col-gender"{g_title_attr}>{cell_val}</td>'
+                    html_output += f'<td class="col-gender"{g_title_attr}>{cell_val}</td>'
                 elif t in ("oxford", "cambridge", "goethe", "cefr", "classification"):
                     cls_tooltip = format_classification_tooltip(val, role=t)
                     cls_title_attr = f' title="{html.escape(cls_tooltip)}"' if cls_tooltip else ''
-                    if use_scroll:
-                        html_output += f'<td class="col-classification" data-col="{t}"{cls_title_attr}><div class="scrollable-cell">{val}</div></td>'
-                    else:
-                        html_output += f'<td class="col-classification"{cls_title_attr}>{val}</td>'
+                    html_output += f'<td class="col-classification"{cls_title_attr}>{display_val}</td>'
                 else:
-                    if use_scroll:
-                        html_output += f'<td><div class="scrollable-cell">{val}</div></td>'
-                    else:
-                        html_output += f'<td>{val}</td>'
+                    html_output += f'<td>{display_val}</td>'
             html_output += '</tr>\n'
 
         html_output += '</tbody></table></div>\n'
 
         if server_enabled:
-            html_output += '<div class="kw-actions-bar"><button id="kw-export-btn" class="kw-export-btn" onclick="kwExportSelected()">Export to Anki</button><span id="kw-interactive-status" class="kw-interactive-status"></span></div>\n'
+            html_output += '<div class="kw-actions-bar"><button class="kw-export-btn" disabled>Export to Anki</button><span class="kw-interactive-status" role="status">Actions require authenticated browser transport.</span></div>\n'
         html_output += '</div>\n'
 
     return html_output
@@ -13995,310 +13973,91 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
     with TraceTimer("html_generation", zid, config, resolved_paths):
         return _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=session_zid, api_token=api_token, server_enabled=server_enabled, fingerprint=fingerprint)
 
+def lookup_article_metadata(headers, original_rows, sorted_rows, roles, occurrence_targets):
+    """Keep display IDs separate from exact occurrence and export row identities."""
+    lemma_col = lookup_column(headers, (roles.get('lemma', 'WordSource'), 'lemma'))
+    selected_col = lookup_column(headers, (roles.get('selected', 'DeskSelected'), 'selected'))
+    sentence_col, token_col = lookup_occurrence_columns(headers, roles)
+    indices = {}
+    for index, row in enumerate(original_rows):
+        target = lookup_row_occurrence(row, sentence_col, token_col)
+        if target is not None:
+            key = (target['sentence_idx'], target['token_order'])
+            indices.setdefault(key, set()).add(index)
+    result = []
+    for display_id, row in enumerate(sorted_rows):
+        targets = lookup_article_export_targets(occurrence_targets[id(row)], indices)
+        lemma = str(row[lemma_col]).strip().lower() if lemma_col >= 0 else ''
+        selected = selection_is_selected(row[selected_col]) if selected_col >= 0 else False
+        result.append(dict(display_id=display_id, lemma=lemma, selected=selected, targets=targets))
+    return result
+
+
+def lookup_article_export_targets(targets, indices):
+    resolved = []
+    for target in targets:
+        matches = indices.get((target['sentence_idx'], target['token_order']), set())
+        if len(matches) != 1:
+            return []
+        resolved.append(dict(target, row_id=next(iter(matches))))
+    return resolved
+
+
+def lookup_article_options(goldendict, server_enabled):
+    options = dict(goldendict) if isinstance(goldendict, dict) else {}
+    options['server_enabled'] = bool(server_enabled or options.get('server_enabled', False))
+    options.setdefault('theme', 'compact')
+    if options['theme'] not in ('compact', 'dark', 'light', 'white'):
+        raise ValueError('Unknown article theme')
+    return options
+
+
+def lookup_article_styles(assets, config, options):
+    if options.get('disable_css', False):
+        return '', ''
+    styles = '<style>' + read_required_asset(assets / 'article.css') + '</style>'
+    colors = resolve_theme_colors(config, options['theme']) if config is not None else {}
+    variables = ''.join(f'--{name}:{value};' for name, value in colors.items())
+    return styles, f' style="{variables}"'
+
+
+def lookup_article_runtime(assets, options, identity, headers, rows, sorted_rows, roles, occurrences):
+    zid, session_zid, language, target_lang, api_token, fingerprint = identity
+    metadata = dict(session_zid=str(session_zid or zid or ''), language=str(language or ''),
+                    target_lang=str(target_lang or ''), api_token=str(api_token or options.get('server_api_key', '')),
+                    fingerprint=fingerprint or compute_content_fingerprint(rows),
+                    server_url=f"http://{options.get('server_host', '127.0.0.1')}:{options.get('server_port', 18335)}",
+                    selected_column=roles.get('selected', 'DeskSelected'),
+                    rows=lookup_article_metadata(headers, rows, sorted_rows, roles, occurrences))
+    runtime = '<script type="application/json" data-kw-article>' + serialize_json_island(metadata) + '</script>'
+    return runtime + '<script>' + read_required_asset(assets / 'article.js') + '</script>'
+
+
 def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=False, fingerprint=""):
-    sections = goldendict.get('sections', ['translation', 'lemmas']) if isinstance(goldendict, dict) else ['translation', 'lemmas']
-    column_tokens = goldendict.get('lemma_columns', ['inflected', 'lemma', 'translation']) if isinstance(goldendict, dict) else ['inflected', 'lemma', 'translation']
-
-    headings = {
-        'source': goldendict.get('heading_source', ''),
-        'translation': goldendict.get('heading_translation', ''),
-        'lemmas': goldendict.get('heading_lemmas', '')
-    }
-
-    role_fields = {}
+    options = lookup_article_options(goldendict, server_enabled)
+    sections = options.get('sections', ['translation', 'lemmas'])
+    roles = {}
     if resolved_paths and 'anki_mapping_file' in resolved_paths:
-        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-        role_fields = get_role_fields(mapping, headers)
+        roles = get_role_fields(load_anki_mapping(resolved_paths['anki_mapping_file']), headers)
+    occurrences = lookup_occurrence_targets(headers, data_rows, roles)
+    sorted_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=roles)
+    enabled = options['server_enabled']
+    ctx = dict(text=text, sentence_translation=sentence_translation, headers=headers,
+               data_rows=sorted_rows, language=language, target_lang=target_lang,
+               column_tokens=options.get('lemma_columns', ['inflected', 'lemma', 'translation']),
+               headings={key: options.get('heading_' + key, '') for key in ('source', 'translation', 'lemmas')},
+               role_fields=roles, server_enabled=enabled, occurrence_targets=occurrences)
+    content = ''.join(render_section(section, ctx) for section in sections)
+    assets = Path(__file__).resolve().parent / 'web' / 'dict'
+    styles, root_style = lookup_article_styles(assets, config, options)
+    runtime = ''
+    if enabled and 'lemmas' in sections:
+        identity = (zid, session_zid, language, target_lang, api_token, fingerprint)
+        runtime = lookup_article_runtime(assets, options, identity, headers, data_rows, sorted_rows, roles, occurrences)
+    article = f'<div class="kw-lookup-container kw-dict-article theme-{options["theme"]}"{root_style}>'
+    article += styles + content + runtime + '</div>'
+    return read_required_asset(assets / 'article.html').replace('<!-- ARTICLE -->', article)
 
-    occurrence_targets = lookup_occurrence_targets(headers, data_rows, role_fields)
-    data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
-
-    effective_server_enabled = server_enabled or (isinstance(goldendict, dict) and goldendict.get('server_enabled', False))
-    effective_api_token = api_token or (isinstance(goldendict, dict) and goldendict.get('server_api_key', ''))
-    if not effective_server_enabled:
-        effective_api_token = ""
-
-    ctx = {
-        'text': text,
-        'sentence_translation': sentence_translation,
-        'headers': headers,
-        'data_rows': data_rows,
-        'language': language,
-        'target_lang': target_lang,
-        'run_intellifiller': goldendict.get('run_intellifiller', False) if isinstance(goldendict, dict) else False,
-        'column_tokens': column_tokens,
-        'headings': headings,
-        'role_fields': role_fields,
-        'server_enabled': effective_server_enabled,
-        'session_zid': session_zid,
-        'api_token': effective_api_token,
-        'fingerprint': fingerprint,
-        'occurrence_targets': occurrence_targets,
-    }
-
-    html_output = '<div class="kw-lookup-container">\n'
-    for sec in sections:
-        html_output += render_section(sec, ctx)
-    html_output += '</div>\n'
-
-    server_host = goldendict.get('server_host', '127.0.0.1') if isinstance(goldendict, dict) else '127.0.0.1'
-    server_port = goldendict.get('server_port', 18335) if isinstance(goldendict, dict) else 18335
-    server_url = f"http://{server_host}:{server_port}"
-
-    session_payload = {
-        "zid": str(zid or session_zid or ""),
-        "session_zid": str(session_zid or zid or ""),
-        "is_lookup": True,
-        "language": str(language or ""),
-        "target_lang": str(target_lang or ""),
-        "source_text": str(text or ""),
-        "sentence_translation": str(sentence_translation or ""),
-        "headers": headers,
-        "data_rows": data_rows,
-        "server_enabled": bool(effective_server_enabled),
-        "api_token": str(effective_api_token or ""),
-        "fingerprint": str(fingerprint or ""),
-        "server_url": server_url,
-    }
-    session_json = serialize_json_island(session_payload)
-
-    web_dir = Path(__file__).resolve().parent / "web"
-    theme = goldendict.get('theme', 'compact') if isinstance(goldendict, dict) else 'compact'
-
-    read_required_asset(web_dir / "js" / "app.js")
-    raw_template = get_web_index_html()
-    base_html = raw_template
-
-    # Inject theme class into <body>
-    base_html = base_html.replace('<body>', f'<body class="theme-{theme}">')
-
-    # Replace title
-    base_html = re.sub(r'<title>.*?</title>', '<title>Kardenwort Lookup</title>', base_html)
-
-    # Inject session JSON into #session-data
-    base_html = re.sub(
-        r'<script id="session-data" type="application/json">.*?</script>',
-        lambda _: f'<script id="session-data" type="application/json">\n{session_json}\n</script>',
-        base_html,
-        flags=re.DOTALL
-    )
-
-    # Inject bootstrap payload into #kardenwort-bootstrap
-    lookup_ui_config = dict(goldendict) if isinstance(goldendict, dict) else {}
-    if not effective_server_enabled:
-        lookup_ui_config.pop("server_api_key", None)
-    lookup_ui_config["grammar"] = get_grammar_payload()
-    lookup_ui_config["has_highlight_col"] = role_fields.get('selected') in headers
-    lookup_bootstrap = {
-        "ui_config": lookup_ui_config,
-        "session_data": session_payload,
-        "sentence_cards": [],
-        "delivery_mode": "container",
-        "is_lookup": True,
-        "zid": session_payload["zid"],
-        "session_zid": session_payload["session_zid"],
-        "language": session_payload["language"],
-        "target_language": session_payload["target_lang"],
-        "data_rows": session_payload["data_rows"],
-        "headers": session_payload["headers"],
-        "source_text": session_payload["source_text"],
-        "sentence_translation": session_payload["sentence_translation"],
-        "server_enabled": session_payload["server_enabled"],
-        "api_token": session_payload["api_token"],
-        "server_url": session_payload["server_url"],
-        "fingerprint": session_payload["fingerprint"],
-    }
-    lookup_bootstrap_json = serialize_json_island(lookup_bootstrap)
-    base_html = re.sub(
-        r'<script id="kardenwort-bootstrap" type="application/json">.*?</script>',
-        lambda _: f'<script id="kardenwort-bootstrap" type="application/json">\n{lookup_bootstrap_json}\n</script>',
-        base_html,
-        flags=re.DOTALL
-    )
-    if '<!-- KARDENWORT_BOOTSTRAP -->' in base_html:
-        base_html = base_html.replace('<!-- KARDENWORT_BOOTSTRAP -->', '')
-
-    s_zid = str(session_zid or zid or "")
-    base_html = re.sub(
-        r'<script id="session-zid" type="text/plain">.*?</script>',
-        lambda _: f'<script id="session-zid" type="text/plain">{s_zid}</script>',
-        base_html,
-        flags=re.DOTALL
-    )
-    s_lang = str(language or "")
-    base_html = re.sub(
-        r'<script id="session-lang" type="text/plain">.*?</script>',
-        lambda _: f'<script id="session-lang" type="text/plain">{s_lang}</script>',
-        base_html,
-        flags=re.DOTALL
-    )
-    t_lang = str(target_lang or "")
-    base_html = re.sub(
-        r'<script id="session-target-lang" type="text/plain">.*?</script>',
-        lambda _: f'<script id="session-target-lang" type="text/plain">{t_lang}</script>',
-        base_html,
-        flags=re.DOTALL
-    )
-
-    # Check if slot markers exist in base_html (modular shell)
-    if '<!-- SECTION_SOURCE_START -->' in base_html:
-        # 1. Configurable Zoom (Task 2.9, R50)
-        zoom_val = None
-        if isinstance(goldendict, dict):
-            zoom_val = goldendict.get('defaultzoom') or goldendict.get('default_zoom') or goldendict.get('zoom')
-        if not zoom_val and config:
-            if config.has_section('settings'):
-                zoom_val = config.get('settings', 'defaultzoom', fallback=None) or config.get('settings', 'default_zoom', fallback=None)
-            if not zoom_val and config.has_section('rendering'):
-                zoom_val = config.get('rendering', 'default_zoom', fallback=None)
-        if not zoom_val:
-            zoom_val = "100"
-        zoom_str = str(zoom_val).strip()
-        zoom_num = re.sub(r'[^\d.]', '', zoom_str)
-        try:
-            zoom_float = float(zoom_num) if zoom_num else 100.0
-        except ValueError:
-            zoom_float = 100.0
-        if zoom_float <= 0:
-            zoom_float = 100.0
-        factor = zoom_float / 100.0
-        zoom_style = f"zoom: {zoom_float:g}%; max-width: calc(100% / {factor:.4g}); width: calc(100% / {factor:.4g});"
-        base_html = base_html.replace(
-            '<div class="kw-lookup-container">',
-            f'<div class="kw-lookup-container" style="{zoom_style}">'
-        )
-
-        # 2. Language Badge
-        if language and target_lang:
-            base_html = base_html.replace(
-                '<span id="lang-badge" class="session-badge">de &rarr; ru</span>',
-                f'<span id="lang-badge" class="session-badge">{html.escape(language)} &rarr; {html.escape(target_lang)}</span>'
-            )
-
-        # 3. Source Section Slot (Task 2.7, 2.8, R33, R44)
-        if 'source' not in sections:
-            base_html = re.sub(r'<!-- SECTION_SOURCE_START -->.*?<!-- SECTION_SOURCE_END -->\s*', '', base_html, flags=re.DOTALL)
-        else:
-            h_source = headings.get('source', '')
-            if h_source == '__default__':
-                h_source = "Source Text"
-            if h_source:
-                if '<h3>Source Text</h3>' in base_html:
-                    base_html = re.sub(r'<h3>Source Text</h3>', f'<h3>{html.escape(h_source)}</h3>', base_html)
-                else:
-                    base_html = base_html.replace(
-                        '<div class="source-text"',
-                        f'<h3>{html.escape(h_source)}</h3>\n            <div class="source-text"'
-                    )
-            else:
-                base_html = re.sub(r'<h3>Source Text</h3>\s*', '', base_html)
-            normalized_text = normalize_blank_lines(ctx["text"])
-            safe_text = normalized_text.replace('\r', '')
-            base_html = base_html.replace('<!-- SOURCE_TEXT -->', safe_text)
-
-        # 4. Translation Section Slot (Task 2.7, 2.8, R33, R44)
-        if 'translation' not in sections:
-            base_html = re.sub(r'<!-- SECTION_TRANSLATION_START -->.*?<!-- SECTION_TRANSLATION_END -->\s*', '', base_html, flags=re.DOTALL)
-        else:
-            h_trans = headings.get('translation', '')
-            if h_trans == '__default__':
-                h_trans = "Translation"
-            if h_trans:
-                if '<h3>Translation</h3>' in base_html:
-                    base_html = re.sub(r'<h3>Translation</h3>', f'<h3>{html.escape(h_trans)}</h3>', base_html)
-                else:
-                    base_html = base_html.replace(
-                        '<div class="translation-text"',
-                        f'<h3>{html.escape(h_trans)}</h3>\n            <div class="translation-text"'
-                    )
-            else:
-                base_html = re.sub(r'<h3>Translation</h3>\s*', '', base_html)
-            normalized_trans = normalize_blank_lines(ctx.get("sentence_translation", ""))
-            safe_trans = html.escape(normalized_trans.replace('\r', ''))
-            base_html = base_html.replace('<!-- TRANSLATION_TEXT -->', safe_trans)
-
-        # 5. Lemmas Section Slot (Task 2.7, 3.8, R33, R24)
-        if 'lemmas' not in sections:
-            base_html = re.sub(r'<!-- SECTION_LEMMAS_START -->.*?<!-- SECTION_LEMMAS_END -->\s*', '', base_html, flags=re.DOTALL)
-        else:
-            h_lemmas = headings.get('lemmas', '')
-            if h_lemmas == '__default__':
-                h_lemmas = "Lemmas"
-            if h_lemmas:
-                if '<h3>Lemmas</h3>' in base_html:
-                    base_html = re.sub(r'<h3>Lemmas</h3>', f'<h3>{html.escape(h_lemmas)}</h3>', base_html)
-                else:
-                    base_html = base_html.replace(
-                        '<table id="lemma-table"',
-                        f'<h3>{html.escape(h_lemmas)}</h3>\n            <table id="lemma-table"'
-                    )
-            else:
-                base_html = re.sub(r'<h3>Lemmas</h3>\s*', '', base_html)
-
-            ctx_scroll = dict(ctx)
-            ctx_scroll['scrollable_cells'] = True
-            lemmas_sec_html = render_section('lemmas', ctx_scroll)
-            thead_m = re.search(r'<thead>(.*?)</thead>', lemmas_sec_html, re.DOTALL)
-            tbody_m = re.search(r'<tbody>(.*?)</tbody>', lemmas_sec_html, re.DOTALL)
-            if thead_m:
-                base_html = re.sub(r'<thead>.*?</thead>', f'<thead>{thead_m.group(1)}</thead>', base_html, flags=re.DOTALL)
-            if tbody_m:
-                base_html = base_html.replace('<!-- TABLE_ROWS -->', tbody_m.group(1).strip())
-            else:
-                base_html = base_html.replace('<!-- TABLE_ROWS -->', '')
-        base_html = base_html.replace('<!-- WORKSPACE_TAB_BAR -->', '')
-    else:
-        # Inject rendered container
-        start_marker = '<div class="kw-lookup-container">'
-        end_marker = '<script id="session-data"'
-        start_idx = base_html.find(start_marker)
-        end_idx = base_html.find(end_marker)
-        if start_idx != -1 and end_idx != -1:
-            base_html = base_html[:start_idx] + html_output + "\n\n    " + base_html[end_idx:]
-
-    # Offline CSS embedding if not disabled (Task 3.9, R27)
-    is_css_disabled = isinstance(goldendict, dict) and bool(goldendict.get('disable_css', False))
-    if is_css_disabled:
-        base_html = re.sub(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
-    else:
-        combined_css = get_bundled_css(web_dir)
-        if combined_css:
-            # Strip external /css/ link tags to prevent 404 errors in offline/GoldenDict mode
-            base_html = re.sub(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
-            base_html = base_html.replace('</head>', f'<style id="modular-css">\n{combined_css}\n</style>\n</head>')
-        base_html = base_html.replace('</head>', theme_style(resolve_theme_colors(config, theme), theme) + '</head>')
-
-    # Strip external /favicon.ico to prevent 404s in standalone/GoldenDict mode
-    base_html = re.sub(r'<link\b[^>]*\bhref=["\'][^"\']*favicon\.ico["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
-
-    # Inlined modular component scripts and application runtime for standalone execution
-    for script_rel in (
-        "types.js",
-        "state/store.js",
-        "components/SourceViewer.js",
-        "components/TranslationView.js",
-        "components/LemmaTable.js",
-        "components/WorkspaceTabs.js",
-        "services/sse.js",
-        "app.js",
-    ):
-        p_script = web_dir / "js" / script_rel
-        s_code = read_required_asset(p_script)
-        tag_to_replace = f'<script src="/js/{script_rel}"></script>'
-        if tag_to_replace in base_html:
-            base_html = base_html.replace(tag_to_replace, f'<script>\n{s_code}\n</script>')
-        elif script_rel == "app.js":
-            base_html = base_html.replace('</body>', f'<script>\n{s_code}\n</script>\n</body>')
-
-    if not effective_server_enabled:
-        for btn_id in ('kw-btn-save', 'kw-btn-update', 'kw-btn-retext', 'kw-btn-reword', 'kw-btn-export'):
-            base_html = re.sub(
-                rf'(<button\b[^>]*id="{btn_id}"[^>]*)>',
-                lambda m: (m.group(1) if 'disabled' in m.group(1) else m.group(1) + ' disabled') + ' title="Server interaction is disabled in this mode">',
-                base_html
-            )
-
-    return base_html
 
 def render_lookup_text(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):
     import re
@@ -14372,9 +14131,9 @@ def render_lookup_text(text, language, target_lang, config, resolved_paths, zid,
 
     return "\n".join(out).strip()
 
-def render_lookup_combined(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):
+def render_lookup_combined(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, **article_identity):
     import json
-    html_out = render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
+    html_out = render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, **article_identity)
     text_out = render_lookup_text(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
     return json.dumps({
         "html": html_out,
@@ -14804,7 +14563,7 @@ def core_lookup(
     elif current_fmt == 'text':
         out = render_lookup_text(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
     else:
-        out = render_lookup_combined(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
+        out = render_lookup_combined(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=session_zid, api_token=api_token, server_enabled=server_enabled, fingerprint=fingerprint)
 
     text_provenance = None
     if current_fmt == 'html' and out:
