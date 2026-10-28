@@ -296,3 +296,78 @@ def test_export_rejects_stale_fingerprint_before_any_export_effect(page, article
     expect(page.locator('.kw-dict-article')).to_have_attribute('data-state', 'failed')
     assert 'ROW_STALE' in page.get_by_role('status').inner_text()
     assert not list(favorites.glob('*.tsv'))
+
+
+def non_selection_values(snapshot):
+    index = snapshot['headers'].index('DeskSelected')
+    return [[value for i, value in enumerate(row) if i != index] for row in snapshot['data_rows']]
+
+
+def test_frequency_sorted_action_keeps_storage_order_and_unrelated_fields(page, article_session, article_page, running_controller, tmp_path):
+    render, restored, favorites = article_session
+    _, server, _ = running_controller
+    frequency = tmp_path / 'frequency.txt'
+    frequency.write_text('Baum\nHaus\n', encoding='utf-8')
+    server.config.set('languages', 'de_lemma_index', str(frequency))
+    before = restored()
+    requests = []
+    page.on('request', lambda request: requests.append(request) if '/session/save' in request.url else None)
+    article_page(render())
+    assert page.locator('tr[data-row-id="0"] td.col-lemma').inner_text() == 'Baum'
+    change(page, 0, True)
+    assert selected(restored) == {(1, 7): False, (2, 0): True, (3, 0): False}
+    assert requests[0].post_data_json['deltas'] == [dict(row_id=1, sentence_idx=2, token_order=0,
+                                                      column='DeskSelected', value='1')]
+    after = restored()
+    assert before['headers'] == after['headers']
+    assert non_selection_values(before) == non_selection_values(after)
+    with page.expect_response('**/session/export'):
+        page.get_by_role('button', name='Export to Anki').click()
+    expect(page.get_by_role('status')).to_have_text('Export acknowledged.')
+    _, headers, rows = desk.load_tsv_rows(next(favorites.glob('*.tsv')))
+    assert [(row[headers.index('WordSource')], row[headers.index('SentenceSourceIndex')],
+             row[headers.index('TokenOrder')]) for row in rows] == [('Baum', '2', '0')]
+
+
+@pytest.mark.parametrize('theme,width', [('compact', 620), ('compact', 1280), ('dark', 620), ('light', 1280)])
+def test_held_selection_and_error_feedback_preserve_box_metrics(page, article_session, article_page, theme, width):
+    render, _, _ = article_session
+    page.set_viewport_size({'width': width, 'height': 900})
+    article_page(render(options={'theme': theme}))
+    boxes = """() => Array.from(document.querySelectorAll('tr[data-row-id],td,input,.kw-actions-bar,button,.kw-interactive-status'),
+        el => {const r=el.getBoundingClientRect();return [r.x,r.y,r.width,r.height]})"""
+    initial = page.evaluate(boxes)
+    held = []
+    page.route('**/session/save', lambda route: held.append(route))
+    page.locator('tr[data-row-id="0"] input').check()
+    wait_for_held(page, held, 1)
+    assert page.evaluate(boxes) == initial
+    held[0].abort()
+    expect(page.locator('.kw-dict-article')).to_have_attribute('data-state', 'failed')
+    assert page.evaluate(boxes) == initial
+
+
+def test_hostile_corpus_values_are_literal_and_initialize_no_extra_requests(page, article_session, running_controller):
+    _, restored, _ = article_session
+    _, server, _ = running_controller
+    attack = '<img src=x onerror="window.pwned=1"></script><script>window.pwned=2</script>'
+    data = restored()
+    rows = [list(row) for row in data['data_rows']]
+    rows[0][data['headers'].index('WordSource')] = attack
+    rows[0][data['headers'].index('WordDestination')] = attack
+    html = desk.render_lookup_html(attack, 'de', 'en', server.config, server.resolved_paths, ZID,
+        dict(server_enabled=True, server_host='127.0.0.1', server_port=server.server_port,
+             sections=['source','translation','lemmas'], lemma_columns=['lemma','translation']),
+        [], data['headers'], rows, attack, session_zid=ZID, api_token='test-controller-api-key')
+    requests, errors = [], []
+    page.route('**/*', lambda route: (requests.append(route.request.url), route.abort()))
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.set_content(html)
+    expect(page.locator('.kw-dict-article')).to_have_attribute('data-state', 'idle')
+    assert page.evaluate('typeof window.pwned') == 'undefined'
+    assert page.locator('img').count() == 0
+    assert page.locator('#source-container').inner_text() == attack
+    assert page.locator('#translation-container').inner_text() == attack
+    assert page.locator('tr[data-row-id="0"] td.col-lemma').inner_text() == attack
+    assert page.locator('tbody tr').count() == 3
+    assert requests == errors == []

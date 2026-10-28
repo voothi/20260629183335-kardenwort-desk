@@ -1,7 +1,9 @@
 import pytest
 from pathlib import Path
 import json
+import re
 import kardenwort_desk
+from tests.desktop_component_fixture import render_desktop_components
 
 def test_playwright_dom_validation(page, tmp_path):
     tsv_path = tmp_path / "test.tsv"
@@ -11,7 +13,7 @@ def test_playwright_dom_validation(page, tmp_path):
     headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"]
     data_rows = [["Haus", "дом", "", ""]]
 
-    html = kardenwort_desk.render_lookup_html(
+    html = render_desktop_components(
         text="Das Haus",
         language="de",
         target_lang="ru",
@@ -25,10 +27,11 @@ def test_playwright_dom_validation(page, tmp_path):
         sentence_translation="The house"
     )
 
-    html = html.replace("Das Haus", '<span class="word highlight-purple" data-word-idx="0">Das</span> <span class="word highlight-orange" data-word-idx="1">Haus</span>')
+    html = re.sub(r'(<div[^>]*id="source-container"[^>]*>).*?(</div>)',
+        lambda m: m[1] + '<span class="word highlight-purple" data-word-idx="0">Das</span> <span class="word highlight-orange" data-word-idx="1">Haus</span>' + m[2], html, flags=re.S)
 
     # Ensure it's valid HTML
-    assert "<html>" in html
+    assert "<html" in html
 
     # 2.3 Load HTML into page
     page.set_content(html)

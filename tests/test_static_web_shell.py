@@ -693,6 +693,7 @@ def test_render_lookup_html_preserves_shell_containers_and_offline_stripping():
     """
     desk_dir = Path(__file__).resolve().parent.parent
     config, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
+    goldendict["server_enabled"] = False
     headers = ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination"]
     data_rows = [["Fuchs", "Fuchs", "n.", "лиса"]]
 
@@ -711,13 +712,15 @@ def test_render_lookup_html_preserves_shell_containers_and_offline_stripping():
     )
 
     assert 'id="source-container"' in html
-    assert 'id="workspace-tab-bar"' in html
-    assert 'id="kw-action-toolbar"' in html
-    assert 'id="kw-lang-modal"' in html
-    assert 'id="kw-toast-container"' in html
+    assert 'id="workspace-tab-bar"' not in html
+    assert 'id="kw-action-toolbar"' not in html
+    assert 'id="kw-lang-modal"' not in html
+    assert 'id="kw-toast-container"' not in html
 
     # 2. Offline modular CSS inlining and link stripping (R27)
-    assert '<style id="modular-css">' in html
+    assert '<style>' in html
+    assert 'id="modular-css"' not in html
+    assert '<script' not in html
     assert '<link rel="stylesheet" href="/css/variables.css">' not in html
     assert '<link rel="stylesheet" href="/css/tokens.css">' not in html
     assert '<link rel="stylesheet" href="/css/table.css">' not in html
@@ -1578,20 +1581,10 @@ def test_standalone_html_bundles_all_components(tmp_path):
         encoding="utf-8"
     )
 
-    html = desk.render_lookup_html(
-        text="Haus",
-        language="de",
-        target_lang="ru",
-        config=config,
-        resolved_paths=resolved_paths,
-        zid="20261019223000",
-        goldendict=goldendict,
-        comments=[],
-        headers=["Quotation", "WordSource", "WordDestination", "SentenceSourceIndex", "SentenceSource", "SentenceDestination", "DeskSelected"],
-        data_rows=[["Haus", "Haus", "дом", "1", "Das Haus", "Дом", "1"]],
-        sentence_translation="Дом.",
-        session_zid="20261019223000",
-    )
+    # Component bundling is the standalone desktop contract; Dict owns separate assets.
+    html = desk.render_declarative_web_shell({'ui_config': {}, 'session_data': {
+        'session_zid': '20261019223000', 'language': 'de', 'target_lang': 'ru',
+        'source_text': 'Haus', 'headers': ['WordSource'], 'data_rows': [['Haus']]}})
 
     # Verify that external script tags were replaced with inlined scripts
     assert '<script src="/js/components/SourceViewer.js"></script>' not in html

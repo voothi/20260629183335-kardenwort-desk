@@ -5,10 +5,11 @@ import urllib.request
 
 import pytest
 
+from tests.desktop_component_fixture import render_desktop_components
 import kardenwort_desk as desk
 from tests.test_dict_row_identity_regressions import TRANSPORT
 from tests.test_dict_transport_audit_regressions import edit_translation, mount_article
-from tests.test_goldendict_article_transport_regressions import render_test_lookup
+from tests.test_goldendict_article_transport_regressions import render_test_desktop
 from tests.test_controller_integration import running_controller  # noqa: F401
 from tests.test_release_boundary_contracts import (
     open_browser, seed_session, use_backend, wait_for_held,
@@ -17,7 +18,7 @@ from tests.test_release_boundary_contracts import (
 
 def lookup(page, cfg, paths, gd, headers, rows):
     gd.update(server_enabled=True, server_api_key="test-controller-api-key")
-    html = desk.render_lookup_html("Haus. Haus.", "de", "en", cfg, paths, "20261027225852", gd,
+    html = render_desktop_components("Haus. Haus.", "de", "en", cfg, paths, "20261027225852", gd,
                                    [], headers, rows, "House. House.", session_zid="20261027225852",
                                    server_enabled=True, api_token="test-controller-api-key")
     page.set_content(html.replace("<head>", "<head>" + TRANSPORT))
@@ -155,7 +156,7 @@ def test_different_origin_article_receives_authenticated_membership_stream(runni
     headers = ['WordSource', 'WordDestination', 'SentenceSourceIndex', 'TokenOrder', 'DeskSelected']
     rows = [['Haus', 'house', '1', '0', '0']]
     adapter.save_session(session_zid=zid, headers=headers, data_rows=rows, source_language='de')
-    html = render_test_lookup(server_enabled=True, server_url=url, api_token='test-controller-api-key',
+    html = render_test_desktop(server_enabled=True, server_url=url, api_token='test-controller-api-key',
                               session_zid=zid, headers=headers, data_rows=rows)
     streams = []
     page.on('request', lambda request: streams.append({

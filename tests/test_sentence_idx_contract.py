@@ -1,6 +1,7 @@
 from pathlib import Path
 import pytest
 import kardenwort_desk
+from tests.desktop_component_fixture import render_desktop_components
 import kardenwort_controller
 from kardenwort_controller import SessionArbiter
 from kardenwort_desk import StructuredError
@@ -323,7 +324,7 @@ def test_find_token_data_sentence_coordinate(page):
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
     headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"]
     data_rows = [["Haus", "дом", "", ""]]
-    html = kardenwort_desk.render_lookup_html(
+    html = render_desktop_components(
         text="Das Haus",
         language="de",
         target_lang="ru",

@@ -57,7 +57,7 @@
     window.isServerDisabled = isServerDisabled;
 
     /** @param {HTMLElement} row @returns {OccurrenceTarget[]} */
-    function getLookupRowTargets(row) {
+    function getRowOccurrenceTargets(row) {
         var targets = JSON.parse((row && row.getAttribute('data-occurrence-targets')) || '[]');
         if (!Array.isArray(targets) || !targets.every(function(target) {
             return target && /^[0-9]+$/.test(String(target.sentence_idx)) && Number(target.sentence_idx) > 0 && /^[0-9]+$/.test(String(target.token_order));
@@ -65,8 +65,8 @@
         return targets;
     }
 
-    function getLookupEditTarget(row) {
-        var targets = getLookupRowTargets(row);
+    function getRowEditTarget(row) {
+        var targets = getRowOccurrenceTargets(row);
         if (targets.length === 1) return targets[0];
         var selections = (window.AppState && window.AppState.activeTokenSelections) || [];
         var selected = targets.filter(function(target) {
@@ -77,9 +77,9 @@
         return selected.length === 1 ? selected[0] : null;
     }
 
-    function isLookupOccurrenceEdit(row, target) {
-        return isLookupMode() && target && target.closest && target.closest('td.editable') &&
-            getLookupRowTargets(row).length > 1 && getLookupEditTarget(row);
+    function isOccurrenceEdit(row, target) {
+        return (isLookupMode() || row.hasAttribute('data-occurrence-targets')) && target && target.closest && target.closest('td.editable') &&
+            getRowOccurrenceTargets(row).length > 1 && getRowEditTarget(row);
     }
 
     /** @param {string} path @returns {string} */
@@ -6226,7 +6226,7 @@
             if (target && target.tagName === 'INPUT') {
                 return;
             }
-            if (e.button === 0 && isLookupOccurrenceEdit(row, target)) return;
+            if (e.button === 0 && isOccurrenceEdit(row, target)) return;
             if (e.button !== 0 && e.button !== 2) {
                 return;
             }
@@ -7860,8 +7860,8 @@
             var rowId = trParent.getAttribute('data-row-id');
             var tokenOrder = trParent.getAttribute('data-token-order');
             var sentenceIdx = trParent.getAttribute('data-sentence-idx');
-            if (isLookupMode()) {
-                var editTarget = getLookupEditTarget(trParent);
+            if (isLookupMode() || trParent.hasAttribute('data-occurrence-targets')) {
+                var editTarget = getRowEditTarget(trParent);
                 if (!editTarget) {
                     window.showToast('Edit unavailable: select one occurrence before editing a merged row', 'error');
                     return;
@@ -7869,7 +7869,7 @@
                 tokenOrder = String(editTarget.token_order);
                 sentenceIdx = String(editTarget.sentence_idx);
             }
-            if (isLookupMode() && (!/^[0-9]+$/.test(tokenOrder || '') || !/^[0-9]+$/.test(sentenceIdx || '') || Number(sentenceIdx) < 1)) {
+            if ((isLookupMode() || trParent.hasAttribute('data-occurrence-targets')) && (!/^[0-9]+$/.test(tokenOrder || '') || !/^[0-9]+$/.test(sentenceIdx || '') || Number(sentenceIdx) < 1)) {
                 window.showToast('Edit unavailable: missing or ambiguous occurrence identity', 'error');
                 return;
             }
@@ -9627,8 +9627,8 @@
                         var trId = String(tr.getAttribute('data-row-id'));
                         var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(trId));
                         if (isTrSel) {
-                            if (isLookupMode()) {
-                                var rowTargets = getLookupRowTargets(tr);
+                            if (isLookupMode() || tr.hasAttribute('data-occurrence-targets')) {
+                                var rowTargets = getRowOccurrenceTargets(tr);
                                 if (!rowTargets.length) {
                                     window.showToast('Re-word unavailable: missing occurrence identity', 'error');
                                     return;

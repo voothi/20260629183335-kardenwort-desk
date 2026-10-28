@@ -17,12 +17,14 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import expect
 
+from tests.desktop_component_fixture import render_desktop_components
 import kardenwort_desk as desk
 from kardenwort_desk import SqliteStorageAdapter, core_edit_save, StructuredError
 from tests.test_controller_integration import running_controller  # noqa: F401
 
 
-def render_test_lookup(
+def _render_test_document(
+    renderer,
     text="Das Haus. Der Baum.",
     language="de",
     target_lang="ru",
@@ -57,7 +59,7 @@ def render_test_lookup(
             ["Baum", "Baum", "дерево", "2", "1", "0"],
         ]
 
-    return desk.render_lookup_html(
+    return renderer(
         text,
         language,
         target_lang,
@@ -75,75 +77,38 @@ def render_test_lookup(
     )
 
 
+def render_test_lookup(**kwargs):
+    return _render_test_document(desk.render_lookup_html, **kwargs)
+
+
+def render_test_desktop(**kwargs):
+    return _render_test_document(render_desktop_components, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Task 1.2: Fresh-page offline regressions with network blocked
 # ---------------------------------------------------------------------------
 
 def test_1_2_offline_article_asset_closure_and_readable_output(page):
-    """
-    Offline article with network blocked:
-    1. Standalone asset closure: no external /js/app.js, /favicon.ico, or external stylesheet links.
-    2. Readable configured output: source text, translation, table rows rendered.
-    3. No live API credentials in emitted HTML or bootstrap payload.
-    4. Backend-dependent controls (Save, Update, Re-text, Re-word, Export) are NOT
-       enabled handlerless buttons.
-    """
+    # Restoration requires an actual static article, not disabled desktop controls.
     html = render_test_lookup(server_enabled=False, api_token="secret-live-token")
-
-    # Contract 1: Asset closure in static HTML
-    assert '<script src="/js/app.js"></script>' not in html, (
-        "Offline article must not contain unresolved external /js/app.js reference"
-    )
-    assert '<link rel="icon" type="image/x-icon" href="/favicon.ico">' not in html, (
-        "Offline article must not contain root-relative /favicon.ico reference"
-    )
-    assert not re.search(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>', html, re.IGNORECASE), (
-        "Offline article must embed all CSS, not leave external stylesheet links"
-    )
-
-    # Contract 2: No live credentials in static output
-    assert "secret-live-token" not in html, (
-        "Static server-disabled article must not disclose live API credentials"
-    )
-
-    # Contract 3: Backend controls must be disabled in offline HTML
-    for btn_id in ("kw-btn-save", "kw-btn-update", "kw-btn-retext", "kw-btn-reword", "kw-btn-export"):
-        m = re.search(rf'<button\b[^>]*id="{btn_id}"[^>]*>', html)
-        assert m is not None, f"Expected button {btn_id} in toolbar"
-        btn_tag = m.group(0)
-        assert "disabled" in btn_tag, f"Backend button {btn_id} must be disabled in static mode: {btn_tag}"
-
-    # Contract 4: Fresh page with network completely blocked
-    def block_network(route):
-        # Allow nothing except data URLs or page content
-        route.abort()
-
-    page.route("**/*", block_network)
-
-    # Load offline HTML into page
+    assert "secret-live-token" not in html
+    assert not re.search(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>', html, re.I)
+    assert 'src="/js/' not in html and 'href="/favicon.ico"' not in html
+    requests = []
+    page.on('request', lambda request: requests.append(request.url))
+    page.route('**/*', lambda route: route.abort())
     page.set_content(html)
-
-    # Readable content verification
-    source_el = page.locator("#source-container")
-    expect(source_el).to_be_visible()
-    assert "Das Haus." in source_el.inner_text()
-
-    trans_el = page.locator("#translation-container")
-    expect(trans_el).to_be_visible()
-    assert "Дом." in trans_el.inner_text()
-
-    row0_lemma = page.locator('tr[data-row-id="0"] td.col-lemma, tr[data-row-id="0"] td:nth-child(2)')
-    assert "Haus" in row0_lemma.first.inner_text()
-
-    # Verify buttons in DOM
-    for btn_id in ("kw-btn-save", "kw-btn-update", "kw-btn-retext", "kw-btn-reword", "kw-btn-export"):
-        btn = page.locator(f"#{btn_id}")
-        assert btn.is_disabled(), f"Button #{btn_id} must be disabled in offline DOM"
+    expect(page.locator('#source-container')).to_be_visible()
+    assert 'Das Haus.' in page.locator('#source-container').inner_text()
+    expect(page.locator('#translation-container')).to_be_visible()
+    assert 'Дом.' in page.locator('#translation-container').inner_text()
+    assert 'Haus' in page.locator('tr[data-row-id="0"] td.col-lemma').inner_text()
+    assert page.locator('button, input, script, [onclick], [onchange]').count() == 0
+    page.evaluate("window.dispatchEvent(new Event('pagehide'))")
+    assert requests == []
 
 
-# ---------------------------------------------------------------------------
-# Task 1.3: Different-origin article tests against ephemeral controller
-# ---------------------------------------------------------------------------
 
 def test_1_3_different_origin_article_request_destinations(running_controller, page):
     """
@@ -186,7 +151,7 @@ def test_1_3_different_origin_article_request_destinations(running_controller, p
         ]
     )
 
-    html = render_test_lookup(
+    html = render_test_desktop(
         server_enabled=True,
         server_url=server_url,
         api_token="test-controller-api-key",
@@ -241,7 +206,7 @@ def test_1_4_same_origin_and_native_save_contracts(page):
     - Delta acknowledgment clears dirty state.
     - Native ahkCall('persist_selection') remains supported when ahkCall is present.
     """
-    html = render_test_lookup(
+    html = render_test_desktop(
         server_enabled=True,
         server_url="http://127.0.0.1:18335",
         api_token="test-token"
@@ -323,7 +288,7 @@ def test_2_1_article_commands_and_autosave_reach_configured_backend(running_cont
         ]
     )
 
-    html = render_test_lookup(
+    html = render_test_desktop(
         server_enabled=True,
         server_url=server_url,
         api_token="test-controller-api-key",
@@ -448,60 +413,19 @@ def test_2_1_article_commands_and_autosave_reach_configured_backend(running_cont
 
 
 def test_2_4_action_availability_projection_when_server_disabled(page):
-    """
-    Tasks 2.4 & 2.7: With server interaction disabled:
-    - Backend controls are disabled with accessible title.
-    - Click and keyboard invocations show non-fatal warning toast.
-    - Zero network requests are dispatched; no implicit server is launched.
-    """
-    html = render_test_lookup(
-        server_enabled=False,
-        server_url="",
-        api_token="",
-    )
+    # No toolbar, application methods or mutation-capable controls exist offline.
+    html = render_test_lookup(server_enabled=False, api_token='')
+    requests = []
+    page.on('request', lambda request: requests.append(request.url))
+    page.route('**/*', lambda route: route.abort())
+    page.set_content(html)
+    assert page.locator('button, input, script').count() == 0
+    assert page.locator('#kw-action-toolbar, #kw-lang-modal').count() == 0
+    assert page.evaluate("['onSaveClick','onRetextClick','onRewordClick','onSendToAnkiClick','onUpdateClick'].every(name => typeof window[name] === 'undefined')")
+    assert 'дом' in page.get_by_role('table').inner_text()
+    page.evaluate("window.dispatchEvent(new Event('pagehide'))")
+    assert requests == []
 
-    intercepted = []
-    page.route("**/*", lambda route: (
-        intercepted.append(route.request.url),
-        route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html) if route.request.url == "http://article.invalid/article.html" else route.abort()
-    ))
-    page.goto("http://article.invalid/article.html")
-    page.wait_for_function("typeof window.updateToolbarState === 'function'")
-
-    # Check button disabled states and titles
-    for btn_id in ["kw-btn-save", "kw-btn-retext", "kw-btn-reword", "kw-btn-export"]:
-        btn = page.locator(f"#{btn_id}")
-        expect(btn).to_be_disabled()
-        assert btn.get_attribute("title") == "Server interaction is disabled in configuration"
-
-    intercepted.clear()
-
-    # Invocations show warning toast and dispatch zero network requests
-    page.evaluate("""() => {
-        window.__toasts = [];
-        const origShowToast = window.showToast;
-        window.showToast = function(msg, type) {
-            window.__toasts.push({msg: msg, type: type});
-            if (origShowToast) origShowToast(msg, type);
-        };
-    }""")
-
-    page.evaluate("window.onSaveClick()")
-    page.evaluate("window.onRetextClick()")
-    page.evaluate("window.onRewordClick()")
-    page.evaluate("window.onSendToAnkiClick()")
-    page.evaluate("window.onUpdateClick()")
-    page.wait_for_timeout(200)
-
-    # All dispatched zero requests
-    assert len(intercepted) == 0, f"Expected zero network requests when server disabled, got {intercepted}"
-
-    # Toast feedback received
-    captured_toasts = page.evaluate("window.__toasts")
-    assert len(captured_toasts) >= 5
-    for t in captured_toasts:
-        assert t["type"] == "warning"
-        assert "disabled" in t["msg"].lower()
 
 
 def test_2_5_credential_safety_and_authentication_failure_mutation(running_controller, page):
@@ -542,7 +466,7 @@ def test_2_5_credential_safety_and_authentication_failure_mutation(running_contr
         else route.continue_()
     ))
     page.goto("http://article.invalid/article.html")
-    page.wait_for_function("typeof window.getApiToken === 'function'")
+    expect(page.locator('.kw-dict-article')).to_have_attribute('data-state', 'idle')
 
     # 1. No token in localStorage / sessionStorage
     ls_keys = page.evaluate("Object.keys(localStorage)")

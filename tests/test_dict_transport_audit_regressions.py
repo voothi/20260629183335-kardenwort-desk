@@ -15,7 +15,7 @@ from playwright.sync_api import expect
 import kardenwort_desk as desk
 from tests.test_controller_integration import running_controller  # noqa: F401
 from tests.test_dict_row_identity_regressions import TRANSPORT
-from tests.test_goldendict_article_transport_regressions import render_test_lookup
+from tests.test_goldendict_article_transport_regressions import render_test_lookup, render_test_desktop
 
 ZID = "20261027221743"
 HEADERS = ["Quotation", "WordSource", "WordDestination", "SentenceSourceIndex", "TokenOrder", "DeskSelected"]
@@ -129,17 +129,18 @@ def edit_translation(page, row, value):
 
 def test_missing_lookup_sentence_cannot_emit_guessed_edit(page):
     html = render_test_lookup(server_enabled=True,
-                              headers=["Quotation", "WordSource", "WordDestination", "TokenOrder", "DeskSelected"],
-                              data_rows=[["Baum", "Baum", "tree", "0", "0"]])
-    page.route("**/*", lambda route: route.abort())
+        headers=["Quotation", "WordSource", "WordDestination", "TokenOrder", "DeskSelected"],
+        data_rows=[["Baum", "Baum", "tree", "0", "0"]])
+    requests = []
+    page.on('request', lambda request: requests.append(request.url))
+    page.route('**/*', lambda route: route.abort())
     page.set_content(html)
-    cell = page.locator('tr[data-row-id="0"] td.col-translation')
-    cell.dblclick()
-    field = cell.locator("input.edit-input")
-    if field.count():
-        field.fill("guessed")
-        field.press("Enter")
-    assert json.loads(page.evaluate("getDeltas()")) == [], "Incomplete identity produced an edit for invented sentence 1"
+    expect(page.locator('.kw-dict-article')).to_have_attribute('data-state', 'unavailable')
+    page.locator('tr[data-row-id="0"] td.col-translation').dblclick()
+    assert page.locator('input.edit-input').count() == 0
+    assert page.get_by_role('checkbox').is_disabled()
+    assert page.evaluate("typeof window.getDeltas") == 'undefined'
+    assert requests == []
 
 
 @pytest.mark.parametrize("action", ["playAudio('Haus', 'de')", "retrySession()", "retryRow(0)"])
@@ -172,7 +173,7 @@ def test_real_different_origin_save_persists_exact_occurrence(running_controller
                          data_rows=[list(r) for r in ROWS], sentences=[
                              {"session_zid": ZID, "sentence_index": 1, "sentence_source": "Haus."},
                              {"session_zid": ZID, "sentence_index": 2, "sentence_source": "Baum."}])
-    html = render_test_lookup(server_enabled=True, server_url=url, api_token="test-controller-api-key",
+    html = render_test_desktop(server_enabled=True, server_url=url, api_token="test-controller-api-key",
                               session_zid=ZID, headers=HEADERS, data_rows=[list(r) for r in ROWS])
     failures = []
     responses = []
@@ -189,7 +190,7 @@ def test_real_different_origin_save_persists_exact_occurrence(running_controller
 
 def test_reword_selected_sentence_keeps_complete_target_descriptor(running_controller, page):
     url, server, adapter = running_controller
-    html = render_test_lookup(server_enabled=True, server_url=url, api_token="test-controller-api-key",
+    html = render_test_desktop(server_enabled=True, server_url=url, api_token="test-controller-api-key",
                               session_zid=ZID, headers=HEADERS, data_rows=[list(r) for r in ROWS])
     # Inspect the request contract independently of browser transport capability.
     page.set_content(html.replace("<head>", "<head>" + TRANSPORT))

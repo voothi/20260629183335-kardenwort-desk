@@ -17,7 +17,7 @@ from tests.test_release_boundary_contracts import (
 )
 
 
-@pytest.mark.parametrize('mode', ['lookup', 'container'])
+@pytest.mark.parametrize('mode', ['desktop', 'container'])
 @pytest.mark.parametrize('local_selected', [False, True])
 def test_membership_with_many_pending_selections_has_linear_dom_work(page, mode, local_selected):
     from scripts.benchmark_release_interactions import render_fixture, TRANSPORT

@@ -1,4 +1,4 @@
-"""Behavioral regressions reproducing Dict row identity and selection defects.
+"""Desktop identity/selection component contracts rehomed from the old Dict shell.
 
 Phase 1 contracts:
 - 1.2 Checkbox display row ID vs token order mismatch: missing selection and deltas before fix.
@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import expect
 
+from tests.desktop_component_fixture import render_desktop_components
 import kardenwort_desk as desk
 from kardenwort_db import KardenwortDB
 from kardenwort_desk import SqliteStorageAdapter, core_edit_save, StructuredError
@@ -45,7 +46,7 @@ window.fetch = function(url, options) {
 </script>"""
 
 
-def make_lookup_page(page, data_rows, headers=None, session_zid="20261026093717", text="Das Haus. Der Baum.", language="de", target_lang="ru"):
+def make_desktop_page(page, data_rows, headers=None, session_zid="20261026093717", text="Das Haus. Der Baum.", language="de", target_lang="ru"):
     config, paths, goldendict, _ = desk.load_config()
     goldendict["server_enabled"] = True
     goldendict["server_api_key"] = "test-controller-api-key"
@@ -54,7 +55,7 @@ def make_lookup_page(page, data_rows, headers=None, session_zid="20261026093717"
             "Quotation", "WordSource", "WordDestination",
             "SentenceSourceIndex", "TokenOrder", "DeskSelected"
         ]
-    html = desk.render_lookup_html(
+    html = render_desktop_components(
         text, language, target_lang, config, paths, session_zid, goldendict,
         [], headers, data_rows, "The house. The tree.",
         session_zid=session_zid, api_token="test-controller-api-key", server_enabled=True,
@@ -85,7 +86,7 @@ def test_1_2_checkbox_row_id_differs_from_token_order(page):
         ["Haus", "Haus", "house", "1", "5", "0"],
         ["Baum", "Baum", "tree", "1", "9", "0"],
     ]
-    make_lookup_page(page, data_rows, headers=headers)
+    make_desktop_page(page, data_rows, headers=headers)
 
     # Click the checkbox on display row 1 (Haus, token order 9)
     cb_row1 = page.locator('tr[data-row-id="1"] input.kw-tag-checkbox')
@@ -178,7 +179,7 @@ def test_1_3_isolated_sqlite_sentence_duplicate_token_order(tmp_path, page):
     assert (words_before[1]["sentence_index"], words_before[1]["token_order"], words_before[1]["word_destination"]) == (2, 0, "tree")
 
     # Render lookup HTML
-    html = desk.render_lookup_html(
+    html = render_desktop_components(
         "Das Haus. Der Baum.", "de", "en", cfg, paths, session_zid, goldendict,
         [], headers, initial_rows, "The house. The tree.",
         session_zid=session_zid, api_token="test-controller-api-key", server_enabled=True,
@@ -301,7 +302,7 @@ def test_1_4_checkbox_synchronizes_on_local_deselection(page):
         ["Haus", "Haus", "house", "1", "0", "1"],
         ["Baum", "Baum", "tree", "1", "1", "0"],
     ]
-    make_lookup_page(page, data_rows, headers=headers)
+    make_desktop_page(page, data_rows, headers=headers)
 
     cb_row0 = page.locator('tr[data-row-id="0"] input.kw-tag-checkbox')
     expect(cb_row0).to_be_checked()
@@ -322,7 +323,7 @@ def test_1_4_checkbox_synchronizes_on_undo(page):
     data_rows = [
         ["Haus", "Haus", "house", "1", "0", "0"],
     ]
-    make_lookup_page(page, data_rows, headers=headers)
+    make_desktop_page(page, data_rows, headers=headers)
 
     cb_row0 = page.locator('tr[data-row-id="0"] input.kw-tag-checkbox')
     expect(cb_row0).not_to_be_checked()
@@ -354,7 +355,7 @@ def test_1_4_checkbox_synchronizes_on_remote_membership(page):
         ["Haus", "Haus", "house", "1", "0", "0"],
         ["Baum", "Baum", "tree", "1", "1", "1"],
     ]
-    make_lookup_page(page, data_rows, headers=headers)
+    make_desktop_page(page, data_rows, headers=headers)
 
     cb_row0 = page.locator('tr[data-row-id="0"] input.kw-tag-checkbox')
     cb_row1 = page.locator('tr[data-row-id="1"] input.kw-tag-checkbox')
@@ -378,7 +379,7 @@ def test_1_4_checkbox_reversal_during_held_save_retains_latest_intent(page):
     data_rows = [
         ["Haus", "Haus", "house", "1", "0", "0"],
     ]
-    make_lookup_page(page, data_rows, headers=headers)
+    make_desktop_page(page, data_rows, headers=headers)
 
     page.evaluate("window.__holdSaves = true")
 

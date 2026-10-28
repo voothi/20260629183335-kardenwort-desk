@@ -11,6 +11,7 @@ import pytest
 from playwright.sync_api import expect
 
 import kardenwort_desk
+from tests.desktop_component_fixture import render_desktop_components
 from tests.test_controller_integration import running_controller  # noqa: F401
 
 
@@ -168,7 +169,7 @@ def test_f1_non_german_lookup_language_metadata(page, src_lang, tgt_lang, src_wo
     goldendict["server_enabled"] = True
     goldendict["server_api_key"] = "test-controller-api-key"
     zid = "20261025211003"
-    html = kardenwort_desk.render_lookup_html(
+    html = render_desktop_components(
         src_sent, src_lang, tgt_lang, config, paths, zid, goldendict,
         [], ["WordSource", "WordDestination", "DeskSelected", "SentenceSourceIndex", "TokenOrder"], [[src_word, tgt_word, "1", "1", "0"]], tgt_sent,
         session_zid=zid, api_token="test-controller-api-key", server_enabled=True,
@@ -233,7 +234,7 @@ def test_phase2_missing_language_rejection_without_template_fallback(page):
     goldendict["server_enabled"] = True
     goldendict["server_api_key"] = "test-controller-api-key"
     zid = "20261025211003"
-    html = kardenwort_desk.render_lookup_html(
+    html = render_desktop_components(
         "Some text.", "", "", config, paths, zid, goldendict,
         [], ["WordSource", "WordDestination", "DeskSelected"], [["some", "quelque", "0"]], "Quelque texte.",
         session_zid=zid, api_token="test-controller-api-key", server_enabled=True,
@@ -275,7 +276,8 @@ def test_phase2_css_enabled_and_disabled_renderers(page):
         session_zid=zid, api_token="test-controller-api-key", server_enabled=True,
     )
     assert not any("<link" in l and "/css/" in l for l in html_lookup_on.splitlines())
-    assert '<style id="modular-css">' in html_lookup_on
+    assert '<style>' in html_lookup_on
+    assert 'id="modular-css"' not in html_lookup_on
 
     # 3. Declarative web shell with CSS disabled
     shell_off = kardenwort_desk.render_declarative_web_shell(

@@ -57,10 +57,6 @@ def render_fixture(desk, count, mode):
     config.set('rendering', 'auto_save_on_edit', 'false')
     gd.update(server_enabled=True, filter_selected_only=False, auto_save_on_edit=False,
               lemma_columns=['lemma', 'translation'], sections=['source', 'translation', 'lemmas'])
-    if mode == 'lookup':
-        return desk.render_lookup_html(' '.join(lemmas), 'de', 'en', config, paths, ZID, gd,
-                                      [], HEADERS, rows, 'A complete translation.', session_zid=ZID,
-                                      server_enabled=True)
     card_words = [dict(row_id=i, token_order=i, sentence_idx=i+1, word=lemma, inflected=lemma,
                        lemma=lemma, sentence_text=lemma+'.', translation='translation', selected='0')
                   for i, lemma in enumerate(lemmas)]
@@ -70,6 +66,8 @@ def render_fixture(desk, count, mode):
         session_data=dict(session_zid=ZID, zid=ZID, language='de', target_lang='en', server_enabled=True,
                           source_text=' '.join(lemmas), sentence_translation='A complete translation.',
                           headers=HEADERS, data_rows=rows))
+    if mode == 'desktop':
+        bootstrap.update(delivery_mode='single', sentence_cards=[])
     return desk.render_declarative_web_shell(bootstrap, theme='dark')
 
 
@@ -200,7 +198,7 @@ def worker(args):
                 for path in assets:
                     path.write_bytes((ROOT/'baseline'/path.relative_to(ROOT)).read_bytes() if version=='baseline' else current[path])
                 for size in args.sizes:
-                    for mode in ('lookup', 'container'):
+                    for mode in ('desktop', 'container'):
                         profile = output/f'{version}-{size}-{mode}-init.cpuprofile' if args.profile_init else None
                         case = browser_case(browser, desk, size, mode, args.samples, profile)
                         case['version'] = version

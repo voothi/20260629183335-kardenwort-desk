@@ -20,13 +20,16 @@ from scripts.release_audit_baseline import pairwise_matrix
 
 
 @pytest.mark.parametrize('warm', [False, True])
-@pytest.mark.parametrize('asset', ['index.html', 'css/table.css', 'js/app.js', 'js/components/WorkspaceTabs.js'])
-@pytest.mark.parametrize('renderer', ['desktop', 'lookup'])
+@pytest.mark.parametrize('renderer,asset', [
+    ('desktop','index.html'), ('desktop','css/table.css'), ('desktop','js/app.js'),
+    ('desktop','js/components/WorkspaceTabs.js'), ('lookup','dict/article.html'),
+    ('lookup','dict/article.css'), ('lookup','dict/article.js')])
 def test_required_assets_cold_and_warm(tmp_path, monkeypatch, asset, warm, renderer):
     root = Path(desk.__file__).parent
     shutil.copytree(root / 'web', tmp_path / 'web')
     monkeypatch.setattr(desk, '__file__', str(tmp_path / 'kardenwort_desk.py'))
     config, paths, goldendict, _ = desk.load_config(root / 'config.ini')
+    goldendict.update(server_enabled=True, disable_css=False)
 
     def render():
         if renderer == 'desktop':
@@ -241,11 +244,14 @@ def test_native_snapshot_ack_keeps_later_selection(page, tmp_path):
     assert json.loads(page.evaluate('getDeltas()'))
 
 
-@pytest.mark.parametrize('view', ['', '&view=goldendict'])
-@pytest.mark.parametrize('asset', ['index.html', 'css/table.css', 'js/app.js', 'js/components/WorkspaceTabs.js'])
+@pytest.mark.parametrize('view,asset', [
+    ('','index.html'), ('','css/table.css'), ('','js/app.js'), ('','js/components/WorkspaceTabs.js'),
+    ('&view=goldendict','dict/article.html'), ('&view=goldendict','dict/article.css'),
+    ('&view=goldendict','dict/article.js')])
 @pytest.mark.parametrize('warm', [False, True])
 def test_http_required_asset_failure_is_json_without_html(running_controller, tmp_path, monkeypatch, view, asset, warm):
     url, server, adapter = running_controller
+    server.goldendict.update(server_enabled=True, disable_css=False)
     root = Path(desk.__file__).parent
     shutil.copytree(root / 'web', tmp_path / 'web')
     monkeypatch.setattr(desk, '__file__', str(tmp_path / 'kardenwort_desk.py'))
