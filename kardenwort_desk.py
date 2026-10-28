@@ -3575,7 +3575,8 @@ class SqliteStorageAdapter(StorageAdapter):
         self.resolved_paths = resolved_paths or {}
         from kardenwort_db import KardenwortDB
         self.db = KardenwortDB(
-            db_path=db_path or self.resolved_paths.get("sqlite_db_path") or self.resolved_paths.get("db_path"),
+            db_path=(db_path or self.resolved_paths.get("sqlite_db_path")
+                     or self.resolved_paths.get("db_path") or self.resolved_paths.get("database_file")),
             config=config,
             resolved_paths=self.resolved_paths,
             read_only=read_only,
@@ -4793,8 +4794,9 @@ class SqliteStorageAdapter(StorageAdapter):
 
         # Determine target row indices in the scratch TSV
         target_scratch_indices: Optional[List[int]] = None
-        if target_coordinates:
-            target_scratch_indices = resolve_occurrence_rows(data_rows, headers, target_coordinates,
+        occurrence_targets = reword_occurrence_targets(target_coordinates)
+        if occurrence_targets:
+            target_scratch_indices = resolve_occurrence_rows(data_rows, headers, occurrence_targets,
                                                              role_fields.get('sentence_index', 'SentenceSourceIndex'))
         elif token_orders is not None and len(token_orders) > 0:
             token_orders_set = {str(to).strip() for to in token_orders if to is not None and str(to).strip() != ""}
@@ -17347,6 +17349,20 @@ def edit_occurrence_coordinates(sentence_idx, token_order):
             raise StructuredError(ErrorCode.INVALID_STATE, f"Invalid or missing {name}")
         values.append(int(raw))
     return tuple(values)
+
+
+def reword_occurrence_targets(coordinates):
+    """Separate legacy visual context from explicit word persistence targets."""
+    if not coordinates:
+        return []
+    if not isinstance(coordinates, list) or not all(isinstance(item, dict) for item in coordinates):
+        raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Re-word targets must be a list of descriptors")
+    visual_only = all('visual_idx' in item and 'token_order' not in item for item in coordinates)
+    if visual_only:
+        if any(isinstance(item['visual_idx'], bool) or not re.fullmatch(r'[0-9]+', str(item['visual_idx']).strip()) for item in coordinates):
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Visual target requires a nonnegative visual_idx")
+        return []
+    return coordinates
 
 
 def resolve_occurrence_rows(rows, headers, coordinates, sentence_field="SentenceSourceIndex"):

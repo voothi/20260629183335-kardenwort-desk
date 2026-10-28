@@ -40,6 +40,7 @@ from kardenwort_desk import (
     core_export,
     core_edit_save,
     resolve_occurrence_rows,
+    reword_occurrence_targets,
     query_spacy_server,
     query_translation_server,
     query_intellifiller_server,
@@ -2232,8 +2233,9 @@ class SessionArbiter:
         target_row_indices = []
         target_token_orders = []
 
-        if target_coordinates:
-            target_row_indices = resolve_occurrence_rows(data_rows, headers, target_coordinates,
+        occurrence_targets = reword_occurrence_targets(target_coordinates)
+        if occurrence_targets:
+            target_row_indices = resolve_occurrence_rows(data_rows, headers, occurrence_targets,
                                                         role_fields.get('sentence_index', 'SentenceSourceIndex'))
             target_token_orders = [str(data_rows[index][col_token_order]).strip() for index in target_row_indices]
         elif token_orders is not None and len(token_orders) > 0:
@@ -2263,7 +2265,7 @@ class SessionArbiter:
         target_token_orders = list(dict.fromkeys(target_token_orders))
         selected_row_indices = set(target_row_indices)
 
-        is_master_overview = (sentence_idx is None or sentence_idx == 0) and not target_coordinates
+        is_master_overview = (sentence_idx is None or sentence_idx == 0) and not occurrence_targets
 
         if selected_row_indices and provider != 'none':
             reword_prov_tag = f"live:{provider}"

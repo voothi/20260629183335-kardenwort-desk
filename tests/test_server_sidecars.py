@@ -425,16 +425,17 @@ def test_cmd_server_launches_supervisor_and_serves_session_endpoints():
             assert qdata.get("status") == "success"
 
         # 3. Session status query is active (returns 404 for unknown ZID rather than unknown route)
+        desk_dir = Path(__file__).resolve().parent.parent
+        cfg, _, _, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
+        api_token = cfg.get("server", "api_key", fallback="")
         non_existent_zid = f"999999{kardenwort_desk.generate_unique_zid()[6:]}"
-        status_req = urllib.request.Request(f"http://127.0.0.1:{port}/session/status?zid={non_existent_zid}")
+        status_req = urllib.request.Request(f"http://127.0.0.1:{port}/session/status?zid={non_existent_zid}",
+                                          headers={"X-API-Token": api_token})
         with pytest.raises(urllib.error.HTTPError) as exc_info:
             urllib.request.urlopen(status_req, timeout=5.0)
         assert exc_info.value.code == 404
 
         # 4. Clean shutdown via POST /api/v1/shutdown
-        desk_dir = Path(__file__).resolve().parent.parent
-        cfg, _, _, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
-        api_token = cfg.get("server", "api_key", fallback="")
         shut_req = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/v1/shutdown",
             data=json.dumps({"token": api_token}).encode('utf-8'),
