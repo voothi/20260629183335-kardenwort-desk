@@ -1,4 +1,5 @@
 import sys
+import kardenwort_reword as reword
 import os
 import re
 import json
@@ -40,7 +41,13 @@ from kardenwort_desk import (
     core_export,
     core_edit_save,
     resolve_occurrence_rows,
-    reword_occurrence_targets,
+    resolve_reword_request,
+    reword_descriptors,
+    enrich_reword_tsv,
+    checked_provider_rows,
+    reword_query_occurrences,
+    reword_query_provenances,
+    reword_occurrence_fields,
     query_spacy_server,
     query_translation_server,
     query_intellifiller_server,
@@ -94,6 +101,16 @@ from kardenwort_desk import (
 )
 
 logger = logging.getLogger("kardenwort.desk.controller")
+
+
+def format_storage_update_rows(adapter, zid, rows, headers, roles, provenances):
+    """Use stored occurrence facts only when the read model carries their identity."""
+    metadata = {}
+    if (getattr(adapter, 'backend_name', '') == 'sqlite' and Path(adapter.db.db_path).is_file()
+            and 'TokenOrder' in headers and roles.get('sentence_index', 'SentenceSourceIndex') in headers):
+        metadata = dict(row_occurrences=reword_query_occurrences(adapter, zid),
+                        occurrence_provenances=reword_query_provenances(adapter, zid))
+    return format_update_rows_dict(rows, headers, roles, row_provenances=provenances, **metadata)
 
 CONFIG_API_WRITABLE_KEYS: Dict[Tuple[str, str], str] = {
     ('rendering', 'highlight_same_lemma'): 'bool',
@@ -1852,6 +1869,7 @@ class SessionArbiter:
         with self._lock:
             session = self.sessions.get(session_zid)
 
+        adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
         sess_lock = session["lock"] if session else self._lock
         with sess_lock:
             res = core_edit_save(
@@ -1866,14 +1884,12 @@ class SessionArbiter:
 
             if session:
                 session["fingerprint"] = res["fingerprint"]
-                if Path(res.get("tsv_path", "")).exists():
-                    try:
-                        _, _, disk_rows = load_tsv_rows(Path(res["tsv_path"]))
-                        session["data_rows"] = disk_rows
-                    except Exception:
-                        pass
+                stored_path = session.get('tsv_path') or res.get('tsv_path')
+                if adapter.backend_name == 'sqlite' or (stored_path and Path(stored_path).is_file()):
+                    _, current_headers, current_rows = adapter.load_tsv_rows(stored_path or session_zid)
+                    session['headers'] = current_headers
+                    session['data_rows'] = current_rows
 
-        adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
         selection = None
         if adapter.backend_name == 'sqlite' and any(d.get('column') == 'DeskSelected' for d in deltas):
             words = adapter.db.get_words_by_session(session_zid)
@@ -2066,6 +2082,7 @@ class SessionArbiter:
             return
 
         storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
+        is_sqlite = getattr(storage_adapter, 'backend_name', '') == 'sqlite'
         results_dir = resolve_results_dir(self.resolved_paths, self.config)
 
         with self._lock:
@@ -2093,6 +2110,9 @@ class SessionArbiter:
 
             col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
 
+            stored_session = storage_adapter.db.get_session(sib_zid) if is_sqlite else None
+            keys = reword.row_keys(data_rows, headers, role_fields.get('sentence_index', 'SentenceSourceIndex')) if stored_session else None
+            updates = []
             modified = False
             for row_id, row in enumerate(data_rows):
                 if len(row) <= col_lemma:
@@ -2113,11 +2133,15 @@ class SessionArbiter:
                             row.append("")
                         if not row[col_idx].strip() or 'skeleton-loader' in row[col_idx] or row[col_idx] == '[FAILED]':
                             row[col_idx] = str(val)
+                            if keys is not None:
+                                updates.append(dict(sentence_index=keys[row_id][0], token_order=keys[row_id][1], field=field_name, value=str(val)))
                             row_modified = True
                             modified = True
 
                     if row_modified:
                         prov_val = enrich_dict.get("word_provenance", "live:intellifiller")
+                        if keys is not None:
+                            updates.append(dict(sentence_index=keys[row_id][0], token_order=keys[row_id][1], field='word_provenance', value=prov_val))
                         sib_row_provs[row_id] = prov_val
                         sib_row_provs[str(row_id)] = prov_val
                         if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip():
@@ -2127,6 +2151,15 @@ class SessionArbiter:
                                 sib_row_provs[int(t_ord_str)] = prov_val
 
             if modified:
+                if is_sqlite:
+                    storage_adapter.batch_update_words(session_zid=sib_zid, updates_list=updates, zid=sib_zid)
+                else:
+                    sib_tsv = find_working_tsv(results_dir, sib_zid, sess_lang, storage_adapter=storage_adapter)
+                    if sib_tsv:
+                        with storage_adapter.file_lock(sib_tsv):
+                            comments, _, _ = storage_adapter.load_tsv_rows(sib_tsv)
+                            storage_adapter.save_tsv_rows_safely(sib_tsv, comments, headers, data_rows)
+
                 new_fp = compute_content_fingerprint(data_rows)
                 with self._lock:
                     if sib_zid in self.sessions:
@@ -2134,16 +2167,6 @@ class SessionArbiter:
                         self.sessions[sib_zid]["headers"] = headers
                         self.sessions[sib_zid]["fingerprint"] = new_fp
                         self.sessions[sib_zid]["row_provenances"] = sib_row_provs
-
-                # Persist to TSV or SQLite
-                sib_tsv = find_working_tsv(results_dir, sib_zid, sess_lang, storage_adapter=storage_adapter)
-                if sib_tsv:
-                    try:
-                        with storage_adapter.file_lock(sib_tsv):
-                            comments, _, _ = storage_adapter.load_tsv_rows(sib_tsv)
-                            storage_adapter.save_tsv_rows_safely(sib_tsv, comments, headers, data_rows)
-                    except Exception as e:
-                        logger.warning(f"Failed to save propagated sibling TSV {sib_zid}: {e}")
 
                 structured_rows = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=sib_row_provs)
                 self.emit_event(sib_zid, {
@@ -2170,11 +2193,10 @@ class SessionArbiter:
     ) -> Dict[str, Any]:
         req_zid = zid or generate_unique_zid()
         if sentence_idx is not None:
-            if isinstance(sentence_idx, bool) or not str(sentence_idx).strip().lstrip('-').isdigit():
-                raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"sentence_idx must be a non-negative integer, got {sentence_idx!r}")
-            sentence_idx = int(sentence_idx)
-            if sentence_idx < 0:
-                raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"sentence_idx must be a non-negative integer, got {sentence_idx}")
+            try:
+                sentence_idx = reword.index_value(sentence_idx)
+            except reword.InvalidRewordTarget as exc:
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
         lang = language or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
         target_lang = self.config.get(SEC_SETTINGS, 'default_target_language', fallback='ru') if self.config else 'ru'
         prompt_name = prompt or self.config.get(SEC_LANGUAGES, f"{lang}_prompt", fallback="")
@@ -2197,267 +2219,84 @@ class SessionArbiter:
 
         mapping = load_anki_mapping(self.resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
-        col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
-        col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-        col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
-        col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
-        col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
-        col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
-        col_w_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else -1)
-        col_w_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else -1)
-
         # If session is active in-memory, preserve its exact data_rows order; otherwise sort initial load
         with self._lock:
             if session_zid in self.sessions and self.sessions[session_zid].get("data_rows"):
                 data_rows = [list(r) for r in self.sessions[session_zid]["data_rows"]]
+                headers = list(self.sessions[session_zid]['headers'])
+                role_fields = get_role_fields(mapping, headers)
             else:
                 data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+
+        col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+        col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
 
         existing_row_provs = {}
         with self._lock:
             if session_zid in self.sessions:
                 existing_row_provs = dict(self.sessions[session_zid].get("row_provenances", {}))
 
-        if not existing_row_provs and is_sqlite:
-            try:
-                db_words = storage_adapter.db.get_words_by_session(session_zid)
-                for w in db_words:
-                    w_prov = w.get("word_provenance")
-                    if w_prov:
-                        t_ord = str(w.get("token_order", ""))
-                        if t_ord:
-                            existing_row_provs[t_ord] = w_prov
-            except Exception:
-                pass
-
-        target_row_indices = []
-        target_token_orders = []
-
-        occurrence_targets = reword_occurrence_targets(target_coordinates)
-        if occurrence_targets:
-            target_row_indices = resolve_occurrence_rows(data_rows, headers, occurrence_targets,
-                                                        role_fields.get('sentence_index', 'SentenceSourceIndex'))
-            target_token_orders = [str(data_rows[index][col_token_order]).strip() for index in target_row_indices]
-        elif token_orders is not None and len(token_orders) > 0:
-            token_orders_set = {str(to).strip() for to in token_orders if to is not None and str(to).strip() != ""}
-            for idx, r in enumerate(data_rows):
-                t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else str(idx)
-                if t_ord in token_orders_set:
-                    target_row_indices.append(idx)
-                    target_token_orders.append(t_ord)
-        elif selected_rows:
-            for r in selected_rows:
-                if str(r).isdigit() and 0 <= int(r) < len(data_rows):
-                    idx = int(r)
-                    target_row_indices.append(idx)
-                    t_ord = str(data_rows[idx][col_token_order]).strip() if col_token_order != -1 and len(data_rows[idx]) > col_token_order else str(idx)
-                    target_token_orders.append(t_ord)
-                else:
-                    r_str = str(r).strip()
-                    for idx, row in enumerate(data_rows):
-                        t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(idx)
-                        if t_ord == r_str:
-                            target_row_indices.append(idx)
-                            target_token_orders.append(t_ord)
-
-        # Deduplicate while preserving order
-        target_row_indices = list(dict.fromkeys(target_row_indices))
-        target_token_orders = list(dict.fromkeys(target_token_orders))
-        selected_row_indices = set(target_row_indices)
-
-        is_master_overview = (sentence_idx is None or sentence_idx == 0) and not occurrence_targets
+        source_text = self.sessions.get(session_zid, {}).get('text', '')
+        if is_sqlite:
+            source_text = storage_adapter.restore_session(session_zid).get('source_text', '')
+        try:
+            selection = resolve_reword_request(data_rows, headers, role_fields, source_text, self.config,
+                targets=target_coordinates, selected_rows=selected_rows, token_orders=token_orders,
+                visual_indices=visual_indices)
+        except ValueError as exc:
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
+        selected_row_indices = set(selection.rows)
+        selected_keys = dict(zip(selection.rows, selection.keys))
+        is_master_overview = sentence_idx is None or sentence_idx == 0
 
         if selected_row_indices and provider != 'none':
             reword_prov_tag = f"live:{provider}"
             new_reword_provs = {}
             for r_idx in selected_row_indices:
                 new_reword_provs[r_idx] = reword_prov_tag
-                if r_idx < len(data_rows):
-                    row = data_rows[r_idx]
-                    t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else ""
-                    if t_ord:
-                        new_reword_provs[t_ord] = reword_prov_tag
+                new_reword_provs[str(r_idx)] = reword_prov_tag
 
             existing_row_provs.update(new_reword_provs)
 
         enriched_lemma_map: Dict[str, Dict[str, str]] = {}
         if selected_row_indices and provider != 'none':
             if provider == 'intellifiller':
-                if is_sqlite:
-                    try:
-                        storage_adapter.enrich_session_intellifiller(
-                            session_zid=session_zid,
-                            prompt_name=prompt_name,
-                            selected_rows=list(selected_row_indices),
-                            reprocess=True,
-                            zid=req_zid,
-                            token_orders=target_token_orders if target_token_orders else None,
-                            target_coordinates=target_coordinates,
-                            visual_indices=visual_indices,
-                        )
-                    except StructuredError:
-                        raise
-                    except Exception as e:
-                        raise StructuredError(ErrorCode.DESK_FAILED, f"Re-word failed: {e}") from e
-                    comments, headers, loaded_tsv_rows = storage_adapter.load_tsv_rows(tsv_path)
-                    col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
-                    col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
-                    col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
-                    col_w_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else -1)
-                    col_w_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else -1)
-                    col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-                    col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
-                    col_quot = headers.index("Quotation") if "Quotation" in headers else -1
-
-                    loaded_token_map = {}
-                    for lr in loaded_tsv_rows:
-                        t_ord = str(lr[col_token_order]).strip() if col_token_order != -1 and len(lr) > col_token_order else ""
-                        sent = str(lr[col_sent]).strip() if col_sent != -1 and len(lr) > col_sent else "1"
-                        if t_ord:
-                            loaded_token_map[(sent, t_ord)] = lr
-                            loaded_token_map[t_ord] = lr
-                        quot = str(lr[col_quot]).strip() if col_quot != -1 and len(lr) > col_quot else ""
-                        lem = str(lr[col_lemma]).strip() if col_lemma != -1 and len(lr) > col_lemma else ""
-                        if quot or lem:
-                            loaded_token_map[(sent, quot, lem)] = lr
-
-                    for r_idx in selected_row_indices:
-                        if r_idx < len(data_rows):
-                            r = data_rows[r_idx]
-                            t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else ""
-                            sent = str(r[col_sent]).strip() if col_sent != -1 and len(r) > col_sent else "1"
-                            quot = str(r[col_quot]).strip() if col_quot != -1 and len(r) > col_quot else ""
-                            lem = str(r[col_lemma]).strip() if col_lemma != -1 and len(r) > col_lemma else ""
-
-                            matched_lr = None
-                            if t_ord and (sent, t_ord) in loaded_token_map:
-                                matched_lr = loaded_token_map[(sent, t_ord)]
-                            elif t_ord and t_ord in loaded_token_map:
-                                matched_lr = loaded_token_map[t_ord]
-                            elif (sent, quot, lem) in loaded_token_map:
-                                matched_lr = loaded_token_map[(sent, quot, lem)]
-                            elif not is_sqlite and r_idx < len(loaded_tsv_rows):
-                                if col_token_order != -1 and len(loaded_tsv_rows[r_idx]) > col_token_order:
-                                    if str(loaded_tsv_rows[r_idx][col_token_order]).strip() == t_ord:
-                                        matched_lr = loaded_tsv_rows[r_idx]
-                                else:
-                                    matched_lr = loaded_tsv_rows[r_idx]
-
-                            if matched_lr:
-                                for c_idx in range(len(matched_lr)):
-                                    if c_idx < len(r):
-                                        r[c_idx] = matched_lr[c_idx]
-                                    else:
-                                        r.append(matched_lr[c_idx])
-
-                            if col_lemma != -1 and len(r) > col_lemma:
-                                l_val = r[col_lemma].strip()
-                                if l_val:
-                                    item_enrich = {}
-                                    if col_w_dest != -1 and len(r) > col_w_dest and r[col_w_dest].strip():
-                                        item_enrich["WordDestination"] = r[col_w_dest].strip()
-                                    if col_w_ipa != -1 and len(r) > col_w_ipa and r[col_w_ipa].strip():
-                                        item_enrich["WordSourceIPA"] = r[col_w_ipa].strip()
-                                    if col_w_morph != -1 and len(r) > col_w_morph and r[col_w_morph].strip():
-                                        item_enrich["WordSourceMorphologyAI"] = r[col_w_morph].strip()
-                                    if col_w_pos != -1 and len(r) > col_w_pos and r[col_w_pos].strip():
-                                        item_enrich["WordSourcePOS"] = r[col_w_pos].strip()
-                                    if col_w_gender != -1 and len(r) > col_w_gender and r[col_w_gender].strip():
-                                        item_enrich["WordSourceGender"] = r[col_w_gender].strip()
-                                    if item_enrich:
-                                        item_enrich["word_provenance"] = "live:intellifiller"
-                                        self.enrichment_queue.set_cached(l_val, lang, item_enrich)
-                                        enriched_lemma_map[l_val] = item_enrich
-                else:
-                    try:
-                        rows_to_enrich = []
-                        for r_idx in selected_row_indices:
-                            if r_idx < len(data_rows):
-                                row = data_rows[r_idx]
-                                lemma_val = row[col_lemma].strip() if col_lemma != -1 and len(row) > col_lemma else ""
-                                if not lemma_val:
-                                    continue
-                                rows_to_enrich.append(r_idx)
-
-                        if rows_to_enrich:
-                            run_headless_intellifiller(
-                                tsv_path,
-                                prompt_name,
-                                self.config,
-                                self.resolved_paths,
-                                selected_rows=rows_to_enrich,
-                                reprocess=True,
-                                zid=req_zid,
-                            )
-                            comments, headers, loaded_tsv_rows = storage_adapter.load_tsv_rows(tsv_path)
-                            col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
-                            col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
-                            col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
-                            col_w_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else -1)
-                            col_w_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else -1)
-                            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-                            col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
-                            col_quot = headers.index("Quotation") if "Quotation" in headers else -1
-
-                            loaded_token_map = {}
-                            for lr in loaded_tsv_rows:
-                                t_ord = str(lr[col_token_order]).strip() if col_token_order != -1 and len(lr) > col_token_order else ""
-                                sent = str(lr[col_sent]).strip() if col_sent != -1 and len(lr) > col_sent else "1"
-                                if t_ord:
-                                    loaded_token_map[(sent, t_ord)] = lr
-                                quot = str(lr[col_quot]).strip() if col_quot != -1 and len(lr) > col_quot else ""
-                                lem = str(lr[col_lemma]).strip() if col_lemma != -1 and len(lr) > col_lemma else ""
-                                if quot or lem:
-                                    loaded_token_map[(sent, quot, lem)] = lr
-
-                            for r_idx in rows_to_enrich:
-                                if r_idx < len(data_rows):
-                                    r = data_rows[r_idx]
-                                    t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else ""
-                                    sent = str(r[col_sent]).strip() if col_sent != -1 and len(r) > col_sent else "1"
-                                    quot = str(r[col_quot]).strip() if col_quot != -1 and len(r) > col_quot else ""
-                                    lem = str(r[col_lemma]).strip() if col_lemma != -1 and len(r) > col_lemma else ""
-
-                                    matched_lr = None
-                                    if t_ord and (sent, t_ord) in loaded_token_map:
-                                        matched_lr = loaded_token_map[(sent, t_ord)]
-                                    elif (sent, quot, lem) in loaded_token_map:
-                                        matched_lr = loaded_token_map[(sent, quot, lem)]
-                                    elif r_idx < len(loaded_tsv_rows):
-                                        matched_lr = loaded_tsv_rows[r_idx]
-
-                                    if matched_lr:
-                                        for c_idx in range(len(matched_lr)):
-                                            if c_idx < len(r):
-                                                r[c_idx] = matched_lr[c_idx]
-                                            else:
-                                                r.append(matched_lr[c_idx])
-
-                                    if col_lemma != -1 and len(r) > col_lemma:
-                                        l_val = r[col_lemma].strip()
-                                        if l_val:
-                                            item_enrich = {}
-                                            if col_w_dest != -1 and len(r) > col_w_dest and r[col_w_dest].strip():
-                                                item_enrich["WordDestination"] = r[col_w_dest].strip()
-                                            if col_w_ipa != -1 and len(r) > col_w_ipa and r[col_w_ipa].strip():
-                                                item_enrich["WordSourceIPA"] = r[col_w_ipa].strip()
-                                            if col_w_morph != -1 and len(r) > col_w_morph and r[col_w_morph].strip():
-                                                item_enrich["WordSourceMorphologyAI"] = r[col_w_morph].strip()
-                                            if col_w_pos != -1 and len(r) > col_w_pos and r[col_w_pos].strip():
-                                                item_enrich["WordSourcePOS"] = r[col_w_pos].strip()
-                                            if col_w_gender != -1 and len(r) > col_w_gender and r[col_w_gender].strip():
-                                                item_enrich["WordSourceGender"] = r[col_w_gender].strip()
-                                            if item_enrich:
-                                                item_enrich["word_provenance"] = "live:intellifiller"
-                                                self.enrichment_queue.set_cached(l_val, lang, item_enrich)
-                                                enriched_lemma_map[l_val] = item_enrich
-                        else:
-                            with storage_adapter.file_lock(tsv_path):
-                                storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-                    except StructuredError:
-                        raise
-                    except Exception as e:
-                        raise StructuredError(ErrorCode.DESK_FAILED, f"Re-word failed: {e}") from e
+                try:
+                    original_rows, original_headers = data_rows, headers
+                    if is_sqlite:
+                        success = storage_adapter.enrich_session_intellifiller(
+                            session_zid=session_zid, prompt_name=prompt_name, reprocess=True,
+                            zid=req_zid, target_coordinates=reword_descriptors(selection),
+                            visual_indices=list(selection.visuals))
+                        if not success:
+                            raise StructuredError(ErrorCode.DESK_FAILED, 'Re-word provider failed')
+                        _, output_headers, output_rows = storage_adapter.load_tsv_rows(tsv_path)
+                    else:
+                        output_headers, output_rows = enrich_reword_tsv(
+                            tsv_path, comments, headers, data_rows, role_fields, selection, source_text,
+                            prompt_name, self.config, self.resolved_paths, run_headless_intellifiller, req_zid)
+                    output = checked_provider_rows(original_rows, original_headers,
+                                                   output_rows, output_headers, role_fields)
+                    headers, data_rows = reword.merge_rows(original_rows, original_headers,
+                        output, output_headers, selection, role_fields.get('sentence_index', 'SentenceSourceIndex'))
+                    for index in selection.rows:
+                        row = data_rows[index]
+                        lemma = row[col_lemma].strip()
+                        item = {}
+                        for role, field in [('word_translation', 'WordDestination'), ('ipa', 'WordSourceIPA'),
+                                            ('morphology', 'WordSourceMorphologyAI'), ('pos', 'WordSourcePOS'),
+                                            ('gender', 'WordSourceGender')]:
+                            column = role_fields.get(role, field)
+                            if column in headers and row[headers.index(column)].strip():
+                                item[field] = row[headers.index(column)].strip()
+                        if item:
+                            item['word_provenance'] = 'live:intellifiller'
+                            self.enrichment_queue.set_cached(lemma, lang, item)
+                            enriched_lemma_map[lemma] = item
+                except StructuredError:
+                    raise
+                except Exception as exc:
+                    raise StructuredError(ErrorCode.DESK_FAILED, f'Re-word failed: {exc}') from exc
 
                 # Propagate newly enriched lemmas to open sibling sessions strictly if Master Overview session
                 if enriched_lemma_map and is_master_overview:
@@ -2495,11 +2334,12 @@ class SessionArbiter:
                         if translated_map:
                             updates = []
                             lemma_prov_tag = f"live:{provider}"
+                            words_by_key = {(int(word['sentence_index']), int(word['token_order'])): word
+                                for word in storage_adapter.db.get_words_by_session(session_zid)} if is_sqlite else {}
                             for r_idx in selected_row_indices:
                                 if r_idx < len(data_rows):
                                     row = data_rows[r_idx]
-                                    t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
-                                    sent_val = int(row[col_sent]) if col_sent != -1 and len(row) > col_sent and str(row[col_sent]).strip().isdigit() else 1
+                                    sent_val, t_ord_val = selected_keys[r_idx]
                                     if col_lemma != -1 and len(row) > col_lemma:
                                         l_val = row[col_lemma].strip()
                                         if l_val in translated_map and col_w_dest != -1:
@@ -2508,9 +2348,13 @@ class SessionArbiter:
                                                 while len(row) <= col_w_dest:
                                                     row.append("")
                                                 row[col_w_dest] = t_val
-                                                t_ord_val = int(t_ord) if t_ord.isdigit() else r_idx
                                                 updates.append({"token_order": t_ord_val, "sentence_index": sent_val, "field": "word_destination", "value": t_val})
                                                 updates.append({"token_order": t_ord_val, "sentence_index": sent_val, "field": "word_provenance", "value": lemma_prov_tag})
+                                                if is_sqlite and selection.visuals:
+                                                    extra = reword_occurrence_fields(words_by_key[(sent_val, t_ord_val)],
+                                                        dict(zip(headers, row)), selection, role_fields)
+                                                    updates.append(dict(sentence_index=sent_val, token_order=t_ord_val,
+                                                        field='extra_fields', value=extra))
 
                             if is_sqlite:
                                 if updates:
@@ -2576,14 +2420,12 @@ class SessionArbiter:
                                         for r_idx in selected_row_indices:
                                             if r_idx < len(data_rows):
                                                 row = data_rows[r_idx]
-                                                t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
-                                                sent_val = int(row[col_sent]) if col_sent != -1 and len(row) > col_sent and str(row[col_sent]).strip().isdigit() else 1
+                                                sent_val, t_ord_val = selected_keys[r_idx]
                                                 lemma_val = row[col_lemma].strip().lower()
                                                 val = c_dict.get(lemma_val, "")
                                                 while len(row) <= col_idx:
                                                     row.append("")
                                                 row[col_idx] = val
-                                                t_ord_val = int(t_ord) if t_ord.isdigit() else r_idx
                                                 class_updates.append({"token_order": t_ord_val, "sentence_index": sent_val, "field": role_fields[name], "value": val})
 
                                 if is_sqlite:
@@ -2602,7 +2444,13 @@ class SessionArbiter:
                 self.sessions[session_zid]["data_rows"] = data_rows
                 self.sessions[session_zid]["fingerprint"] = new_fp
                 self.sessions[session_zid]["row_provenances"] = existing_row_provs
+                self.sessions[session_zid]['headers'] = headers
 
+        row_occurrences = reword_query_occurrences(storage_adapter, session_zid)
+        occurrence_provenances = reword_query_provenances(storage_adapter, session_zid) if is_sqlite else {
+            (str(sentence), str(token)): existing_row_provs.get(index, existing_row_provs.get(str(index), ''))
+            for index, (sentence, token) in enumerate(reword.row_keys(data_rows, headers,
+                role_fields.get('sentence_index', 'SentenceSourceIndex')))}
         safe_write_update_js(
             tsv_path,
             data_rows,
@@ -2614,6 +2462,8 @@ class SessionArbiter:
             config=self.config,
             class_cols=class_cols if class_cols else None,
             row_provenances=existing_row_provs,
+            row_occurrences=row_occurrences,
+            occurrence_provenances=occurrence_provenances,
         )
 
         structured_rows = format_update_rows_dict(
@@ -2622,6 +2472,8 @@ class SessionArbiter:
             role_fields,
             class_cols=class_cols if class_cols else None,
             row_provenances=existing_row_provs,
+            row_occurrences=row_occurrences,
+            occurrence_provenances=occurrence_provenances,
         )
 
         self.emit_event(session_zid, {
@@ -2708,6 +2560,8 @@ class SessionArbiter:
             if col_lemma == -1 or col_word_dest == -1:
                 continue
 
+            stored_session = storage_adapter.db.get_session(sib_zid) if is_sqlite else None
+            keys = reword.row_keys(data_rows, headers, role_fields.get('sentence_index', 'SentenceSourceIndex')) if stored_session else None
             modified = False
             updates = []
             for row_idx, row in enumerate(data_rows):
@@ -2722,31 +2576,24 @@ class SessionArbiter:
                         if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest] or row[col_word_dest] == '[FAILED]':
                             row[col_word_dest] = trans_val
                             modified = True
-                            t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
-                            updates.append({"token_order": t_ord, "field": "word_destination", "value": trans_val})
+                            if keys is not None:
+                                updates.append(dict(sentence_index=keys[row_idx][0], token_order=keys[row_idx][1], field='word_destination', value=trans_val))
 
             if modified:
+                if is_sqlite:
+                    storage_adapter.batch_update_words(session_zid=sib_zid, updates_list=updates, zid=sib_zid)
+                else:
+                    sib_tsv = find_working_tsv(results_dir, sib_zid, sess_lang, storage_adapter=storage_adapter)
+                    if sib_tsv:
+                        with storage_adapter.file_lock(sib_tsv):
+                            comments, _, _ = storage_adapter.load_tsv_rows(sib_tsv)
+                            storage_adapter.save_tsv_rows_safely(sib_tsv, comments, headers, data_rows)
+
                 new_fp = compute_content_fingerprint(data_rows)
                 with self._lock:
                     if sib_zid in self.sessions:
                         self.sessions[sib_zid]["data_rows"] = data_rows
                         self.sessions[sib_zid]["fingerprint"] = new_fp
-
-                if is_sqlite:
-                    if updates:
-                        try:
-                            storage_adapter.batch_update_words(session_zid=sib_zid, updates_list=updates, zid=sib_zid)
-                        except Exception as e:
-                            logger.warning(f"Failed to batch update SQLite words for sibling {sib_zid}: {e}")
-                else:
-                    sib_tsv = find_working_tsv(results_dir, sib_zid, sess_lang, storage_adapter=storage_adapter)
-                    if sib_tsv:
-                        try:
-                            with storage_adapter.file_lock(sib_tsv):
-                                comments, _, _ = storage_adapter.load_tsv_rows(sib_tsv)
-                                storage_adapter.save_tsv_rows_safely(sib_tsv, comments, headers, data_rows)
-                        except Exception as e:
-                            logger.warning(f"Failed to save propagated sibling TSV {sib_zid}: {e}")
 
                 sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                 structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
@@ -3608,7 +3455,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 sess_row_provs = safe_sess.get("row_provenances")
                 if sess_row_provs is None:
                     sess_row_provs = {}
-                safe_sess["rows"] = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=sess_row_provs)
+                storage_adapter = getattr(self.server.arbiter, 'storage_adapter', None) or get_storage_adapter(
+                    self.server.config, self.server.resolved_paths, read_only=True)
+                safe_sess["rows"] = format_storage_update_rows(storage_adapter, zid, data_rows, headers,
+                    role_fields, sess_row_provs)
                 safe_sess["row_provenances"] = sess_row_provs
                 safe_sess["rowProvenances"] = sess_row_provs
                 # Cold-cache status fallback: query SQLite sentences table if text_provenance is missing
@@ -3894,7 +3744,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-            rows_dict = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=fallback_row_provs)
+            rows_dict = format_storage_update_rows(storage_adapter, zid, data_rows, headers, role_fields,
+                fallback_row_provs)
             if len(sentences_list) >= 2:
                 s_srcs, s_dests = pair_sentence_records(sentences_list)
                 eff_status_mode = "multi" if len(s_dests) >= 2 else text_mode

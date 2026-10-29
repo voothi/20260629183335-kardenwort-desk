@@ -57,6 +57,7 @@
  * @property {string} [sentence_text]
  * @property {string} [inflected_tooltip]
  * @property {Object} [occurrence_data]
+ * @property {Array<OccurrenceTarget>} [occurrence_targets] - Exact underlying persistence identities
  * @property {string} [dynamic_tds]
  */
 

@@ -641,12 +641,14 @@
                         }
                     }
                 }
-                var appRow = (w.AppState && w.AppState.rows) ? ((tOrdStr && w.AppState.rows[tOrdStr]) || w.AppState.rows[rIdStr]) : null;
+                var appRow = (w.AppState && w.AppState.rows) ? (w.AppState.rows[rIdStr] || w.AppState.rows[tOrdStr]) : null;
                 if (appRow) {
                     var appLem = (appRow.lemma || '').trim().toLowerCase();
                     var itemLem = (wordObj.lemma || '').trim().toLowerCase();
                     var appOrd = (appRow.token_order !== undefined && appRow.token_order !== null) ? String(appRow.token_order) : null;
-                    var isMatchingRow = (appOrd && appOrd === tOrdStr) || (appLem && itemLem && appLem === itemLem) || !appLem;
+                    var isMatchingRow = Number(wordObj.sentence_idx) > 0 && Number(appRow.sentence_idx) > 0
+                        ? String(wordObj.sentence_idx) === String(appRow.sentence_idx) && appOrd === tOrdStr
+                        : (appLem && itemLem && appLem === itemLem) || !appLem;
                     if (isMatchingRow) {
                         var updatedTrans = (appRow.trans !== undefined && appRow.trans !== "") ? appRow.trans : ((appRow.WordDestination !== undefined && appRow.WordDestination !== "") ? appRow.WordDestination : appRow.word_translation);
                         if (wordObj.all_row_ids && wordObj.all_row_ids.length > 1 && w.AppState && w.AppState.rows) {
@@ -781,9 +783,11 @@
                     var occAttr = (wordObj.occurrence_data && typeof wordObj.occurrence_data === 'object' && Object.keys(wordObj.occurrence_data).length > 0)
                         ? (' data-occ="' + escapeHtml(JSON.stringify(wordObj.occurrence_data)) + '"')
                         : '';
+                    var targetsAttr = wordObj.occurrence_targets
+                        ? (' data-occurrence-targets="' + escapeHtml(JSON.stringify(wordObj.occurrence_targets)) + '"') : '';
 
                     htmlParts.push(
-                        '<tr data-row-id="' + escapeHtml(rIdStr) + '"' + allIdsAttr + ' data-token-order="' + escapeHtml(String(wordObj.token_order || rIdStr)) + '"' + occAttr + ' data-sentence-idx="' + escapeHtml(String(wordObj.sentence_idx || '1')) + '" data-selected="' + selAttr + '" data-filter-hidden="' + (isSel ? '0' : '1') + '" class="' + hlClass + '">' +
+                        '<tr data-row-id="' + escapeHtml(rIdStr) + '"' + allIdsAttr + ' data-token-order="' + escapeHtml(tOrdStr) + '"' + occAttr + targetsAttr + ' data-sentence-idx="' + escapeHtml(String(wordObj.sentence_idx === undefined ? 1 : wordObj.sentence_idx)) + '" data-selected="' + selAttr + '" data-filter-hidden="' + (isSel ? '0' : '1') + '" class="' + hlClass + '">' +
                         '<td class="editable col-inflected" data-col="WordSourceInflectedForm"' + infTitleAttr + '><div class="scrollable-cell">' + escapeHtml(wordObj.inflected || '') + '</div></td>' +
                         '<td class="editable col-lemma" data-col="WordSource"' + lemTitleAttr + '><div class="scrollable-cell">' + escapeHtml(wordObj.lemma || '') + '</div></td>' +
                         '<td class="editable col-translation" data-col="WordDestination"' + provAttr + '><div class="scrollable-cell"' + provAttr + '>' + transDisplay + '</div></td>' +
@@ -1307,7 +1311,9 @@
                         }
                     }
                 }
-                bindCardWordsToTbody(tb, targetCard.words, selectedRowIdsMap);
+                if (!tb.querySelector('td.editing, td.dirty')) {
+                    bindCardWordsToTbody(tb, targetCard.words, selectedRowIdsMap);
+                }
             }
         }
 

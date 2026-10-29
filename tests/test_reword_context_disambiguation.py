@@ -119,6 +119,7 @@ def test_render_html_no_brackets_in_presentation(tmp_path):
 
 
 def test_sqlite_reword_disambiguation_and_aggregation(tmp_path):
+    from tests.reword_view_support import article_occurrence, assert_readonly_aggregate
     from pathlib import Path
     from unittest.mock import patch
     from kardenwort_db import KardenwortDB
@@ -154,6 +155,7 @@ def test_sqlite_reword_disambiguation_and_aggregation(tmp_path):
         "pos": "art.",
         "morphology": "der (определенный артикль мужского рода)",
         "word_provenance": "initial",
+        "extra_fields": article_occurrence(raw_sentence),
     })
 
     mapping_path = tmp_path / "mapping.ini"
@@ -215,19 +217,22 @@ de_prompt=test
     assert "[der] ihm versprochen wurde" in captured_ephemeral_sent[0]
     assert "mit der Arbeit" in captured_ephemeral_sent[0]
 
-    # 2. SQLite words record aggregated the constituent roles in sentence appearance order
+    # 2. Approved raw-write contract; aggregate only when reading the view.
     words = db.get_words_by_session(sess_zid)
     assert len(words) == 1
     w = words[0]
-    assert w["pos"] == "art., pron."
-    assert w["word_destination"] == "тот, который"
-    assert "определенный артикль" in w["morphology"]
+    assert w["pos"] == "pron."
+    assert w["word_destination"] == "который"
+    assert "определенный артикль" not in w["morphology"]
     assert "относительное местоимение" in w["morphology"]
 
     # 3. Persistent sentence in SQLite remains completely clean of square brackets
     sentences = db.get_sentences_by_session(sess_zid)
     assert "[" not in sentences[0]["sentence_source"]
     assert "]" not in sentences[0]["sentence_source"]
+
+
+    assert_readonly_aggregate(storage_adapter, sess_zid, config, resolved_paths, raw_sentence)
 
 
 def test_render_html_occurrence_tooltips(tmp_path):

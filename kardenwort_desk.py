@@ -1,4 +1,5 @@
 import sys
+import kardenwort_reword as reword
 from kardenwort_theme import resolve_theme_colors, theme_style
 
 import argparse
@@ -4057,6 +4058,9 @@ class SqliteStorageAdapter(StorageAdapter):
                         headers.append("SentenceSource")
                         existing_h.add("sentencesource")
 
+            if not any(h.lower().replace('_', '') == 'tokenorder' for h in headers):
+                headers.append('TokenOrder')
+
             # Preserve and append any unmapped custom columns found in extra_fields
             extra_headers = []
             for word in db_words:
@@ -4741,404 +4745,37 @@ class SqliteStorageAdapter(StorageAdapter):
         return self.db.batch_update_words(session_zid, updates_list, zid=zid)
 
     def enrich_session_intellifiller(
-        self,
-        session_zid: str,
-        prompt_name: str,
-        selected_rows: Optional[List[int]] = None,
-        reprocess: bool = False,
-        zid: Optional[str] = None,
-        trace_id: Optional[str] = None,
-        token_orders: Optional[List[Any]] = None,
-        target_coordinates: Optional[List[Any]] = None,
-        visual_indices: Optional[List[Any]] = None,
+        self, session_zid: str, prompt_name: str, selected_rows=None, reprocess=False,
+        zid=None, trace_id=None, token_orders=None, target_coordinates=None, visual_indices=None,
     ) -> bool:
-        """
-        Enriches a SQLite session using IntelliFiller via ephemeral scratch payload,
-        ingesting enriched tokens directly into SQLite words & extra_fields without
-        leaving persistent TSV files in results/.
-        """
-        zid = zid or session_zid
+        """Enrich exact occurrences in scratch storage, then commit one validated batch."""
         restored = self.restore_session(session_zid)
-        comments = restored.get("comments", [])
-        headers = restored.get("headers", [])
-        data_rows = restored.get("data_rows", [])
-        db_words = restored.get("words", [])
-
-        if not data_rows:
+        headers, rows = restored.get('headers', []), restored.get('data_rows', [])
+        mapping = load_anki_mapping(self.resolved_paths.get('anki_mapping_file'))
+        roles = get_role_fields(mapping, headers)
+        rows = sort_session_data_rows(rows, headers, restored.get('source_language'),
+                                      self.config, self.resolved_paths, role_fields=roles)
+        source = restored.get('source_text', '')
+        selection = resolve_reword_request(rows, headers, roles, source, self.config,
+            targets=target_coordinates, selected_rows=selected_rows, token_orders=token_orders,
+            visual_indices=visual_indices, all_rows=selected_rows is None)
+        if not selection.rows:
             return True
-
-        session = restored.get("session", {})
-        lang = restored.get("source_language") or (session.get("source_language") if isinstance(session, dict) else None) or (self.config.get(SEC_SETTINGS, "default_language", fallback="en") if self.config and hasattr(self.config, "get") else "en")
-
-        mapping = None
-        if self.resolved_paths and "anki_mapping_file" in self.resolved_paths:
-            mapping = load_anki_mapping(self.resolved_paths["anki_mapping_file"])
-        elif self.config and hasattr(self.config, "get"):
-            raw_mp = self.config.get(SEC_SETTINGS, "anki_mapping_file", fallback="./anki-mapping.ini")
-            if raw_mp and Path(raw_mp).exists():
-                mapping = load_anki_mapping(Path(raw_mp))
-        role_fields = get_role_fields(mapping, headers) if mapping else {}
-
-        col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-        col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
-
-        # Frequency sort data_rows and align db_words in lockstep to ensure selected_rows parity
-        headers_with_idx = list(headers) + ["__temp_sort_idx__"]
-        data_rows_with_idx = [list(r) + [str(i)] for i, r in enumerate(data_rows)]
-        sorted_rows_with_idx = sort_session_data_rows(
-            data_rows_with_idx, headers_with_idx, lang, self.config, self.resolved_paths, role_fields=role_fields
-        )
-        sorted_indices = [int(r[-1]) for r in sorted_rows_with_idx]
-        data_rows = [r[:-1] for r in sorted_rows_with_idx]
-        db_words_sorted = [db_words[idx] if idx < len(db_words) else {} for idx in sorted_indices]
-
-        # Determine target row indices in the scratch TSV
-        target_scratch_indices: Optional[List[int]] = None
-        occurrence_targets = reword_occurrence_targets(target_coordinates)
-        if occurrence_targets:
-            target_scratch_indices = resolve_occurrence_rows(data_rows, headers, occurrence_targets,
-                                                             role_fields.get('sentence_index', 'SentenceSourceIndex'))
-        elif token_orders is not None and len(token_orders) > 0:
-            token_orders_set = {str(to).strip() for to in token_orders if to is not None and str(to).strip() != ""}
-            matched_indices = []
-            for row_idx, r in enumerate(data_rows):
-                t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else str(row_idx)
-                if t_ord in token_orders_set:
-                    matched_indices.append(row_idx)
-            target_scratch_indices = matched_indices
-        elif selected_rows is not None:
-            target_scratch_indices = [int(r) for r in selected_rows if str(r).isdigit() and 0 <= int(r) < len(data_rows)]
-
-        target_vidxs = []
-        if visual_indices and len(visual_indices) > 0:
-            for vi in visual_indices:
-                try:
-                    target_vidxs.append(int(vi))
-                except Exception:
-                    pass
-        elif target_coordinates and len(target_coordinates) > 0:
-            for tc in target_coordinates:
-                if isinstance(tc, dict) and tc.get('visual_idx') is not None:
-                    try:
-                        target_vidxs.append(int(tc.get('visual_idx')))
-                    except Exception:
-                        pass
-        target_vidx = target_vidxs[0] if target_vidxs else None
-
-        source_text = restored.get("source_text") or (session.get("source_raw_text") if isinstance(session, dict) else "")
-        db_sentences = restored.get("sentences", [])
-        col_sent_src = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
-
-        sentence_offsets = {1: 0}
-        if source_text:
-            ordered_sents = []
-            if db_sentences:
-                for s in sorted(db_sentences, key=lambda s: s.get("sentence_index", 0)):
-                    s_idx = s.get("sentence_index")
-                    s_str = s.get("sentence_source") or ""
-                    if s_idx is not None and s_str:
-                        ordered_sents.append((int(s_idx), s_str))
-            elif col_sent != -1 and col_sent_src != -1:
-                seen_sent_idx = set()
-                for r in data_rows:
-                    if len(r) > col_sent and len(r) > col_sent_src:
-                        s_idx_str = str(r[col_sent]).strip()
-                        if s_idx_str.isdigit():
-                            s_idx_int = int(s_idx_str)
-                            if s_idx_int not in seen_sent_idx:
-                                seen_sent_idx.add(s_idx_int)
-                                ordered_sents.append((s_idx_int, str(r[col_sent_src])))
-                ordered_sents.sort(key=lambda x: x[0])
-
-            curr_search_pos = 0
-            for s_idx_int, s_str in ordered_sents:
-                f_pos = source_text.find(s_str, curr_search_pos)
-                if f_pos != -1:
-                    prefix_str = source_text[:f_pos]
-                    try:
-                        p_toks = tok.build_word_list_internal(prefix_str, keep_spaces=True)
-                        sentence_offsets[s_idx_int] = len(p_toks)
-                    except Exception:
-                        pass
-                    curr_search_pos = f_pos + len(s_str)
-
-        scratch_data_rows = [list(r) for r in data_rows]
-        if target_vidxs:
-            col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else (headers.index('WordSource') if 'WordSource' in headers else -1)
-            if col_sent_src != -1:
-                target_scratch_set = set(target_scratch_indices) if target_scratch_indices is not None else set(range(len(scratch_data_rows)))
-                for s_row_idx in target_scratch_set:
-                    if 0 <= s_row_idx < len(scratch_data_rows) and len(scratch_data_rows[s_row_idx]) > col_sent_src:
-                        raw_sent = scratch_data_rows[s_row_idx][col_sent_src]
-                        s_idx = int(scratch_data_rows[s_row_idx][col_sent]) if col_sent != -1 and len(scratch_data_rows[s_row_idx]) > col_sent and str(scratch_data_rows[s_row_idx][col_sent]).isdigit() else 1
-                        s_offset = sentence_offsets.get(s_idx)
-                        if raw_sent and s_offset is not None and col_lemma != -1 and len(scratch_data_rows[s_row_idx]) > col_lemma:
-                            lem_str = str(scratch_data_rows[s_row_idx][col_lemma]).strip().lower()
-                            col_quot = headers.index(role_fields.get('quotation', 'Quotation')) if role_fields.get('quotation', 'Quotation') in headers else (headers.index('Quotation') if 'Quotation' in headers else -1)
-                            raw_quot = str(scratch_data_rows[s_row_idx][col_quot]) if col_quot != -1 and len(scratch_data_rows[s_row_idx]) > col_quot else ""
-                            matched_quot = [f.strip().lower() for f in raw_quot.split(",") if f.strip()]
-                            unify_article_lemmas = self.config.getboolean(SEC_SETTINGS, "unify_article_pronoun_lemmas", fallback=True) if hasattr(self, 'config') and self.config else True
-                            is_unified_der = unify_article_lemmas and (lem_str == DE_UNIFIED_ARTICLE_LEMMA)
-                            try:
-                                sent_toks = tok.build_word_list_internal(raw_sent, keep_spaces=True)
-                                cand_coords = [
-                                    s_offset + int(t.get("visual_idx", 0))
-                                    for t in sent_toks
-                                    if t.get("is_word") and (
-                                        (t.get("lower_clean") or t.get("text", "")).strip().lower() == lem_str
-                                        or (t.get("lower_clean") or t.get("text", "")).strip().lower() in matched_quot
-                                        or (is_unified_der and (t.get("lower_clean") or t.get("text", "")).strip().lower() in DE_UNIFIED_ARTICLE_FORMS)
-                                    )
-                                ]
-                                if cand_coords and not any(tv in cand_coords for tv in target_vidxs):
-                                    raise ValueError(
-                                        f"Coordinate alignment violation in session '{session_zid}': "
-                                        f"target visual indices {target_vidxs} do not match sentence {s_idx} "
-                                        f"token coordinates {cand_coords} for lemma '{lem_str}'"
-                                    )
-                            except ValueError:
-                                raise
-                            except Exception:
-                                pass
-                        scratch_data_rows[s_row_idx][col_sent_src] = build_bracketed_sentence_context(
-                            raw_sent,
-                            target_visual_indices=target_vidxs,
-                            visual_idx_offset=s_offset,
-                        )
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_tsv_path = Path(temp_dir) / f"{session_zid}-ephemeral.tsv"
-            self._tsv_fallback.save_tsv_rows_safely(temp_tsv_path, comments, headers, scratch_data_rows)
-
-            success = run_headless_intellifiller(
-                tsv_path=temp_tsv_path,
-                prompt_name=prompt_name,
-                config=self.config,
-                resolved_paths=self.resolved_paths,
-                selected_rows=target_scratch_indices,
-                reprocess=reprocess,
-                zid=zid,
-                trace_id=trace_id,
-            )
-
-            if success and temp_tsv_path.exists():
-                _, updated_headers, updated_rows = load_tsv_rows(temp_tsv_path)
-                selected_set = set(target_scratch_indices) if target_scratch_indices is not None else None
-                upd_col_tord = updated_headers.index("TokenOrder") if "TokenOrder" in updated_headers else col_token_order
-                upd_col_sent = updated_headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in updated_headers else col_sent
-
-                # Build token_order lookup for db_words
-                words_by_token = {
-                    (int(w.get("sentence_index", 1)), str(w.get("token_order", ""))): w
-                    for w in db_words
-                    if w.get("token_order") is not None
-                }
-                words_by_tord = {
-                    str(w.get("token_order", "")): w
-                    for w in db_words
-                    if w.get("token_order") is not None
-                }
-
-                from kardenwort_db import sanitize_extra_fields
-                unify_article_lemmas = self.config.getboolean(SEC_SETTINGS, "unify_article_pronoun_lemmas", fallback=True) if hasattr(self, 'config') and self.config else True
-
-                updates_list = []
-                for row_idx, r in enumerate(updated_rows):
-                    if selected_set is not None and row_idx not in selected_set:
-                        continue
-                    row_updates = {}
-                    for col_idx, h in enumerate(updated_headers):
-                        h_norm = h.strip().lower().replace("_", "")
-                        if h_norm in ("extrafields", "occurrencedata"):
-                            continue
-                        if col_idx < len(r):
-                            row_updates[h] = sanitize_bracketed_field(r[col_idx])
-                    row_updates["word_provenance"] = "live:intellifiller"
-
-                    t_ord = str(r[upd_col_tord]).strip() if upd_col_tord != -1 and len(r) > upd_col_tord else ""
-                    sent_idx = int(r[upd_col_sent]) if upd_col_sent != -1 and len(r) > upd_col_sent and str(r[upd_col_sent]).isdigit() else 1
-
-                    matched_word = words_by_token.get((sent_idx, t_ord)) or (words_by_tord.get(t_ord) if t_ord else None)
-                    if not matched_word and row_idx < len(db_words_sorted):
-                        matched_word = db_words_sorted[row_idx]
-
-                    if matched_word and target_vidx is not None:
-                        ef_raw = matched_word.get("extra_fields")
-                        ef_dict = sanitize_extra_fields(ef_raw)
-
-                        stored_occ_data = ef_dict.get("occurrence_data", {})
-                        if not isinstance(stored_occ_data, dict):
-                            stored_occ_data = {}
-                        occ_data = dict(stored_occ_data)
-
-                        pos_field = role_fields.get('pos', 'WordSourcePOS')
-                        trans_field = role_fields.get('word_translation', 'WordDestination')
-                        morph_field = role_fields.get('morphology', 'WordSourceMorphologyAI')
-
-                        new_pos = row_updates.get(pos_field, "")
-                        new_trans = row_updates.get(trans_field, "")
-                        new_morph = row_updates.get(morph_field, "")
-
-                        w_lem = (matched_word.get("lemma") or "").strip().lower()
-                        is_unified_der = unify_article_lemmas and (w_lem == DE_UNIFIED_ARTICLE_LEMMA)
-                        col_s_src = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
-                        sent_text = ""
-                        if col_s_src != -1 and row_idx < len(data_rows) and len(data_rows[row_idx]) > col_s_src:
-                            sent_text = data_rows[row_idx][col_s_src]
-
-                        matching_tokens = []
-                        if sent_text and w_lem:
-                            try:
-                                all_toks = tok.build_word_list_internal(sent_text, keep_spaces=True)
-                                matched_quot = [f.strip().lower() for f in (matched_word.get("quotation") or "").split(",") if f.strip()]
-                                for st in all_toks:
-                                    st_clean = (st.get("lower_clean") or st.get("text") or "").strip().lower()
-                                    is_match = (st_clean == w_lem) or (st_clean in matched_quot) or (is_unified_der and st_clean in DE_UNIFIED_ARTICLE_FORMS)
-                                    if st.get("is_word") and is_match:
-                                        matching_tokens.append(st)
-                            except Exception:
-                                pass
-
-                        s_offset = sentence_offsets.get(sent_idx)
-
-                        if len(matching_tokens) <= 1:
-                            # 3.1 Single matching token in the sentence: write new trans/pos/morph directly; skip aggregation
-                            target_key = str(target_vidx)
-                            if matching_tokens and s_offset is not None:
-                                token_global_vidx = s_offset + int(matching_tokens[0].get("visual_idx", 0))
-                                if target_vidxs and not any(tv == token_global_vidx for tv in target_vidxs):
-                                    raise ValueError(
-                                        f"Coordinate alignment violation in session '{session_zid}': "
-                                        f"target visual indices {target_vidxs} do not match sentence {sent_idx} "
-                                        f"token coordinate {token_global_vidx} for lemma '{w_lem}'"
-                                    )
-                                target_key = str(token_global_vidx)
-                            occ_data = {
-                                target_key: {
-                                    "pos": new_pos,
-                                    "trans": new_trans,
-                                    "morph": new_morph,
-                                }
-                            }
-                            row_updates[pos_field] = new_pos
-                            row_updates[trans_field] = new_trans
-                            row_updates[morph_field] = new_morph
-                            ef_dict["occurrence_data"] = occ_data
-                            ef_dict = sanitize_extra_fields(ef_dict)
-                            row_updates["extra_fields"] = json.dumps(ef_dict, ensure_ascii=False)
-                        else:
-                            # Multiple matching tokens: map sentence-local tokens to global coordinates
-                            token_global_indices = []
-                            for idx_ord, st in enumerate(matching_tokens):
-                                if s_offset is not None:
-                                    g_idx = s_offset + int(st.get("visual_idx", 0))
-                                else:
-                                    g_idx = int(st.get("visual_idx", 0))
-                                token_global_indices.append(g_idx)
-
-                            target_set = set(target_vidxs)
-                            # Assert coordinate alignment if target coordinates are known
-                            if target_vidxs and not any(g in target_set for g in token_global_indices):
-                                raise ValueError(
-                                    f"Coordinate alignment violation in session '{session_zid}': "
-                                    f"target visual indices {target_vidxs} do not match sentence {sent_idx} "
-                                    f"candidate token coordinates {token_global_indices} for lemma '{w_lem}'"
-                                )
-
-                            # Assign new enrichment values to targeted occurrences
-                            for g_idx in token_global_indices:
-                                if g_idx in target_set:
-                                    occ_data[str(g_idx)] = {
-                                        "pos": new_pos,
-                                        "trans": new_trans,
-                                        "morph": new_morph,
-                                    }
-
-                            # 3.2 Fill untouched occurrences only from their own existing occ_data entries; never from an aggregated row value
-                            for idx_ord, st in enumerate(matching_tokens):
-                                g_idx = token_global_indices[idx_ord]
-                                g_idx_str = str(g_idx)
-                                if g_idx_str not in occ_data:
-                                    local_vidx_str = str(st.get("visual_idx"))
-                                    if g_idx_str in stored_occ_data:
-                                        occ_data[g_idx_str] = stored_occ_data[g_idx_str]
-                                    elif local_vidx_str in stored_occ_data:
-                                        occ_data[g_idx_str] = stored_occ_data[local_vidx_str]
-                                    else:
-                                        fallback_pos = matched_word.get("pos") or ""
-                                        if is_unified_der and "art." in fallback_pos:
-                                            fallback_pos = "art."
-                                        fallback_trans = ""
-                                        if not stored_occ_data:
-                                            cur_dest = (matched_word.get("word_destination") or "").strip()
-                                            if ", " not in cur_dest:
-                                                fallback_trans = cur_dest
-                                        occ_data[g_idx_str] = {
-                                            "pos": fallback_pos,
-                                            "trans": fallback_trans,
-                                            "morph": matched_word.get("morphology") or "",
-                                        }
-
-                            # Clean up stale local-coordinate keys if global coordinates are used
-                            if s_offset is not None and s_offset > 0:
-                                for st in matching_tokens:
-                                    loc_k = str(st.get("visual_idx"))
-                                    glob_k = str(s_offset + int(st.get("visual_idx", 0)))
-                                    if loc_k != glob_k and loc_k in occ_data:
-                                        del occ_data[loc_k]
-
-                            pos_items = [(int(k), v.get("pos", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("pos")]
-                            trans_items = [(int(k), v.get("trans", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("trans")]
-                            morph_items = [(int(k), v.get("morph", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("morph")]
-
-                            if len(pos_items) > 1:
-                                if is_unified_der:
-                                    seen_occ_pos = []
-                                    for _, p_val in sorted(pos_items, key=lambda x: x[0]):
-                                        for p_sub in p_val.split(','):
-                                            norm_p = normalize_pos_tag(p_sub).lower()
-                                            if norm_p and norm_p not in seen_occ_pos:
-                                                seen_occ_pos.append(norm_p)
-                                    seen_occ_pos = sort_pos_tags(seen_occ_pos)
-                                    row_updates[pos_field] = ", ".join(seen_occ_pos)
-                                else:
-                                    row_updates[pos_field] = aggregate_sequential_distinct(pos_items, delimiter=", ")
-                            elif len(pos_items) == 1:
-                                row_updates[pos_field] = pos_items[0][1]
-
-                            if len(trans_items) > 1:
-                                row_updates[trans_field] = aggregate_sequential_distinct(trans_items, delimiter=", ")
-                            elif len(trans_items) == 1:
-                                row_updates[trans_field] = trans_items[0][1]
-
-                            if len(morph_items) > 1:
-                                row_updates[morph_field] = aggregate_sequential_distinct(morph_items, delimiter="; ")
-                            elif len(morph_items) == 1:
-                                row_updates[morph_field] = morph_items[0][1]
-
-                            ef_dict["occurrence_data"] = occ_data
-                            ef_dict = sanitize_extra_fields(ef_dict)
-                            row_updates["extra_fields"] = json.dumps(ef_dict, ensure_ascii=False)
-
-                    if matched_word:
-                        w_id = matched_word.get("id")
-                        updates_list.append({
-                            "id": w_id,
-                            "token_order": matched_word.get("token_order", int(t_ord) if t_ord.isdigit() else row_idx),
-                            "sentence_index": matched_word.get("sentence_index", sent_idx),
-                            "updates": row_updates,
-                        })
-                    else:
-                        updates_list.append({
-                            "token_order": int(t_ord) if t_ord.isdigit() else row_idx,
-                            "sentence_index": sent_idx,
-                            "updates": row_updates,
-                        })
-
-                if updates_list:
-                    self.db.batch_update_words(session_zid, updates_list, zid=zid)
-
-            return success
+        scratch = reword_scratch_rows(rows, headers, roles, selection, source)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / f'{session_zid}-ephemeral.tsv'
+            save_tsv_rows_safely(path, restored.get('comments', []), headers, scratch)
+            success = run_headless_intellifiller(tsv_path=path, prompt_name=prompt_name,
+                config=self.config, resolved_paths=self.resolved_paths,
+                selected_rows=list(selection.rows), reprocess=reprocess, zid=zid or session_zid,
+                trace_id=trace_id)
+            if not success:
+                return False
+            _, updated_headers, updated_rows = load_tsv_rows(path)
+            output = checked_provider_rows(rows, headers, updated_rows, updated_headers, roles)
+            updates = reword_sqlite_updates(restored['words'], output, updated_headers, selection, roles)
+            self.db.batch_update_words(session_zid, updates, zid=zid or session_zid)
+        return True
 
     def delete_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
         """
@@ -11025,7 +10662,7 @@ html, body {{
                             try:
                                 _occ = _san_ef(w.get("extra_fields")).get("occurrence_data")
                                 if isinstance(_occ, dict) and len(_occ) > 0:
-                                    row_occurrences[str(w.get("token_order", ""))] = _occ
+                                    row_occurrences[(str(w['sentence_index']), str(w['token_order']))] = _occ
                             except Exception:
                                 pass
                             w_prov = w.get("word_provenance")
@@ -11939,6 +11576,13 @@ html, body {{
         ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
         pos_raw = row[col_pos] if col_pos != -1 and len(row) > col_pos else ""
         gender_raw = row[col_gender] if col_gender != -1 and len(row) > col_gender else ""
+        occurrence_key = (str(row[col_index]), str(row[col_token_order])) if col_index != -1 and col_token_order != -1 else None
+        _row_occ = row_occurrences.get(occurrence_key)
+        if _row_occ:
+            projected = reword.project_occurrences(_row_occ)
+            trans_val = projected['trans'] or trans_val
+            morph_val = projected['morph'] or morph_val
+            pos_raw = projected['pos'] or pos_raw
         pos_val = format_pos_cell(pos_raw)
         gender_badge = format_gender_badge(gender_raw)
 
@@ -12023,7 +11667,7 @@ html, body {{
             prov_attr = f'{prov_data}{prov_title}'
 
         occ_attr = ""
-        _row_occ = row_occurrences.get(str(token_order_val))
+        _row_occ = row_occurrences.get((str(sent_idx_val), str(token_order_val)))
         if lemma_val and lemma_val.strip().lower() == "der":
             if not isinstance(_row_occ, dict):
                 _row_occ = {}
@@ -12064,8 +11708,11 @@ html, body {{
             except Exception:
                 occ_attr = ""
 
+        occurrence_target = lookup_row_occurrence(row, col_index, col_token_order)
+        occurrence_targets = [occurrence_target] if occurrence_target else []
+        targets_attr = html.escape(json.dumps(occurrence_targets), quote=True)
         row_html_line = (
-            f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}"{occ_attr} data-sentence-idx="{sent_idx_val}" data-selected="{is_selected}" class="{row_highlight_class}">'
+            f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}"{occ_attr} data-occurrence-targets="{targets_attr}" data-sentence-idx="{sent_idx_val}" data-selected="{is_selected}" class="{row_highlight_class}">'
             f'<td class="{inflected_class} col-inflected" data-col="{inflected_col_name}"{inflected_title_attr}><div class="scrollable-cell">{inflected_val}</div></td>'
             f'<td class="{lemma_class} col-lemma" data-col="{lemma_col_name}"{lemma_title_attr}><div class="scrollable-cell">{lemma_val}</div></td>'
             f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{prov_attr}><div class="scrollable-cell"{prov_attr}>{trans_val}</div></td>'
@@ -12095,6 +11742,7 @@ html, body {{
             "dynamic_tds": dynamic_tds,
             "inflected_tooltip": inflected_tooltip,
             "occurrence_data": _row_occ,
+            "occurrence_targets": occurrence_targets,
             "row_html": row_html_line,
         })
     table_rows_html = "" if is_mismatch else "\n".join(table_rows)
@@ -12299,6 +11947,9 @@ html, body {{
         master_trans_full = _strip_html(master_trans_full)
         master_card_slug = master_slug if 'master_slug' in locals() else (tsv_slug or (generate_slug(text) if text else ""))
 
+        overview_data_rows = reword.project_rows(data_rows, headers,
+            {'trans': trans_col_name, 'pos': pos_col_name, 'morph': morph_col_name},
+            row_occurrences, role_fields.get('sentence_index', 'SentenceSourceIndex'))
         # Build Master Overview [1] (sentence_idx = 0) with globally deduplicated vocabulary and combined inflected forms
         overview_word_objs = []
         col_ws_dedup = col_lemma if col_lemma != -1 else (headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1)
@@ -12307,7 +11958,7 @@ html, body {{
         token_config = RuntimeTokenConfig.from_config(config)
         if col_ws_dedup != -1 and dedup_scope_val != 'none':
             overview_rows = deduplicate_rows(
-                data_rows, col_ws_dedup, col_pos_dedup, col_inflected, config,
+                overview_data_rows, col_ws_dedup, col_pos_dedup, col_inflected, config,
                 window_text=text, language=language, resolved_paths=resolved_paths,
                 col_quotation=col_quotation, col_word_dest=col_word_dest,
                 deduplicate_pos_aware=token_config.overview_deduplicate_pos_aware
@@ -12317,11 +11968,11 @@ html, body {{
             )
         else:
             overview_rows = sort_rows_by_frequency(
-                [list(r) for r in data_rows], headers, language, config, resolved_paths, role_fields=role_fields
+                [list(r) for r in overview_data_rows], headers, language, config, resolved_paths, role_fields=role_fields
             )
 
         lemma_pos_to_row_ids = {}
-        for r_id, r in enumerate(data_rows):
+        for r_id, r in enumerate(overview_data_rows):
             lem = r[col_lemma].strip().lower() if col_lemma != -1 and len(r) > col_lemma else ""
             pos_val = r[col_pos_dedup].strip().lower() if col_pos_dedup != -1 and len(r) > col_pos_dedup else ""
 
@@ -12397,12 +12048,12 @@ html, body {{
             if col_word_dest != -1 and matched_ids and len(matched_ids) > 1:
                 sorted_matched_ids = sorted(
                     matched_ids,
-                    key=lambda mid: int(data_rows[mid][col_token_order]) if (col_token_order != -1 and len(data_rows[mid]) > col_token_order and str(data_rows[mid][col_token_order]).isdigit()) else mid
+                    key=lambda mid: int(overview_data_rows[mid][col_token_order]) if (col_token_order != -1 and len(overview_data_rows[mid]) > col_token_order and str(overview_data_rows[mid][col_token_order]).isdigit()) else mid
                 )
                 trans_items = []
                 for mid in sorted_matched_ids:
-                    if 0 <= mid < len(data_rows) and len(data_rows[mid]) > col_word_dest:
-                        tr_cand = str(data_rows[mid][col_word_dest] or "").strip()
+                    if 0 <= mid < len(overview_data_rows) and len(overview_data_rows[mid]) > col_word_dest:
+                        tr_cand = str(overview_data_rows[mid][col_word_dest] or "").strip()
                         if tr_cand and tr_cand != "[FAILED]" and "skeleton-loader" not in tr_cand and tr_cand not in ("-", "--"):
                             trans_items.append((mid, tr_cand))
                 if trans_items:
@@ -12412,12 +12063,12 @@ html, body {{
             if col_morph != -1 and matched_ids and len(matched_ids) > 1:
                 sorted_matched_ids = sorted(
                     matched_ids,
-                    key=lambda mid: int(data_rows[mid][col_token_order]) if (col_token_order != -1 and len(data_rows[mid]) > col_token_order and str(data_rows[mid][col_token_order]).isdigit()) else mid
+                    key=lambda mid: int(overview_data_rows[mid][col_token_order]) if (col_token_order != -1 and len(overview_data_rows[mid]) > col_token_order and str(overview_data_rows[mid][col_token_order]).isdigit()) else mid
                 )
                 morph_items = []
                 for mid in sorted_matched_ids:
-                    if 0 <= mid < len(data_rows) and len(data_rows[mid]) > col_morph:
-                        m_cand = str(data_rows[mid][col_morph] or "").strip()
+                    if 0 <= mid < len(overview_data_rows) and len(overview_data_rows[mid]) > col_morph:
+                        m_cand = str(overview_data_rows[mid][col_morph] or "").strip()
                         if m_cand and m_cand != "[FAILED]" and "skeleton-loader" not in m_cand and m_cand not in ("-", "--"):
                             morph_items.append((mid, m_cand))
                 if morph_items:
@@ -12427,12 +12078,12 @@ html, body {{
             if matched_ids and len(matched_ids) > 1 and col_pos != -1:
                 sorted_matched_ids = sorted(
                     matched_ids,
-                    key=lambda mid: int(data_rows[mid][col_token_order]) if (col_token_order != -1 and len(data_rows[mid]) > col_token_order and str(data_rows[mid][col_token_order]).isdigit()) else mid
+                    key=lambda mid: int(overview_data_rows[mid][col_token_order]) if (col_token_order != -1 and len(overview_data_rows[mid]) > col_token_order and str(overview_data_rows[mid][col_token_order]).isdigit()) else mid
                 )
                 pos_items = []
                 for mid in sorted_matched_ids:
-                    if 0 <= mid < len(data_rows) and len(data_rows[mid]) > col_pos:
-                        p_val = data_rows[mid][col_pos].strip()
+                    if 0 <= mid < len(overview_data_rows) and len(overview_data_rows[mid]) > col_pos:
+                        p_val = overview_data_rows[mid][col_pos].strip()
                         if p_val:
                             pos_items.append((mid, p_val))
                 if pos_items:
@@ -12468,8 +12119,8 @@ html, body {{
                 col_sent_src = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
                 ov_sent_tuples = []
                 for mid in matched_ids:
-                    if 0 <= mid < len(data_rows):
-                        r_item = data_rows[mid]
+                    if 0 <= mid < len(overview_data_rows):
+                        r_item = overview_data_rows[mid]
                         sent_txt = r_item[col_sent_src].strip() if col_sent_src != -1 and len(r_item) > col_sent_src else ""
                         inf_form = resolve_row_inflected_form(r_item, col_inflected, col_inflected2, col_quotation, col_lemma)
                         t_ord_item = r_item[col_token_order] if col_token_order != -1 and len(r_item) > col_token_order else ""
@@ -12527,8 +12178,8 @@ html, body {{
                     mapping_pairs = []
                     seen_pair_keys = set()
                     for mid in matched_ids:
-                        if 0 <= mid < len(data_rows):
-                            r_mid = data_rows[mid]
+                        if 0 <= mid < len(overview_data_rows):
+                            r_mid = overview_data_rows[mid]
                             m_inf = resolve_row_inflected_form(r_mid, col_inflected, col_inflected2, col_quotation, col_lemma).strip()
                             m_tr = r_mid[col_word_dest].strip() if col_word_dest != -1 and len(r_mid) > col_word_dest else ""
                             if m_inf and m_tr and m_tr != "[FAILED]" and "skeleton-loader" not in m_tr and m_tr not in ("-", "--"):
@@ -12553,11 +12204,10 @@ html, body {{
             ov_row_occ = {}
             if row_occurrences:
                 for mid in matched_ids:
-                    if 0 <= mid < len(data_rows):
-                        r_mid = data_rows[mid]
-                        t_ord = str(r_mid[col_token_order]) if col_token_order != -1 and len(r_mid) > col_token_order else str(mid)
-                        if t_ord in row_occurrences and isinstance(row_occurrences[t_ord], dict):
-                            ov_row_occ.update(row_occurrences[t_ord])
+                    if 0 <= mid < len(overview_data_rows):
+                        r_mid = overview_data_rows[mid]
+                        occurrence_key = (str(r_mid[col_index]), str(r_mid[col_token_order]))
+                        ov_row_occ.update(row_occurrences.get(occurrence_key, {}))
 
             if is_ov_unified_der:
                 der_forms = DE_UNIFIED_ARTICLE_FORMS
@@ -12576,8 +12226,8 @@ html, body {{
 
                         if col_word_dest != -1:
                             for mid in matched_ids:
-                                if 0 <= mid < len(data_rows):
-                                    r_mid = data_rows[mid]
+                                if 0 <= mid < len(overview_data_rows):
+                                    r_mid = overview_data_rows[mid]
                                     m_inf = resolve_row_inflected_form(r_mid, col_inflected, col_inflected2, col_quotation, col_lemma).strip().lower()
                                     if raw_w in [f.strip() for f in m_inf.split(',')]:
                                         cand_tr = r_mid[col_word_dest].strip() if len(r_mid) > col_word_dest else ""
@@ -12609,8 +12259,8 @@ html, body {{
                             ov_row_occ[v_key] = entry
             elif matched_ids and len(matched_ids) > 1:
                 for mid in matched_ids:
-                    if 0 <= mid < len(data_rows):
-                        r_mid = data_rows[mid]
+                    if 0 <= mid < len(overview_data_rows):
+                        r_mid = overview_data_rows[mid]
                         m_inf = resolve_row_inflected_form(r_mid, col_inflected, col_inflected2, col_quotation, col_lemma).strip().lower()
                         m_tr = r_mid[col_word_dest].strip() if col_word_dest != -1 and len(r_mid) > col_word_dest else ""
                         m_pos = r_mid[col_pos].strip() if col_pos != -1 and len(r_mid) > col_pos else ""
@@ -12643,8 +12293,11 @@ html, body {{
             ov_hl_class = "highlight-orange"
             if ov_is_sel == "1":
                 ov_hl_class += " selected kw-row-selected"
+            overview_targets = [lookup_row_occurrence(overview_data_rows[mid], col_index, col_token_order) for mid in matched_ids]
+            overview_targets = overview_targets if all(overview_targets) else []
+            targets_attr = html.escape(json.dumps(overview_targets), quote=True)
             ov_row_html = (
-                f'<tr data-row-id="{primary_id}"{all_ids_attr} data-token-order="{ov_token_order}"{ov_occ_attr} data-sentence-idx="0" data-selected="{ov_is_sel}" class="{ov_hl_class}">'
+                f'<tr data-row-id="{primary_id}"{all_ids_attr} data-token-order="{ov_token_order}"{ov_occ_attr} data-occurrence-targets="{targets_attr}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="{ov_hl_class}">'
                 f'<td class="{inflected_class} col-inflected" data-col="{inflected_col_name}"{ov_inf_title}><div class="scrollable-cell">{ov_inflected}</div></td>'
                 f'<td class="{lemma_class} col-lemma" data-col="{lemma_col_name}"{ov_lemma_title}><div class="scrollable-cell">{ov_lemma}</div></td>'
                 f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{ov_prov_attr}><div class="scrollable-cell"{ov_prov_attr}>{ov_trans}</div></td>'
@@ -12674,6 +12327,7 @@ html, body {{
                 "dynamic_tds": ov_dynamic_tds,
                 "inflected_tooltip": ov_inf_tooltip,
                 "occurrence_data": ov_row_occ,
+                "occurrence_targets": overview_targets,
                 "row_html": ov_row_html,
             })
 
@@ -15886,7 +15540,8 @@ def cmd_reprocess_worker(args):
 
 _update_seq_counter = 0
 
-def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, row_provenances=None):
+def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, row_provenances=None,
+                            row_occurrences=None, occurrence_provenances=None):
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
     col_inflected2 = headers.index("WordSourceInflectedForm2") if "WordSourceInflectedForm2" in headers else -1
@@ -15932,6 +15587,14 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
             "sentence_source": row_sentence,
             "inflected_tooltip": inf_tooltip,
         }
+        occurrence = (row_occurrences or {}).get((str(sent_idx_val), str(token_order_val)))
+        if occurrence:
+            projected = reword.project_occurrences(occurrence)
+            row_obj.update({name: value for name, value in projected.items() if value})
+            row_obj['morphology'] = row_obj['morph']
+            row_obj['pos'] = format_pos_cell(row_obj['pos'])
+            row_obj['WordSourcePOS'] = row_obj['pos']
+            row_obj['occurrence_data'] = occurrence
         if row_provenances:
             if str(token_order_val) in row_provenances:
                 row_obj["provenance"] = row_provenances[str(token_order_val)]
@@ -15941,6 +15604,9 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
                 row_obj["provenance"] = row_provenances[row_id]
             elif str(row_id) in row_provenances:
                 row_obj["provenance"] = row_provenances[str(row_id)]
+
+        if occurrence_provenances is not None and (str(sent_idx_val), str(token_order_val)) in occurrence_provenances:
+            row_obj['provenance'] = occurrence_provenances[(str(sent_idx_val), str(token_order_val))]
 
         if class_cols:
             class_vals = {}
@@ -16000,7 +15666,9 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         if trace_id is not None:
             update_data["trace_id"] = trace_id
     else:
-        rows_data = format_update_rows_dict(data_rows, headers, role_fields, class_cols=class_cols, row_provenances=row_provenances)
+        rows_data = format_update_rows_dict(data_rows, headers, role_fields, class_cols=class_cols, row_provenances=row_provenances,
+            row_occurrences=extra_kwargs.pop('row_occurrences', None),
+            occurrence_provenances=extra_kwargs.pop('occurrence_provenances', None))
         if stage is None:
             # Inline snapshot — only emit rows that have at least one non-empty field
             update_data = {
@@ -17351,29 +17019,126 @@ def edit_occurrence_coordinates(sentence_idx, token_order):
     return tuple(values)
 
 
-def is_visual_reword_context(coordinate):
-    return 'visual_idx' in coordinate and 'token_order' not in coordinate
+def resolve_reword_request(rows, headers, role_fields, source_text='', config=None, **selectors):
+    """Translate pure request errors; preserve explicit alignment failures for adapter callers."""
+    try:
+        targets = reword.descriptors(selectors.get('targets'))
+        visuals = reword.request_visuals(targets, selectors.get('visual_indices'))
+        manifest = {}
+        if visuals:
+            manifest = reword.visual_manifest(rows, headers, source_text,
+                lambda text: tok.build_word_list_internal(text, keep_spaces=True),
+                sentence_field=role_fields.get('sentence_index', 'SentenceSourceIndex'),
+                source_field=role_fields.get('sentence', 'SentenceSource'),
+                lemma_field=role_fields.get('lemma', 'WordSource'),
+                quotation_field=role_fields.get('quotation', 'Quotation'),
+                article_forms=DE_UNIFIED_ARTICLE_FORMS if config is None or config.getboolean(
+                    SEC_SETTINGS, 'unify_article_pronoun_lemmas', fallback=True) else ())
+        return reword.resolve_selection(rows, headers, visual_manifest=manifest,
+            sentence_field=role_fields.get('sentence_index', 'SentenceSourceIndex'), **selectors)
+    except reword.InvalidRewordTarget as exc:
+        raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
 
 
-def validate_visual_reword_context(coordinates):
-    for coordinate in coordinates:
-        visual = coordinate['visual_idx']
-        if isinstance(visual, bool) or not re.fullmatch(r'[0-9]+', str(visual).strip()):
-            raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Visual target requires a nonnegative visual_idx")
+def reword_descriptors(selection):
+    return [dict(sentence_idx=sentence, token_order=token) for sentence, token in selection.keys]
 
 
-def reword_occurrence_targets(coordinates):
-    """Separate legacy visual context from explicit word persistence targets."""
-    if not coordinates:
-        return []
-    if not isinstance(coordinates, list):
-        raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Re-word targets must be a list of descriptors")
-    if not all(isinstance(item, dict) for item in coordinates):
-        raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Re-word targets must be a list of descriptors")
-    if all(is_visual_reword_context(item) for item in coordinates):
-        validate_visual_reword_context(coordinates)
-        return []
-    return coordinates
+def reword_scratch_rows(rows, headers, roles, selection, source):
+    scratch = [list(row) for row in rows]
+    if not selection.visuals:
+        return scratch
+    source_col = headers.index(roles.get('sentence', 'SentenceSource'))
+    keys = reword.row_keys(rows, headers, roles.get('sentence_index', 'SentenceSourceIndex'))
+    sentences = {key[0]: row[source_col] for key, row in zip(keys, rows)}
+    offsets = reword.sentence_offsets(sentences, source,
+        lambda text: tok.build_word_list_internal(text, keep_spaces=True))
+    for index in selection.rows:
+        tokens = tok.build_word_list_internal(rows[index][source_col], keep_spaces=True)
+        offset = offsets[keys[index][0]]
+        scratch[index][source_col] = ''.join('[' + token['text'] + ']'
+            if token['visual_idx'] + offset in selection.visuals else token['text'] for token in tokens)
+    return scratch
+
+
+def reword_output_values(row, headers):
+    values = {name: value for name, value in zip(headers, row)
+              if name.lower().replace('_', '') not in ('extrafields', 'occurrencedata')}
+    values['word_provenance'] = 'live:intellifiller'
+    return values
+
+
+def reword_occurrence_fields(word, values, selection, roles):
+    from kardenwort_db import sanitize_extra_fields
+    extra = sanitize_extra_fields(word.get('extra_fields'))
+    occurrences = dict(extra.get('occurrence_data', {}))
+    identity = (int(word['sentence_index']), int(word['token_order']))
+    entry = dict(trans=values.get(roles.get('word_translation', 'WordDestination'), ''),
+                 pos=values.get(roles.get('pos', 'WordSourcePOS'), ''),
+                 morph=values.get(roles.get('morphology', 'WordSourceMorphologyAI'), ''))
+    for key, visual in selection.visual_keys:
+        if key == identity:
+            occurrences[str(visual)] = dict(entry)
+    extra['occurrence_data'] = occurrences
+    return json.dumps(extra, ensure_ascii=False)
+
+
+def reword_query_occurrences(adapter, session_zid):
+    from kardenwort_db import sanitize_extra_fields
+    if getattr(adapter, 'backend_name', '') != 'sqlite':
+        return {}
+    return {(str(word['sentence_index']), str(word['token_order'])): occurrence
+            for word in adapter.db.get_words_by_session(session_zid)
+            if (occurrence := sanitize_extra_fields(word.get('extra_fields')).get('occurrence_data'))}
+
+
+def reword_query_provenances(adapter, session_zid):
+    return {(str(word['sentence_index']), str(word['token_order'])): word.get('word_provenance', '')
+            for word in adapter.db.get_words_by_session(session_zid)}
+
+
+def reword_sqlite_updates(words, output, headers, selection, roles):
+    manifest = {(int(word['sentence_index']), int(word['token_order'])): word for word in words}
+    updates = []
+    for key in selection.keys:
+        word = manifest[key]
+        values = reword_output_values(output[key], headers)
+        if selection.visuals:
+            values['extra_fields'] = reword_occurrence_fields(word, values, selection, roles)
+        updates.append(dict(id=word['id'], sentence_index=key[0], token_order=key[1], updates=values))
+    return updates
+
+
+def enrich_reword_tsv(path, comments, headers, rows, roles, selection, source,
+                      prompt, config, resolved_paths, runner, zid):
+    scratch = reword_scratch_rows(rows, headers, roles, selection, source)
+    with tempfile.TemporaryDirectory() as directory:
+        scratch_path = Path(directory) / path.name
+        save_tsv_rows_safely(scratch_path, comments, headers, scratch)
+        success = runner(scratch_path, prompt, config, resolved_paths,
+                         selected_rows=list(selection.rows), reprocess=True, zid=zid)
+        if not success:
+            raise StructuredError(ErrorCode.DESK_FAILED, 'Re-word provider failed')
+        _, updated_headers, updated_rows = load_tsv_rows(scratch_path)
+        output = checked_provider_rows(rows, headers, updated_rows, updated_headers, roles)
+        result_headers, result = reword.merge_rows(rows, headers, output, updated_headers, selection,
+                                                 roles.get('sentence_index', 'SentenceSourceIndex'))
+    save_tsv_rows_safely(path, comments, result_headers, result)
+    return result_headers, result
+
+
+def checked_provider_rows(rows, headers, updated_rows, updated_headers, role_fields):
+    try:
+        output = reword.provider_rows(rows, headers, updated_rows, updated_headers,
+                                     role_fields.get('sentence_index', 'SentenceSourceIndex'))
+        keys = reword.row_keys(rows, headers, role_fields.get('sentence_index', 'SentenceSourceIndex'))
+        original = dict(zip(keys, rows))
+        source_field = role_fields.get('sentence', 'SentenceSource')
+        return {key: [original[key][headers.index(name)] if name == source_field and name in headers
+                      else sanitize_bracketed_field(value)
+                      for name, value in zip(updated_headers, row)] for key, row in output.items()}
+    except reword.InvalidRewordTarget as exc:
+        raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
 
 
 def resolve_occurrence_rows(rows, headers, coordinates, sentence_field="SentenceSourceIndex"):

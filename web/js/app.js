@@ -2677,39 +2677,24 @@
                         ? window.WorkspaceTabs.getCards()
                         : (typeof getCardModels === 'function' ? getCardModels() : null);
                     if (!wCards || wCards.length === 0) return;
-                    var deltasByTokenOrder = {};
+                    var deltasByOccurrence = {};
+                    var legacyByTokenOrder = {};
                     var deltasByRowId = {};
                     for (var rk in rowsData) {
                         if (rowsData.hasOwnProperty(rk)) {
                             var d = rowsData[rk];
                             if (d) {
-                                if (d.token_order !== undefined && d.token_order !== null && String(d.token_order) !== "") {
-                                    deltasByTokenOrder[String(d.token_order)] = d;
-                                } else if (rk !== undefined && rk !== null && String(rk) !== "") {
-                                    deltasByTokenOrder[String(rk)] = d;
+                                if (Number(d.sentence_idx) > 0 && d.token_order !== undefined) {
+                                    deltasByOccurrence[String(d.sentence_idx) + ':' + String(d.token_order)] = d;
+                                } else if (d.token_order !== undefined) {
+                                    legacyByTokenOrder[String(d.token_order)] = d;
+                                } else {
+                                    legacyByTokenOrder[String(rk)] = d;
                                 }
                                 if (d.row_id !== undefined && d.row_id !== null && String(d.row_id) !== "") {
                                     deltasByRowId[String(d.row_id)] = d;
                                 }
                                 deltasByRowId[String(rk)] = d;
-                            }
-                        }
-                    }
-                    for (var ci = 0; ci < wCards.length; ci++) {
-                        var cWords = wCards[ci].words;
-                        if (cWords) {
-                            for (var cwi = 0; cwi < cWords.length; cwi++) {
-                                var item = cWords[cwi];
-                                if (item.token_order !== undefined && item.token_order !== null && item.row_id !== undefined && item.row_id !== null) {
-                                    var sTok = String(item.token_order);
-                                    var sRow = String(item.row_id);
-                                    if (deltasByTokenOrder[sTok] && !deltasByRowId[sRow]) {
-                                        deltasByRowId[sRow] = deltasByTokenOrder[sTok];
-                                    }
-                                    if (deltasByRowId[sRow] && !deltasByTokenOrder[sTok]) {
-                                        deltasByTokenOrder[sTok] = deltasByRowId[sRow];
-                                    }
-                                }
                             }
                         }
                     }
@@ -2732,20 +2717,10 @@
                         if (cardWords) {
                             for (var ww = 0; ww < cardWords.length; ww++) {
                                 var cw = cardWords[ww];
-                                var matchingDelta = null;
-                                if (cw.token_order !== undefined && cw.token_order !== null && deltasByTokenOrder[String(cw.token_order)]) {
-                                    matchingDelta = deltasByTokenOrder[String(cw.token_order)];
-                                } else if (cw.row_id !== undefined && cw.row_id !== null && deltasByRowId[String(cw.row_id)]) {
-                                    var candDelta = deltasByRowId[String(cw.row_id)];
-                                    if (candDelta) {
-                                        var candLem = (candDelta.lemma || '').trim().toLowerCase();
-                                        var cwLem = (cw.lemma || '').trim().toLowerCase();
-                                        var candOrd = (candDelta.token_order !== undefined && candDelta.token_order !== null) ? String(candDelta.token_order) : null;
-                                        if ((candOrd && String(cw.token_order) === candOrd) || (candLem && cwLem && candLem === cwLem) || !candLem) {
-                                            matchingDelta = candDelta;
-                                        }
-                                    }
-                                }
+                                var matchingDelta = Number(cw.sentence_idx) > 0
+                                    ? deltasByOccurrence[String(cw.sentence_idx) + ':' + String(cw.token_order)]
+                                    : deltasByRowId[String(cw.row_id)];
+                                if (!matchingDelta) matchingDelta = legacyByTokenOrder[String(cw.token_order)];
                                 if (matchingDelta) {
                                     var mTrans = (matchingDelta.trans !== undefined && matchingDelta.trans !== "") ? matchingDelta.trans : ((matchingDelta.WordDestination !== undefined && matchingDelta.WordDestination !== "") ? matchingDelta.WordDestination : matchingDelta.word_translation);
                                     if (mTrans !== undefined && mTrans !== "") cw.translation = mTrans;
@@ -2967,7 +2942,11 @@
                 if (!rowData) return false;
                 var tr = null;
                 if (rowData.token_order !== undefined && rowData.token_order !== null && String(rowData.token_order) !== "") {
-                    tr = (document.querySelector('tr[data-token-order="' + rowData.token_order + '"]'));
+                    var identitySelector = 'tr[data-token-order="' + rowData.token_order + '"]';
+                    if (rowData.sentence_idx !== undefined && rowData.sentence_idx !== null) {
+                        identitySelector += '[data-sentence-idx="' + rowData.sentence_idx + '"]';
+                    }
+                    tr = document.querySelector(identitySelector);
                 } else {
                     tr = (document.querySelector('tr[data-row-id="' + rowId + '"]'));
                 }
@@ -2985,6 +2964,9 @@
                     }
                 }
                 if (!tr) return false;
+                if (rowData.occurrence_data) {
+                    tr.setAttribute('data-occ', JSON.stringify(rowData.occurrence_data));
+                }
                 var tds = tr.getElementsByTagName('td');
                 var infCell = (tr.querySelector('td.col-inflected, td[data-col="WordSourceInflectedForm"]')) || (tds.length >= 5 ? tds[0] : null);
                 var lemCell = (tr.querySelector('td.col-lemma, td[data-col="WordSource"]')) || (tds.length >= 5 ? tds[1] : (tds.length > 0 ? tds[0] : null));
@@ -3104,7 +3086,7 @@
                             }
                         }
                     }
-                    if (transTd && !transTd.classList.contains('dirty') && hasTransProp) {
+                    if (transTd && !transTd.classList.contains('dirty') && !transTd.classList.contains('editing') && hasTransProp) {
                         var div = (transTd.querySelector('.scrollable-cell')) || transTd;
                         var val = (rowData.trans !== undefined && rowData.trans !== "") ? rowData.trans : ((rowData.WordDestination !== undefined && rowData.WordDestination !== "") ? rowData.WordDestination : ((rowData.word_translation !== undefined) ? rowData.word_translation : (rowData.trans || "")));
                         var allRowIdsAttr = tr.getAttribute('data-all-row-ids');
@@ -7226,6 +7208,7 @@
                 if (!cellMap.hasOwnProperty(cls)) continue;
                 var td = (tr.querySelector('td.' + cls));
                 if (!td) continue;
+                if (td.classList.contains('editing') || td.classList.contains('dirty')) continue;
                 var cell = (td.querySelector('.scrollable-cell')) || td;
                 if (!td.hasAttribute('data-orig-html')) td.setAttribute('data-orig-html', String(cell.innerHTML));
                 if (!td.hasAttribute('data-orig-title')) td.setAttribute('data-orig-title', String(td.getAttribute('title') || ''));
@@ -7860,7 +7843,7 @@
             var rowId = trParent.getAttribute('data-row-id');
             var tokenOrder = trParent.getAttribute('data-token-order');
             var sentenceIdx = trParent.getAttribute('data-sentence-idx');
-            if (isLookupMode()) {
+            if (isLookupMode() || trParent.hasAttribute('data-occurrence-targets')) {
                 var editTarget = getLookupEditTarget(trParent);
                 if (!editTarget) {
                     window.showToast('Edit unavailable: select one occurrence before editing a merged row', 'error');

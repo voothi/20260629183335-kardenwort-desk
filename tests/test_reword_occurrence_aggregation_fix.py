@@ -155,6 +155,8 @@ def test_repeated_reword_on_two_occurrence_der_does_not_grow_aggregate(tmp_path)
     """
     Test 6.3: Repeated re-word on two-occurrence 'der' does not grow the aggregate.
     """
+    from tests.reword_view_support import article_occurrence, assert_readonly_aggregate
+
     db_path = tmp_path / "kardenwort.db"
     migrations_dir = Path(__file__).resolve().parent.parent / "schemas" / "migrations"
     db = KardenwortDB(str(db_path), migrations_dir=migrations_dir)
@@ -190,6 +192,7 @@ def test_repeated_reword_on_two_occurrence_der_does_not_grow_aggregate(tmp_path)
         "pos": "art.",
         "morphology": "der (определенный артикль мужского рода)",
         "word_provenance": "initial",
+        "extra_fields": article_occurrence(raw_sentence),
     })
 
     mapping_path = tmp_path / "mapping.ini"
@@ -254,7 +257,7 @@ de_prompt=test
         assert ok1 is True
 
     words = db.get_words_by_session(sess_zid)
-    assert words[0]["word_destination"] == "тот, который"
+    assert words[0]["word_destination"] == "который"
 
     # 2nd Re-word on second 'der' again
     with patch("kardenwort_desk.run_headless_intellifiller") as mock_runner:
@@ -281,9 +284,12 @@ de_prompt=test
         assert ok2 is True
 
     words2 = db.get_words_by_session(sess_zid)
-    assert words2[0]["word_destination"] == "тот, который"
+    assert words2[0]["word_destination"] == "который"
     assert words2[0]["word_destination"].count("который") == 1
-    assert words2[0]["word_destination"].count("тот") == 1
+    assert words2[0]["word_destination"].count("тот") == 0
+
+
+    assert_readonly_aggregate(storage_adapter, sess_zid, config, resolved_paths, raw_sentence)
 
 
 def test_reprocess_wordfill_skips_blended_corpus_for_single_occurrence(tmp_path):

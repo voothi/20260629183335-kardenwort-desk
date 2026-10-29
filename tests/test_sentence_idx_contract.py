@@ -10,7 +10,7 @@ def _make_reword_arbiter(tmp_path, monkeypatch):
     config_path = tmp_path / "config.ini"
     mapping_path = tmp_path / "mapping.ini"
     mapping_path.write_text(
-        "[roles]\nlemma=WordSource\nword_translation=WordDestination\nipa=WordSourceIPA\nmorphology=WordSourceMorphologyAI\nsentence_index=SentenceSourceIndex\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nWordSourceIPA=\nWordSourceMorphologyAI=\nSentenceSourceIndex=\n",
+        "[roles]\nlemma=WordSource\nword_translation=WordDestination\nipa=WordSourceIPA\nmorphology=WordSourceMorphologyAI\nsentence_index=SentenceSourceIndex\nsentence=SentenceSource\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nWordSourceIPA=\nWordSourceMorphologyAI=\nSentenceSourceIndex=\nSentenceSource=\n",
         encoding="utf-8"
     )
 
@@ -22,8 +22,8 @@ def _make_reword_arbiter(tmp_path, monkeypatch):
     # Put a full-quality match in WordFill corpus
     corpus_tsv = corpus_dir / "20260901120000-corpus.de.tsv"
     corpus_tsv.write_text(
-        "TokenOrder\tWordSource\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\tSentenceSourceIndex\n"
-        "0\tLieferpartner\tстарый_перевод\t/ˈliːfɐˌpaʁtnɐ/\tSubstantiv, Maskulinum\t1\n",
+        "TokenOrder\tWordSource\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\tSentenceSourceIndex\tSentenceSource\n"
+        "0\tLieferpartner\tстарый_перевод\t/ˈliːfɐˌpaʁtnɐ/\tSubstantiv, Maskulinum\t1\tLieferpartner Kunde.\n",
         encoding="utf-8"
     )
 
@@ -50,9 +50,9 @@ de_prompt=test
     tsv_file = results_dir / f"{sess_zid}.de.tsv"
     tsv_file.write_text(
         "# comment\n"
-        "TokenOrder\tWordSource\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\tSentenceSourceIndex\n"
-        "0\tLieferpartner\t\t\t\t1\n"
-        "1\tKunde\t\t\t\t1\n",
+        "TokenOrder\tWordSource\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\tSentenceSourceIndex\tSentenceSource\n"
+        "0\tLieferpartner\t\t\t\t1\tLieferpartner Kunde.\n"
+        "1\tKunde\t\t\t\t1\tLieferpartner Kunde.\n",
         encoding="utf-8"
     )
 
@@ -60,12 +60,13 @@ de_prompt=test
     arbiter.sessions[sess_zid] = {
         "session_zid": sess_zid,
         "language": "de",
+        "text": "Lieferpartner Kunde.",
         "data_rows": [
-            ["0", "Lieferpartner", "", "", "", "1"],
-            ["1", "Kunde", "", "", "", "1"],
+            ["0", "Lieferpartner", "", "", "", "1", "Lieferpartner Kunde."],
+            ["1", "Kunde", "", "", "", "1", "Lieferpartner Kunde."],
         ],
-        "headers": ["TokenOrder", "WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "SentenceSourceIndex"],
-        "role_fields": {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI", "sentence_index": "SentenceSourceIndex"},
+        "headers": ["TokenOrder", "WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "SentenceSourceIndex", "SentenceSource"],
+        "role_fields": {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI", "sentence_index": "SentenceSourceIndex", "sentence": "SentenceSource"},
         "row_provenances": {0: "live:google", "0": "live:google", 1: "live:google", "1": "live:google"},
     }
 
@@ -78,13 +79,12 @@ de_prompt=test
     })
 
     def fake_headless(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
-        lines = tsv_path.read_text(encoding="utf-8").splitlines()
-        new_lines = [
-            lines[0], lines[1],
-            "0\tLieferpartner\tсвежий_ai_партнер\t/ˈliːfɐˌpaʁtnɐ/\tSubstantiv, m\t1",
-            "1\tKunde\tсвежий_ai_клиент\t/ˈkʊndə/\tSubstantiv, m\t1",
-        ]
-        tsv_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+        comments, headers, rows = kardenwort_desk.load_tsv_rows(tsv_path)
+        for row, trans, ipa in zip(rows, ["свежий_ai_партнер", "свежий_ai_клиент"], ["/ˈliːfɐˌpaʁtnɐ/", "/ˈkʊndə/"]):
+            row[headers.index("WordDestination")] = trans
+            row[headers.index("WordSourceIPA")] = ipa
+            row[headers.index("WordSourceMorphologyAI")] = "Substantiv, m"
+        kardenwort_desk.save_tsv_rows_safely(tsv_path, comments, headers, rows)
         return True
 
     monkeypatch.setattr(kardenwort_controller, "run_headless_intellifiller", fake_headless)
@@ -119,9 +119,9 @@ def test_target_coordinates_do_not_override(tmp_path, monkeypatch):
     arbiter, sess_zid, calls = _make_reword_arbiter(tmp_path, monkeypatch)
     arbiter.reword_session(
         session_zid=sess_zid,
-        selected_rows=[0, 1],
+        selected_rows=[0],
         language="de",
-        target_coordinates=[{"visual_idx": 0, "sentence_idx": 3}],
+        target_coordinates=[{"visual_idx": 1, "sentence_idx": 3}],
     )
     assert len(calls) == 1
 

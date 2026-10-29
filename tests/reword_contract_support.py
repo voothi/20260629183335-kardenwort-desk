@@ -23,6 +23,11 @@ ROWS = [['0', 'Haus', 'Haus', 'house', '1', 'Haus.', '/haus/', 'noun'],
         ['0', 'Baum', 'Baum', 'tree', '2', 'Baum.', '/baum/', 'noun']]
 
 
+class RewordRequestHandler(controller.ControllerRequestHandler):
+    # Each owned HTTP transport finishes before the fixture removes its database.
+    protocol_version = 'HTTP/1.0'
+
+
 class ProviderResponse:
     def __init__(self):
         self.calls = []
@@ -53,7 +58,8 @@ class RewordWorld:
         mapping = owner / 'mapping.ini'
         mapping.write_text('[desk_columns]\nWordSource=lemma\nWordDestination=word_translation\n'
                            'SentenceSourceIndex=sentence_index\nSentenceSource=sentence\n'
-                           'WordSourceIPA=ipa\nWordSourceMorphologyAI=morphology\n', encoding='utf-8')
+                           'WordSourceIPA=ipa\nWordSourceMorphologyAI=morphology\n'
+                           '[desk_editable]\neditable_columns=WordDestination\n', encoding='utf-8')
         self.config = configparser.ConfigParser()
         self.config.read_dict({
             'storage': {'backend': backend, 'sqlite_db_path': str(owner / 'fixture.db'), 'fallback_to_tsv': 'false'},
@@ -61,6 +67,8 @@ class RewordWorld:
             'pipeline': {'lemma_reprocess_provider': provider_name},
             'languages': {'de_prompt': 'fixture'}, 'classification': {'enabled': 'false'},
             'wordfill': {'enabled': 'false'}, 'sentences_mode': {'delivery_mode': 'container'},
+            'triggers': {'run_text_translation': 'manual', 'run_lemma_base_translation': 'manual',
+                         'run_lemma_enrichment': 'manual'},
             'server': {'api_key': TOKEN}, 'environment': {'kardenwort_workspace': str(owner)},
         })
         self.paths = dict(sqlite_db_path=owner / 'fixture.db', storage_backend=backend,
@@ -84,9 +92,9 @@ class RewordWorld:
             sentences=[dict(sentence_index=int(row[4]), sentence_source=row[5]) for row in rows])
         comments, cached_headers, cached_rows = self.adapter.load_tsv_rows(self.path(zid))
         self.arbiter.sessions[zid] = dict(session_zid=zid, language=language, target_lang='en',
-            text=text, headers=cached_headers, data_rows=cached_rows, comments=comments, tsv_path=self.path(zid),
+            text=text, headers=cached_headers, data_rows=cached_rows, comments=comments, tsv_path=str(self.path(zid)),
             role_fields=desk.get_role_fields(desk.load_anki_mapping(self.paths['anki_mapping_file']), cached_headers),
-            row_provenances={index: 'fixture:initial' for index in range(len(rows))})
+            row_provenances={index: 'fixture:initial' for index in range(len(rows))}, lock=threading.RLock())
         self.zids.append(zid)
 
     def values(self, zid=ZID):
@@ -164,8 +172,8 @@ def world(tmp_path, monkeypatch, backend, provider_name):
     else:
         module = desk if backend == 'sqlite' else controller
         monkeypatch.setattr(module, 'run_headless_intellifiller', world.provider.enrich)
-    server = ThreadingHTTPServer(('127.0.0.1', 0), controller.ControllerRequestHandler)
-    server.daemon_threads = True
+    server = ThreadingHTTPServer(('127.0.0.1', 0), RewordRequestHandler)
+    server.daemon_threads = False
     server.config, server.resolved_paths = world.config, world.paths
     server.goldendict, server.api_key = {}, TOKEN
     server.seq_counter, server.seq_lock = 0, threading.Lock()
@@ -183,4 +191,5 @@ def world(tmp_path, monkeypatch, backend, provider_name):
         assert not thread.is_alive(), 'Owned HTTP server did not stop'
         for zid, channel in world.subscriptions:
             world.arbiter.unregister_subscriber(zid, channel)
+        world.arbiter.enrichment_queue.shutdown(wait=True)
         temporary.cleanup()
