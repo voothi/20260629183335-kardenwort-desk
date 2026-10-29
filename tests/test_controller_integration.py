@@ -280,18 +280,37 @@ def test_subsequent_status_provenance_and_cold_cache_retention(running_controlle
     assert len(cold_data.get("sentences", [])) == 2
 
 
-def test_live_session_20261019235609_endpoint_verification():
+def seed_provenance_endpoint(adapter):
+    sources = ['and mounting child nodes.', 'Applied matching type casting']
+    translations = ['и монтирование дочерних узлов.', 'Применено литье соответствующего типа']
+    headers = ['TokenOrder', 'Quotation', 'WordSource', 'SentenceSourceIndex',
+               'SentenceSource', 'SentenceDestination', 'SentenceDestination2', 'WordDestination']
+    rows = [[str(index), source.split()[0], source.split()[0], str(index + 1), source,
+             translation, translation, translation]
+            for index, (source, translation) in enumerate(zip(sources, translations))]
+    adapter.save_session(session_zid='20261019235609', source_language='en', target_language='ru',
+        text_mode='single', source_raw_text=' '.join(sources), headers=headers, data_rows=rows,
+        text_provenance='live:deepl', sentences=[
+            dict(sentence_index=index + 1, sentence_source=source, sentence_destination=translation,
+                 sentence_destination2=translation, text_provenance='live:deepl')
+            for index, (source, translation) in enumerate(zip(sources, translations))])
+
+
+def test_live_session_20261019235609_endpoint_verification(tmp_path):
     """
-    Execute live endpoint verification on session 20261019235609 using real data/kardenwort.db,
+    Execute endpoint verification on an isolated real SQLite session,
     confirming discrete sentence translations and verifying tooltip attribution reflects 'Translated via DeepL'.
     """
     desk_dir = Path(__file__).resolve().parent.parent
     config, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
-    db_file = desk_dir / "data" / "kardenwort.db"
-    assert db_file.exists(), "Production sqlite db must exist"
+    db_file = tmp_path / 'endpoint.db'
+    config.set('storage', 'backend', 'sqlite')
+    config.set('storage', 'sqlite_db_path', str(db_file))
     resolved_paths["sqlite_db_path"] = str(db_file)
 
     adapter = SqliteStorageAdapter(config=config, resolved_paths=resolved_paths, db_path=str(db_file))
+    assert db_file.exists(), "Production sqlite db must exist"
+    seed_provenance_endpoint(adapter)
 
     port = get_free_port()
     server = ThreadingHTTPServer(('127.0.0.1', port), ControllerRequestHandler)
