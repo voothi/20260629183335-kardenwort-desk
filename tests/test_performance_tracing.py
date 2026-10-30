@@ -3,9 +3,8 @@ import os
 import json
 import threading
 import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import configparser
-from pathlib import Path
 
 import kardenwort_desk
 from kardenwort_desk import TraceTimer, run_render_flow
@@ -66,64 +65,32 @@ class TestPerformanceTracing(unittest.TestCase):
                 entry = json.loads(lines[1])
                 self.assertFalse(entry["cold_start"])
 
-    @patch('kardenwort_desk._effective_text_mode', return_value='single')
-    @patch('kardenwort_desk.split_single_mode_text', return_value=['sentence'])
-    @patch('kardenwort_desk.prepare_lookup_tsv', return_value=Path('/tmp/20260807205400-test.en.tsv'))
-    @patch('kardenwort_desk.load_tsv_rows', return_value=([], [], []))
-    @patch('kardenwort_desk.load_anki_mapping', return_value=configparser.ConfigParser())
-    @patch('kardenwort_desk.get_role_fields', return_value={})
-    def test_run_render_flow_debounced(self, *mocks):
-        # We simulate a slow run_render_flow and try to enter it again with the same ZID
-        config = configparser.ConfigParser()
-        config.add_section("Settings")
-        config.set("Settings", "default_target_language", "en")
-        resolved_paths = {
-            'kardenwort_workspace': Path('/mock/workspace'), 
-            'base_dir': Path('/mock/base_dir'),
-            'anki_mapping_file': Path('/mock/mapping.json'),
-            'anki_tts_cli': Path('/mock/anki_tts_cli.py'),
-            'kardenwort_python': Path('/mock/python.exe'),
-            'deep_translator_python': Path('/mock/deep_translator_python.exe'),
-            'translate_google_script': Path('/mock/translate_google.py'),
-            'translate_deepl_script': Path('/mock/translate_deepl.py'),
-            'intellifiller_headless': Path('/mock/intellifiller.py'),
-            'favorites_output_dir': Path('/mock/favorites'),
-            'generated_results_dir': Path('/mock/results')
-        }
+    def test_run_render_flow_debounced(self):
+        # Exercise the existing concurrency boundary, not a fabricated render tree.
+        from tests.thread_support import Worker
+        entered = threading.Event()
+        resume = threading.Event()
 
-        # We'll use an event to hold the first thread inside run_render_flow
-        in_flow_event = threading.Event()
-        resume_event = threading.Event()
+        def render(*args, **kwargs):
+            entered.set()
+            assert resume.wait(3), "First render was not released"
+            return "rendered first request"
 
-        # Patch a function called inside run_render_flow to block
-        original_eff = kardenwort_desk._effective_text_mode
-        def blocking_eff_mode(*args, **kwargs):
-            in_flow_event.set()
-            resume_event.wait()
-            return 'single'
-
-        with patch('kardenwort_desk._effective_text_mode', side_effect=blocking_eff_mode):
+        with patch('kardenwort_desk._run_render_flow_impl', side_effect=render) as implementation:
             zid = "debounce_zid"
-            
+
             def run_flow():
-                # returns instantly if debounced
-                return run_render_flow("text", "de", zid, "single", config, resolved_paths)
+                return run_render_flow("text", "de", zid, "single", None, {})
 
-            t1 = threading.Thread(target=run_flow)
-            t1.start()
-
-            # wait for t1 to be inside the flow
-            in_flow_event.wait()
-
-            # now t2 tries with the same zid — it should be silently debounced (not raise, return "")
-            debounced_result = run_flow()
-            self.assertEqual(debounced_result, "", "Debounced concurrent render must return '' silently without raising")
-
-            # finish t1
-            resume_event.set()
-            t1.join()
-
-            # check if _ACTIVE_ZIDS is clean
+            first = Worker(run_flow)
+            try:
+                self.assertTrue(entered.wait(3), "First render did not enter")
+                debounced_result = run_flow()
+                self.assertEqual(debounced_result, "", "Debounced concurrent render must return '' silently without raising")
+            finally:
+                resume.set()
+                self.assertEqual(first.result(), "rendered first request")
+            self.assertEqual(implementation.call_count, 1)
             self.assertNotIn(zid, kardenwort_desk._ACTIVE_ZIDS)
 
     @patch('kardenwort_desk.resolve_results_dir')

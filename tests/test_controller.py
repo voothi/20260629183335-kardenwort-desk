@@ -15,6 +15,7 @@ from http.server import ThreadingHTTPServer
 
 import kardenwort_desk
 import kardenwort_controller
+from tests.thread_support import sse_events
 from kardenwort_controller import (
     ProcessSupervisor,
     SessionArbiter,
@@ -61,13 +62,13 @@ def running_controller():
 
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    time.sleep(0.1)
-
     server_url = f"http://127.0.0.1:{port}"
     yield server_url, server
 
     server.shutdown()
     server.server_close()
+    server_thread.join(timeout=3)
+    assert not server_thread.is_alive()
 
 
 # ---------------------------------------------------------------------------
@@ -167,54 +168,24 @@ def test_controller_session_lifecycle_and_sse_streaming(running_controller):
 
     # 1. Connect SSE client in background thread
     test_zid = f"2026081999{int(time.time()) % 10000:04d}"
-    received_events = []
-    sse_connected = threading.Event()
-    stop_listener = threading.Event()
+    with sse_events(server_url, test_zid) as stream:
+        # 2. Emit event via arbiter
+        t0 = time.perf_counter()
+        server.arbiter.emit_event(test_zid, {
+            "type": "stage",
+            "stage": "translated_text",
+            "status": "success",
+            "data": "Hallo Welt"
+        })
+        server.arbiter.emit_event(test_zid, {
+            "type": "stage",
+            "stage": "finished",
+            "status": "success"
+        })
 
-    def sse_listener():
-        import http.client
-        import urllib.parse
-        parsed = urllib.parse.urlparse(server_url)
-        conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5.0)
-        conn.request("GET", f"/events?zid={test_zid}", headers={"X-API-Token": "test-controller-api-key"})
-        resp = conn.getresponse()
-        sse_connected.set()
-
-        while not stop_listener.is_set() and len(received_events) < 3:
-            line = resp.fp.readline().decode('utf-8')
-            if not line:
-                break
-            line = line.strip()
-            if line.startswith("data: "):
-                raw_json = line[6:]
-                try:
-                    received_events.append(json.loads(raw_json))
-                except Exception:
-                    pass
-        conn.close()
-
-    listener_thread = threading.Thread(target=sse_listener, daemon=True)
-    listener_thread.start()
-    assert sse_connected.wait(timeout=2.0)
-    time.sleep(0.1)
-
-    # 2. Emit event via arbiter
-    t0 = time.perf_counter()
-    server.arbiter.emit_event(test_zid, {
-        "type": "stage",
-        "stage": "translated_text",
-        "status": "success",
-        "data": "Hallo Welt"
-    })
-    server.arbiter.emit_event(test_zid, {
-        "type": "stage",
-        "stage": "finished",
-        "status": "success"
-    })
-
-    listener_thread.join(timeout=3.0)
-    stop_listener.set()
-    latency_ms = (time.perf_counter() - t0) * 1000
+        stream.wait(lambda events: len(events) >= 3)
+        received_events = list(stream.events)
+        latency_ms = (time.perf_counter() - t0) * 1000
 
     # Verify event delivery
     assert len(received_events) >= 3
@@ -229,61 +200,31 @@ def test_controller_sse_stream_dynamic_skeleton_provider_labels(running_controll
     server_url, server = running_controller
     test_zid = "20261008141500"
 
-    received_events = []
-    sse_connected = threading.Event()
-    stop_listener = threading.Event()
+    with sse_events(server_url, test_zid) as stream:
+        # 1. Emit text_translation stage with primary provider (e.g. argos)
+        server.arbiter.emit_event(test_zid, {
+            "type": "stage",
+            "stage": "text_translation",
+            "status": "in_progress",
+            "provider": "argos",
+        })
+        # 2. Emit lemma_translation stage with fallback provider (e.g. google)
+        server.arbiter.emit_event(test_zid, {
+            "type": "stage",
+            "stage": "lemma_translation",
+            "status": "in_progress",
+            "provider": "google",
+        })
+        # 3. Emit translated update
+        server.arbiter.emit_event(test_zid, {
+            "type": "update",
+            "stage": "translated",
+            "status": "success",
+            "provider": "google",
+        })
 
-    def sse_listener():
-        import http.client
-        import urllib.parse
-        parsed = urllib.parse.urlparse(server_url)
-        conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5.0)
-        conn.request("GET", f"/events?zid={test_zid}", headers={"X-API-Token": "test-controller-api-key"})
-        resp = conn.getresponse()
-        sse_connected.set()
-
-        while not stop_listener.is_set() and len(received_events) < 4:
-            line = resp.fp.readline().decode('utf-8')
-            if not line:
-                break
-            line = line.strip()
-            if line.startswith("data: "):
-                raw_json = line[6:]
-                try:
-                    received_events.append(json.loads(raw_json))
-                except Exception:
-                    pass
-        conn.close()
-
-    listener_thread = threading.Thread(target=sse_listener, daemon=True)
-    listener_thread.start()
-    assert sse_connected.wait(timeout=2.0)
-    time.sleep(0.1)
-
-    # 1. Emit text_translation stage with primary provider (e.g. argos)
-    server.arbiter.emit_event(test_zid, {
-        "type": "stage",
-        "stage": "text_translation",
-        "status": "in_progress",
-        "provider": "argos",
-    })
-    # 2. Emit lemma_translation stage with fallback provider (e.g. google)
-    server.arbiter.emit_event(test_zid, {
-        "type": "stage",
-        "stage": "lemma_translation",
-        "status": "in_progress",
-        "provider": "google",
-    })
-    # 3. Emit translated update
-    server.arbiter.emit_event(test_zid, {
-        "type": "update",
-        "stage": "translated",
-        "status": "success",
-        "provider": "google",
-    })
-
-    listener_thread.join(timeout=3.0)
-    stop_listener.set()
+        stream.wait(lambda events: len(events) >= 4)
+        received_events = list(stream.events)
 
     # Verify event stream delivers provider metadata
     assert len(received_events) >= 4
@@ -320,42 +261,16 @@ def test_controller_session_status_and_sse_provider_failover(running_controller)
             "created_at": time.time(),
         }
 
-    received_lines = []
-    sse_connected = threading.Event()
-    stop_listener = threading.Event()
+    with sse_events(server_url, test_zid) as stream:
+        # 1. Trigger text failover from google to argos
+        from kardenwort_desk import notify_provider_failover
+        notify_provider_failover('text', 'google', 'argos', zid=test_zid)
 
-    def sse_listener():
-        import http.client
-        import urllib.parse
-        parsed = urllib.parse.urlparse(server_url)
-        conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5.0)
-        conn.request("GET", f"/events?zid={test_zid}", headers={"X-API-Token": "test-controller-api-key"})
-        resp = conn.getresponse()
-        sse_connected.set()
+        # 2. Trigger lemma failover from google to argos
+        notify_provider_failover('lemma', 'google', 'argos', zid=test_zid)
 
-        while not stop_listener.is_set():
-            line = resp.fp.readline().decode('utf-8')
-            if not line:
-                break
-            line = line.strip()
-            if line:
-                received_lines.append(line)
-        conn.close()
-
-    listener_thread = threading.Thread(target=sse_listener, daemon=True)
-    listener_thread.start()
-    assert sse_connected.wait(timeout=2.0)
-    time.sleep(0.1)
-
-    # 1. Trigger text failover from google to argos
-    from kardenwort_desk import notify_provider_failover
-    notify_provider_failover('text', 'google', 'argos', zid=test_zid)
-
-    # 2. Trigger lemma failover from google to argos
-    notify_provider_failover('lemma', 'google', 'argos', zid=test_zid)
-
-    time.sleep(0.3)
-    stop_listener.set()
+        stream.wait(lambda events: sum(event.get("type") == "provider_failover" for event in events) >= 2)
+        received_lines = [json.dumps(event) for event in stream.events]
 
     # Query /session/status endpoint
     url = f"{server_url}/session/status?zid={test_zid}"
