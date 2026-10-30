@@ -250,8 +250,8 @@ def test_reword_and_reprocess_prefill_and_filter_intellifiller(tmp_path, monkeyp
     sess_zid = "20260824140000"
     sess_tsv = resolved_paths['generated_results_dir'] / f"{sess_zid}-fruits.de.tsv"
     sess_rows = [
-        ['apfel', '', '', '', '0', 'Der Apfel.', '', '0'],
-        ['birne', '', '', '', '0', 'Die Birne.', '', '1']
+        ['apfel', '', '', '', '1', 'Der Apfel.', '', '0'],
+        ['birne', '', '', '', '2', 'Die Birne.', '', '1']
     ]
     with open(sess_tsv, 'w', encoding='utf-8', newline='') as f:
         writer = csv.writer(f, delimiter='\t', lineterminator='\n')
@@ -263,6 +263,7 @@ def test_reword_and_reprocess_prefill_and_filter_intellifiller(tmp_path, monkeyp
     intellifiller_calls = []
     def mock_headless_intellifiller(tsv, prompt, cfg, paths, selected_rows=None, **kw):
         intellifiller_calls.append(list(selected_rows or []))
+        return True
 
     monkeypatch.setattr(desk, 'run_headless_intellifiller', mock_headless_intellifiller)
     import kardenwort_controller

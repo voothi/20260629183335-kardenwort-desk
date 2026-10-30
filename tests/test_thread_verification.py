@@ -44,7 +44,7 @@ def test_unexpected_worker_failure_fails_pytest(tmp_path):
                      '            release.set()\n'
                      '            first.result()\n', encoding='utf-8')
     result = subprocess.run([sys.executable, '-m', 'pytest', str(probe), '-q',
-                             '-p', 'no:cacheprovider',
+                             '-p', 'no:cacheprovider', '--confcutdir', str(tmp_path), '--rootdir', str(tmp_path),
                              '-W', 'error::pytest.PytestUnhandledThreadExceptionWarning'],
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 1, result.stdout + result.stderr

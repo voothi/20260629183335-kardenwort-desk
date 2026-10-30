@@ -1,5 +1,6 @@
 """Owned audit paths, verified backups, capacity rejection and collection guards."""
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -93,6 +94,15 @@ def test_audit_rejects_paths_outside_results(tmp_path):
         audit.require_owned(tmp_path / 'results', tmp_path)
 
 
+def test_project_temporary_output_requires_a_named_owned_directory():
+    owner = Path(os.environ['TEMP']) / 'kardenwort-desk-audits' / audit.ROOT.name
+    assert audit.require_owned(owner / 'explicit-run') == (owner / 'explicit-run').resolve()
+    with pytest.raises(ValueError):
+        audit.require_owned(owner)
+    with pytest.raises(ValueError):
+        audit.require_owned(owner.parent / 'another-repository' / 'run')
+
+
 def test_guards_are_active_during_collection(tmp_path):
     probe = tmp_path / 'test_collection_guards.py'
     probe.write_text('''import socket
@@ -138,6 +148,8 @@ isolation = audit.Isolation(before, 'collection-probe')
 with audit.owned_runtime(audit.OUT / 'scratch', isolation):
     result = pytest.main([sys.argv[2], '-q', '-p', 'no:cacheprovider',
                           '--basetemp', str(audit.OUT / 'fixtures'),
+                          '--confcutdir', str(Path(sys.argv[2]).parent),
+                          '--rootdir', str(Path(sys.argv[2]).parent),
                           '--junitxml', str(audit.OUT / 'junit.xml'),
                           '-W', 'error::pytest.PytestUnhandledThreadExceptionWarning'], plugins=[isolation])
 assert before == audit.protected_snapshot()

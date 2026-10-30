@@ -103,6 +103,10 @@ PAIRWISE_CONFIG_MATRIX = [
 ]
 
 
+# Additional cases complete the twelve previously missing axis pairs.
+PAIRWISE_CONFIG_MATRIX += [('multi', 'offline', 'white', 'gtts'), ('overview', 'google', 'light', 'piper'), ('single', 'intellifiller', 'light', 'gtts'), ('sentences', 'argos', 'dark', 'gtts'), ('multi', 'google', 'white', 'gtts')]
+
+
 @pytest.mark.parametrize("mode,provider,theme,audio", PAIRWISE_CONFIG_MATRIX)
 def test_configuration_matrix_pairwise_rendering(tmp_path, mode, provider, theme, audio):
     """
@@ -164,3 +168,12 @@ def test_orthogonal_key_independence(tmp_path):
     assert config.get(SEC_TRANSLATION, 'provider') == initial_provider
     assert config.get(SEC_AUDIO, 'player') == initial_audio
     assert config.get(SEC_SETTINGS, 'default_language') == initial_lang
+
+
+def test_configuration_matrix_contains_every_axis_pair():
+    from itertools import combinations, product
+    axes = [set(row[index] for row in PAIRWISE_CONFIG_MATRIX) for index in range(4)]
+    for first, second in combinations(range(4), 2):
+        expected = set(product(axes[first], axes[second]))
+        actual = {(row[first], row[second]) for row in PAIRWISE_CONFIG_MATRIX}
+        assert actual == expected, (first, second, expected - actual)

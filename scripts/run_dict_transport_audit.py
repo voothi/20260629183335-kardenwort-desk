@@ -28,8 +28,11 @@ def digest_file(path):
 
 def require_owned(path, root=ROOT):
     path = Path(path).resolve()
-    if not path.is_relative_to((root / 'results').resolve()) or path == (root / 'results').resolve():
-        raise ValueError('Audit paths must belong to a named directory under repository results')
+    owners = [(root / 'results').resolve(),
+              (Path(os.environ['TEMP']) / 'kardenwort-desk-audits' / root.name).resolve()]
+    if not any(path != owner and path.is_relative_to(owner) for owner in owners):
+        raise ValueError('Audit paths must belong to a named directory under repository results '
+                         'or the project-specific system temporary audit directory')
     return path
 
 
@@ -90,7 +93,7 @@ def prepare_backup(output, snapshot, reserve_bytes, reuse=None, manifest=None, r
 def parse_arguments(argv):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output-dir', type=Path, required=True,
-                        help='New run-owned directory under repository results; must not exist')
+                        help='New directory under repository results or TEMP/kardenwort-desk-audits/REPOSITORY; must not exist')
     parser.add_argument('--reserve-mb', type=float, default=128,
                         help='Required free test/evidence capacity, in addition to a new backup')
     parser.add_argument('--reuse-backup', type=Path)

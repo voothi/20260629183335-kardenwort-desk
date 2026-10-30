@@ -58,6 +58,17 @@ def manifest_columns(rows, headers, sentence_field):
     return sent_col, token_col
 
 
+def restored_manifest_rows(restored):
+    headers, rows = list(restored.get('headers', [])), restored.get('data_rows', [])
+    if 'TokenOrder' in headers or 'token_order' in headers or 'words' not in restored:
+        return headers, rows
+    words = restored['words']
+    if len(words) != len(rows):
+        raise InvalidRewordTarget('Restored word manifest does not match its rows')
+    return [*headers, 'TokenOrder'], [list(row) + [str(index_value(word['token_order']))]
+                                     for row, word in zip(rows, words)]
+
+
 def row_keys(rows, headers, sentence_field='SentenceSourceIndex'):
     sent_col, token_col = manifest_columns(rows, headers, sentence_field)
     keys = [(index_value(row[sent_col], 1), index_value(row[token_col])) for row in rows]
@@ -193,11 +204,11 @@ def visual_manifest(rows, headers, source_text, tokenize, sentence_field='Senten
     keys = row_keys(rows, headers, sentence_field)
     sentences = source_sentences(rows, headers, keys, source_field, lemma_field, source_text)
     offsets = sentence_offsets(sentences, source_text, tokenize)
-    tokens = {sentence: tokenize(text) for sentence, text in sentences.items()}
+    positions = {sentence: visual_word_positions(tokenize(text)) for sentence, text in sentences.items()}
     result = {}
     for index, (key, row) in enumerate(zip(keys, rows)):
         forms = row_forms(row, headers, lemma_field, quotation_field, article_forms)
-        add_visual_row(result, tokens[key[0]], forms, offsets[key[0]], index)
+        add_visual_row(result, positions[key[0]], forms, offsets[key[0]], index)
     return result
 
 
@@ -214,10 +225,19 @@ def source_sentences(rows, headers, keys, source_field, lemma_field, source_text
     return sentences
 
 
-def add_visual_row(result, tokens, forms, offset, index):
+def visual_word_positions(tokens):
+    result = {}
     for token in tokens:
-        if token.get('is_word') and token.get('lower_clean', token['text'].lower()) in forms:
-            result.setdefault(offset + token['visual_idx'], []).append(index)
+        if token.get('is_word'):
+            form = token.get('lower_clean', token['text'].lower())
+            result.setdefault(form, []).append(token['visual_idx'])
+    return result
+
+
+def add_visual_row(result, positions, forms, offset, index):
+    for form in forms:
+        for visual in positions.get(form, ()):
+            result.setdefault(offset + visual, []).append(index)
 
 
 def provider_rows(original_rows, original_headers, updated_rows, updated_headers,
@@ -237,6 +257,14 @@ def validate_provider_columns(rows, headers):
         raise InvalidRewordTarget('Duplicate provider columns')
     if any(len(row) != len(headers) for row in rows):
         raise InvalidRewordTarget('Incomplete provider result row')
+
+
+def fast_provider_results(lemmas, values):
+    if not isinstance(values, dict) or set(values) != set(lemmas):
+        raise InvalidRewordTarget('Fast provider changed the requested lemma batch')
+    if any(not isinstance(value, str) or not value.strip() for value in values.values()):
+        raise InvalidRewordTarget('Fast provider returned an incomplete translation batch')
+    return values
 
 
 def merge_rows(rows, headers, output, output_headers, selection, sentence_field='SentenceSourceIndex'):
@@ -259,6 +287,12 @@ def project_occurrences(occurrences):
         values = [entry[field] for entry in entries if entry.get(field)]
         result[field] = delimiter.join(dict.fromkeys(values))
     return result
+
+
+def project_provenances(rows, headers, provenances, sentence_field='SentenceSourceIndex'):
+    keys = row_keys(rows, headers, sentence_field)
+    return {tuple(map(str, key)): provenances.get(index, provenances.get(str(index)))
+            for index, key in enumerate(keys)}
 
 
 def project_rows(rows, headers, fields, occurrences, sentence_field='SentenceSourceIndex'):

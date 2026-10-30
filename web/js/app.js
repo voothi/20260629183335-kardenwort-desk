@@ -56,6 +56,73 @@
     }
     window.isServerDisabled = isServerDisabled;
 
+    function isGlobalCardUpdate(payload) {
+        return Boolean(payload && (payload.sentences || ['translating', 'finished'].indexOf(payload.stage) !== -1 ||
+            payload.is_finished || payload.is_global || payload.all_sentences));
+    }
+
+    function isLegacyTokenDelta(delta) {
+        return delta && delta.token_order !== undefined && !(Number(delta.sentence_idx) > 0) && delta.row_id === undefined;
+    }
+
+    function acceptsLegacyCard(card, activeSentence, globalUpdate) {
+        return Number(card.sentence_idx) > 0 &&
+            (globalUpdate || activeSentence === null || activeSentence === '0' || String(card.sentence_idx) === activeSentence);
+    }
+
+    function matchesLegacyRowId(candidate, word) {
+        return candidate.id === String(word.row_id) && (!candidate.delta.lemma ||
+            String(candidate.delta.lemma).trim().toLowerCase() === String(word.lemma || '').trim().toLowerCase());
+    }
+
+    function collectLegacyCardMatches(card, legacy, matches, rowMatches) {
+        (card.words || []).forEach(function(word) {
+            var token = String(word.token_order);
+            if (!Object.prototype.hasOwnProperty.call(legacy, token)) return;
+            if (legacy[token].length !== 1) return;
+            if (!matches[token]) matches[token] = {};
+            var key = String(card.sentence_idx) + ':' + String(word.row_id);
+            var identity = {
+                row_id: word.row_id, sentence_idx: card.sentence_idx
+            };
+            matches[token][key] = identity;
+            if (matchesLegacyRowId(legacy[token][0], word)) {
+                if (!rowMatches[token]) rowMatches[token] = {};
+                rowMatches[token][key] = identity;
+            }
+        });
+    }
+
+    function normalizeLegacyRowDeltas(rows, payload) {
+        var tabs = window.WorkspaceTabs;
+        var cards = tabs && tabs.getCards ? tabs.getCards() : [];
+        if (!cards.length) return rows;
+        var active = tabs.getActiveCard ? tabs.getActiveCard() : null;
+        var activeSentence = active && active.sentence_idx !== undefined ? String(active.sentence_idx) : null;
+        var legacy = {}, matches = {}, rowMatches = {}, result = {};
+        Object.keys(rows).forEach(function(id) {
+            var delta = rows[id];
+            if (isLegacyTokenDelta(delta)) {
+                var token = String(delta.token_order);
+                if (!legacy[token]) legacy[token] = [];
+                legacy[token].push({id: id, delta: delta});
+            } else result[id] = delta;
+        });
+        cards.forEach(function(card) {
+            if (acceptsLegacyCard(card, activeSentence, isGlobalCardUpdate(payload))) {
+                collectLegacyCardMatches(card, legacy, matches, rowMatches);
+            }
+        });
+        Object.keys(legacy).forEach(function(token) {
+            var candidates = rowMatches[token] || matches[token] || {};
+            var identities = Object.keys(candidates);
+            if (identities.length !== 1 || legacy[token].length !== 1) return;
+            var identity = candidates[identities[0]];
+            result[String(identity.row_id)] = Object.assign({}, legacy[token][0].delta, identity);
+        });
+        return result;
+    }
+
     /** @param {HTMLElement} row @returns {OccurrenceTarget[]} */
     function getLookupRowTargets(row) {
         var targets = JSON.parse((row && row.getAttribute('data-occurrence-targets')) || '[]');
@@ -2628,12 +2695,6 @@
                             var pVal = incomingRowProv[rKey];
                             if (!window.AppState.rows[rKey]) window.AppState.rows[rKey] = {};
                             window.AppState.rows[rKey].provenance = pVal;
-                            for (var existingId in window.AppState.rows) {
-                                var exRow = window.AppState.rows[existingId];
-                                if (exRow && (String(exRow.token_order) === String(rKey) || String(existingId) === String(rKey))) {
-                                    exRow.provenance = pVal;
-                                }
-                            }
                         }
                     }
                 }
@@ -2648,6 +2709,7 @@
                 }
 
                 if (rowsData) {
+                    rowsData = normalizeLegacyRowDeltas(rowsData, data);
                     for (var rowId in rowsData) {
                         if (rowsData.hasOwnProperty(rowId)) {
                             if (!window.AppState.rows[rowId]) window.AppState.rows[rowId] = {};
@@ -2678,7 +2740,6 @@
                         : (typeof getCardModels === 'function' ? getCardModels() : null);
                     if (!wCards || wCards.length === 0) return;
                     var deltasByOccurrence = {};
-                    var legacyByTokenOrder = {};
                     var deltasByRowId = {};
                     for (var rk in rowsData) {
                         if (rowsData.hasOwnProperty(rk)) {
@@ -2686,10 +2747,6 @@
                             if (d) {
                                 if (Number(d.sentence_idx) > 0 && d.token_order !== undefined) {
                                     deltasByOccurrence[String(d.sentence_idx) + ':' + String(d.token_order)] = d;
-                                } else if (d.token_order !== undefined) {
-                                    legacyByTokenOrder[String(d.token_order)] = d;
-                                } else {
-                                    legacyByTokenOrder[String(rk)] = d;
                                 }
                                 if (d.row_id !== undefined && d.row_id !== null && String(d.row_id) !== "") {
                                     deltasByRowId[String(d.row_id)] = d;
@@ -2704,7 +2761,7 @@
                     var activeSentIdx = (activeCard && activeCard.sentence_idx !== undefined && activeCard.sentence_idx !== null)
                         ? String(activeCard.sentence_idx)
                         : null;
-                    var isGlobalUpdate = Boolean(rawPayload && (rawPayload.sentences || rawPayload.stage === 'translating' || rawPayload.stage === 'finished' || rawPayload.is_finished || rawPayload.is_global || rawPayload.all_sentences));
+                    var isGlobalUpdate = isGlobalCardUpdate(rawPayload);
                     for (var wc = 0; wc < wCards.length; wc++) {
                         var cardObj = wCards[wc];
                         var cardSentIdx = (cardObj && cardObj.sentence_idx !== undefined && cardObj.sentence_idx !== null)
@@ -2720,7 +2777,8 @@
                                 var matchingDelta = Number(cw.sentence_idx) > 0
                                     ? deltasByOccurrence[String(cw.sentence_idx) + ':' + String(cw.token_order)]
                                     : deltasByRowId[String(cw.row_id)];
-                                if (!matchingDelta) matchingDelta = legacyByTokenOrder[String(cw.token_order)];
+                                var legacyDelta = deltasByRowId[String(cw.row_id)];
+                                if (!matchingDelta && legacyDelta && !(Number(legacyDelta.sentence_idx) > 0)) matchingDelta = legacyDelta;
                                 if (matchingDelta) {
                                     var mTrans = (matchingDelta.trans !== undefined && matchingDelta.trans !== "") ? matchingDelta.trans : ((matchingDelta.WordDestination !== undefined && matchingDelta.WordDestination !== "") ? matchingDelta.WordDestination : matchingDelta.word_translation);
                                     if (mTrans !== undefined && mTrans !== "") cw.translation = mTrans;
@@ -8106,14 +8164,16 @@
 
         /** @param {HistoryAction} action @param {string} value */
         function projectEditedValue(action, value) {
-            action.cell.innerHTML = '';
+            var cell = currentHistoryCell(historyValues(action)[0]);
+            if (!cell) return;
+            cell.innerHTML = '';
             var div = document.createElement('div');
             div.className = 'scrollable-cell';
             div.textContent = value;
-            action.cell.appendChild(div);
+            cell.appendChild(div);
             if (action.column === 'WordDestination') {
-                var title = formatTranslationCellTooltip(value, action.cell.getAttribute('data-provenance'));
-                action.cell.setAttribute('title', String(title));
+                var title = formatTranslationCellTooltip(value, cell.getAttribute('data-provenance'));
+                cell.setAttribute('title', String(title));
                 div.setAttribute('title', String(title));
             }
         }
@@ -8192,6 +8252,26 @@
             });
         }
 
+        function historyTargetMatches(row, target) {
+            if (target.sentence_idx === '' && target.token_order === '') {
+                return String(row.getAttribute('data-row-id')) === String(target.row_id);
+            }
+            var identity = {sentence_idx: row.getAttribute('data-sentence-idx'), token_order: row.getAttribute('data-token-order')};
+            if (row.hasAttribute('data-occurrence-targets')) identity = getLookupEditTarget(row);
+            return identity && String(identity.sentence_idx) === String(target.sentence_idx) &&
+                String(identity.token_order) === String(target.token_order);
+        }
+
+        function currentHistoryCell(target) {
+            var rows = Array.prototype.filter.call(document.querySelectorAll('#lemma-table tr[data-row-id]'), function(row) {
+                return historyTargetMatches(row, target);
+            });
+            if (rows.length !== 1) return null;
+            return Array.prototype.filter.call(rows[0].querySelectorAll('td[data-col]'), function(cell) {
+                return cell.getAttribute('data-col') === target.column;
+            })[0] || null;
+        }
+
         /** @param {HistoryAction} action @param {boolean} forward @param {boolean} newAction */
         function recordUserIntent(action, forward, newAction) {
             historyValues(action).forEach(function(value) {
@@ -8224,9 +8304,7 @@
         /** @param {Delta} delta */
         function markDirtyDelta(delta) {
             if (delta.column === '_delete') return;
-            var row = (document.querySelector('#lemma-table tr[data-row-id="' + delta.row_id + '"]'));
-            if (!row) return;
-            var cell = (row.querySelector('td[data-col="' + delta.column + '"]'));
+            var cell = currentHistoryCell(delta);
             if (cell) cell.classList.add('dirty');
         }
 

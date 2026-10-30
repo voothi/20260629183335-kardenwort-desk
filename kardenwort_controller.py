@@ -1141,11 +1141,12 @@ class EnrichmentQueue:
                 elif is_sqlite:
                     restored = storage_adapter.restore_session(session_zid, results_dir=results_dir)
                     if restored:
+                        restored_headers, restored_rows = reword.restored_manifest_rows(restored)
                         session_data = {
                             "text": restored.get("source_text") or restored.get("source_raw_text", ""),
                             "comments": restored.get("comments", []),
-                            "headers": restored.get("headers", []),
-                            "data_rows": restored.get("data_rows", []),
+                            "headers": restored_headers,
+                            "data_rows": restored_rows,
                             "language": restored.get("source_language") or language,
                             "target_lang": restored.get("target_language") or target_lang,
                             "text_mode": text_mode,
@@ -2312,6 +2313,7 @@ class SessionArbiter:
                                 lemmas_to_translate.append(row[col_lemma].strip())
 
                     translated_map: Dict[str, str] = {}
+                    translated_provenances: Dict[str, str] = {}
                     if lemmas_to_translate:
                         lemmas_unique = list(dict.fromkeys(lemmas_to_translate))
                         provider_to_use = 'combined' if provider == 'combined' else provider
@@ -2328,12 +2330,12 @@ class SessionArbiter:
                                 resolved_paths=self.resolved_paths,
                                 provider=provider_to_use,
                             )
-                            if chunk_trans:
-                                translated_map.update(chunk_trans)
+                            translated_map.update(reword.fast_provider_results(chunk, chunk_trans))
+                            chunk_provenance = getattr(chunk_trans, 'provenance', None) or f'live:{provider_to_use}'
+                            translated_provenances.update({lemma: chunk_provenance for lemma in chunk})
 
                         if translated_map:
                             updates = []
-                            lemma_prov_tag = f"live:{provider}"
                             words_by_key = {(int(word['sentence_index']), int(word['token_order'])): word
                                 for word in storage_adapter.db.get_words_by_session(session_zid)} if is_sqlite else {}
                             for r_idx in selected_row_indices:
@@ -2344,6 +2346,9 @@ class SessionArbiter:
                                         l_val = row[col_lemma].strip()
                                         if l_val in translated_map and col_w_dest != -1:
                                             t_val = translated_map[l_val]
+                                            lemma_prov_tag = translated_provenances[l_val]
+                                            existing_row_provs[r_idx] = lemma_prov_tag
+                                            existing_row_provs[str(r_idx)] = lemma_prov_tag
                                             if t_val and str(t_val).strip():
                                                 while len(row) <= col_w_dest:
                                                     row.append("")
@@ -2364,7 +2369,8 @@ class SessionArbiter:
                                     storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
 
                             if is_master_overview:
-                                self.propagate_translations_to_siblings(translated_map, exclude_session_zid=session_zid, language=lang)
+                                self.propagate_translations_to_siblings(translated_map, exclude_session_zid=session_zid,
+                                    language=lang, lemma_provenances=translated_provenances)
                 except StructuredError:
                     raise
                 except Exception as e:
@@ -2524,6 +2530,7 @@ class SessionArbiter:
         lemma_translations: Dict[str, str],
         exclude_session_zid: Optional[str] = None,
         language: str = "de",
+        lemma_provenances: Optional[Dict[str, str]] = None,
     ):
         """
         Propagates newly translated lemmas simultaneously to all active sibling sessions and their subscribers.
@@ -2549,6 +2556,7 @@ class SessionArbiter:
                 data_rows = [list(r) for r in sess.get("data_rows", [])]
                 headers = list(sess.get("headers", []))
                 role_fields = dict(sess.get("role_fields", {}))
+                row_provenances = dict(sess.get('row_provenances', {}))
 
             if not data_rows or not headers:
                 continue
@@ -2576,8 +2584,14 @@ class SessionArbiter:
                         if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest] or row[col_word_dest] == '[FAILED]':
                             row[col_word_dest] = trans_val
                             modified = True
+                            provenance = (lemma_provenances or {}).get(lemma_val)
+                            if provenance:
+                                row_provenances[row_idx] = provenance
+                                row_provenances[str(row_idx)] = provenance
                             if keys is not None:
                                 updates.append(dict(sentence_index=keys[row_idx][0], token_order=keys[row_idx][1], field='word_destination', value=trans_val))
+                                if provenance:
+                                    updates.append(dict(sentence_index=keys[row_idx][0], token_order=keys[row_idx][1], field='word_provenance', value=provenance))
 
             if modified:
                 if is_sqlite:
@@ -2594,11 +2608,17 @@ class SessionArbiter:
                     if sib_zid in self.sessions:
                         self.sessions[sib_zid]["data_rows"] = data_rows
                         self.sessions[sib_zid]["fingerprint"] = new_fp
+                        self.sessions[sib_zid]['row_provenances'] = row_provenances
 
                 sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
-                structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
+                sentence_field = role_fields.get('sentence_index', 'SentenceSourceIndex')
+                occurrence_provenances = reword.project_provenances(data_rows, headers, row_provenances,
+                    sentence_field) if 'TokenOrder' in headers and sentence_field in headers else None
+                structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields,
+                    row_provenances=row_provenances, occurrence_provenances=occurrence_provenances)
                 if not is_sqlite and sib_tsv:
-                    safe_write_update_js(sib_tsv, sorted_rows, headers, role_fields, stage="translated", zid=sib_zid, config=self.config)
+                    safe_write_update_js(sib_tsv, sorted_rows, headers, role_fields, stage="translated", zid=sib_zid,
+                        config=self.config, row_provenances=row_provenances, occurrence_provenances=occurrence_provenances)
                 self.emit_event(sib_zid, {
                     "type": "update",
                     "stage": "translated",
@@ -3640,8 +3660,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             sess_lang = "de"
 
             if restored:
-                headers = restored.get("headers", [])
-                data_rows = restored.get("data_rows", [])
+                headers, data_rows = reword.restored_manifest_rows(restored)
                 source_text = restored.get("source_text", "")
                 sentence_translation = restored.get("sentence_translation", "")
                 sess_lang = restored.get("source_language") or restored.get("language") or restored.get("lang") or "de"
@@ -4207,8 +4226,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 source_text = restored.get("source_text", "")
                 sess_lang = restored.get("source_language") or language or "de"
                 target_lang = restored.get("target_language") or qs.get('target-lang', ['ru'])[0]
-                data_rows = restored.get("data_rows", [])
-                headers = restored.get("headers", [])
+                headers, data_rows = reword.restored_manifest_rows(restored)
                 comments = restored.get("comments", [])
                 sentence_translation = restored.get("sentence_translation", "")
                 text_mode_val = restored.get("text_mode") or (restored.get("session") or {}).get("text_mode") or "single"
@@ -4509,8 +4527,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 source_text = restored.get("source_text", "")
                 sess_lang = restored.get("source_language") or language or "de"
                 target_lang = restored.get("target_language") or qs.get('target-lang', ['ru'])[0]
-                data_rows = restored.get("data_rows", [])
-                headers = restored.get("headers", [])
+                headers, data_rows = reword.restored_manifest_rows(restored)
                 comments = restored.get("comments", [])
                 sentence_translation = restored.get("sentence_translation", "")
                 text_mode_val = restored.get("text_mode") or (restored.get("session") or {}).get("text_mode") or "single"

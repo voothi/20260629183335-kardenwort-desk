@@ -4058,9 +4058,6 @@ class SqliteStorageAdapter(StorageAdapter):
                         headers.append("SentenceSource")
                         existing_h.add("sentencesource")
 
-            if not any(h.lower().replace('_', '') == 'tokenorder' for h in headers):
-                headers.append('TokenOrder')
-
             # Preserve and append any unmapped custom columns found in extra_fields
             extra_headers = []
             for word in db_words:
@@ -4430,8 +4427,7 @@ class SqliteStorageAdapter(StorageAdapter):
                                     return self._tsv_fallback.load_tsv_rows(p)
                             return (
                                 restored.get("comments", []),
-                                restored.get("headers", []),
-                                restored.get("data_rows", []),
+                                *reword.restored_manifest_rows(restored),
                             )
                     except Exception:
                         pass
@@ -4452,8 +4448,7 @@ class SqliteStorageAdapter(StorageAdapter):
                         if restored is not None and "data_rows" in restored:
                             return (
                                 restored.get("comments", []),
-                                restored.get("headers", []),
-                                restored.get("data_rows", []),
+                                *reword.restored_manifest_rows(restored),
                             )
                     except Exception:
                         pass
@@ -4750,7 +4745,7 @@ class SqliteStorageAdapter(StorageAdapter):
     ) -> bool:
         """Enrich exact occurrences in scratch storage, then commit one validated batch."""
         restored = self.restore_session(session_zid)
-        headers, rows = restored.get('headers', []), restored.get('data_rows', [])
+        headers, rows = reword.restored_manifest_rows(restored)
         mapping = load_anki_mapping(self.resolved_paths.get('anki_mapping_file'))
         roles = get_role_fields(mapping, headers)
         rows = sort_session_data_rows(rows, headers, restored.get('source_language'),
@@ -12720,8 +12715,7 @@ def run_lookup_flow(
                                 cached_tsv_path = results_dir / f"{cached_zid}-{slug}.{language}.tsv"
                                 return LookupResultTuple(
                                     restored.get("comments", []),
-                                    restored.get("headers", []),
-                                    restored.get("data_rows", []),
+                                    *reword.restored_manifest_rows(restored),
                                     restored.get("sentence_translation", ""),
                                     cached_tsv_path
                                 )
@@ -14443,8 +14437,7 @@ def core_lookup(
             restored = storage_adapter.restore_session(session_zid)
             if restored and restored.get("data_rows"):
                 comments = restored.get("comments", comments)
-                headers = restored.get("headers", headers)
-                data_rows = restored.get("data_rows", data_rows)
+                headers, data_rows = reword.restored_manifest_rows(restored)
         except Exception as e:
             logger.warning(f"Could not restore session '{session_zid}' for lookup view: {e}")
 
@@ -15082,8 +15075,7 @@ def cmd_reprocess(args):
     if is_sqlite:
         restored = storage_adapter.restore_session(zid)
         comments = restored.get("comments", [])
-        headers = restored.get("headers", [])
-        data_rows = restored.get("data_rows", [])
+        headers, data_rows = reword.restored_manifest_rows(restored)
         tsv_path = Path(tsv_path_str) if tsv_path_str else (results_dir / f"{zid}.{lang}.tsv")
     else:
         if not tsv_path or not tsv_path.exists():
@@ -17262,10 +17254,10 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                 try:
                     with file_lock(tsv_path):
                         comments, headers, data_rows = load_tsv_rows(tsv_path)
-                        projection_headers = updated_restored['headers']
+                        projection_headers, projection_rows = reword.restored_manifest_rows(updated_restored)
                         projection_columns = {name: index for index, name in enumerate(projection_headers)}
                         data_rows = [[row[projection_columns[name]] if name in projection_columns else '' for name in headers]
-                                     for row in updated_restored['data_rows']]
+                                     for row in projection_rows]
                         save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 except Exception as e:
                     logger.warning(f"Failed updating mirror TSV during SQLite edit-save: {e}")
