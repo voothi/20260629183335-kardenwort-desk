@@ -3326,6 +3326,8 @@ class StorageAdapter:
 
 class TsvStorageAdapter(StorageAdapter):
     """
+    @deprecated Legacy flat-file TSV storage adapter (frozen / maintenance-only).
+    Canonical storage architecture uses SqliteStorageAdapter (backend = sqlite).
     Legacy flat-file TSV storage adapter preserving existing file I/O, file locks,
     and results/*.tsv directory caching behavior.
     """
@@ -14532,6 +14534,7 @@ def cmd_lookup(args):
         sys.exit(1)
 
 def cmd_render(args):
+    """@deprecated Legacy standalone file-based HTML render subcommand for native AHK GUI (frozen / maintenance-only)."""
     logger.info("Render subcommand invoked", extra={"zid": args.zid})
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
 
@@ -14716,6 +14719,7 @@ def core_export(tsv_path_or_session, selected_row_ids, config, resolved_paths, f
 
 
 def cmd_export(args):
+    """@deprecated Legacy file-manifest export CLI subcommand (frozen / maintenance-only). Superseded by HTTP POST /session/export."""
     logger.info("Export subcommand invoked")
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     manifest_path = Path(args.selection_manifest).resolve()
@@ -15037,12 +15041,15 @@ def execute_selected_pipeline(args, force_send_to_anki: bool):
         input("\nPress Enter to exit...")
 
 def cmd_export_selected(args):
+    """@deprecated Legacy TSV-file export-selected CLI subcommand (frozen / maintenance-only)."""
     execute_selected_pipeline(args, force_send_to_anki=False)
 
 def cmd_import_selected(args):
+    """@deprecated Legacy TSV-file import-selected CLI subcommand (frozen / maintenance-only)."""
     execute_selected_pipeline(args, force_send_to_anki=True)
 
 def cmd_reprocess(args):
+    """@deprecated Legacy file-manifest reprocess CLI subcommand (frozen / maintenance-only). Superseded by HTTP POST /session/reword."""
     logger.info("Reprocess subcommand invoked")
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
@@ -15318,6 +15325,7 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
     return data_rows
 
 def cmd_reprocess_worker(args):
+    """@deprecated Legacy TSV-file batch-worker CLI subcommand (frozen / maintenance-only)."""
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     tsv_path = Path(args.tsv)
 
@@ -16304,6 +16312,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
     return data_rows
 
 def cmd_retext(args):
+    """@deprecated Legacy file-manifest retext CLI subcommand (frozen / maintenance-only). Superseded by HTTP POST /session/retext."""
     logger.info("Retext subcommand invoked")
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
@@ -16400,6 +16409,7 @@ def cmd_retext(args):
         sys.exit(1)
 
 def cmd_retext_worker(args):
+    """@deprecated Legacy TSV-file retext-worker CLI subcommand (frozen / maintenance-only)."""
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     tsv_path = Path(args.tsv)
     language = args.language
@@ -16816,6 +16826,7 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
     return data_rows
 
 def cmd_progressive_worker(args):
+    """@deprecated Legacy TSV-file progressive-worker CLI subcommand (frozen / maintenance-only). Canonical mode uses Controller worker pool + SQLite."""
     tsv_path = Path(args.tsv)
     lock_target = Path(str(tsv_path) + ".worker.lock")
     with file_lock(lock_target):
@@ -17408,6 +17419,7 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
 
 
 def cmd_edit_save(args):
+    """@deprecated Legacy file-deltas edit-save CLI subcommand (frozen / maintenance-only). Superseded by HTTP POST /session/edit."""
     logger.info("Edit-save subcommand invoked", extra={"zid": getattr(args, 'zid', None)})
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     deltas_path = Path(args.deltas).resolve()
@@ -17461,6 +17473,7 @@ def clear_progress_bar():
     sys.stdout.flush()
 
 def cmd_merge(args):
+    """@deprecated Legacy TSV-file merge CLI subcommand (frozen / maintenance-only). Superseded by SQLite project/deck management."""
     os.system("") # Enable ANSI on Windows
     print("Kardenwort Desk: Merging files...\n")
     logger.info("Merge subcommand invoked")
@@ -18015,6 +18028,7 @@ def spawn_ahk(args_list, base_dir=None):
         return success
 
 def cmd_restore(args):
+    """@deprecated Legacy file-based restore CLI subcommand (frozen / maintenance-only). Superseded by browser /session/<zid> and /admin."""
     logger.info("Restore subcommand invoked")
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
 
@@ -18954,6 +18968,7 @@ def migrate_tsvs_to_db(results_dir: Path, config=None, resolved_paths=None, zid:
 
 
 def cmd_migrate_tsvs_to_db(args):
+    """@deprecated Legacy one-time TSV-to-SQLite migration CLI subcommand (frozen / maintenance-only)."""
     config_path = getattr(args, 'config', None)
     config, resolved_paths, _, _ = load_config(config_path)
     kardenwort_workspace = resolved_paths.get('kardenwort_workspace')
@@ -19339,8 +19354,12 @@ def main():
     p_vacuum = subparsers.add_parser("vacuum-db")
     p_vacuum.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
 
-    # migrate-tsvs-to-db
-    p_migrate = subparsers.add_parser("migrate-tsvs-to-db")
+    # migrate-tsvs-to-db [DEPRECATED]
+    p_migrate = subparsers.add_parser(
+        "migrate-tsvs-to-db",
+        help="[DEPRECATED] Migrate legacy TSV files to SQLite database",
+        description="[DEPRECATED] Legacy one-time TSV-to-SQLite migration utility (frozen / maintenance-only).",
+    )
     p_migrate.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
 
     # lookup [DEPRECATED]
@@ -19367,8 +19386,12 @@ def main():
     p_lookup.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
 
-    # render
-    p_render = subparsers.add_parser("render")
+    # render [DEPRECATED]
+    p_render = subparsers.add_parser(
+        "render",
+        help="[DEPRECATED] Legacy standalone HTML file renderer for native AHK GUI",
+        description="[DEPRECATED] Legacy standalone HTML file renderer for native AHK GUI (frozen / maintenance-only).",
+    )
     p_render.add_argument("--text", help="Selected text")
     p_render.add_argument("--language", required=True, help="Language code")
     p_render.add_argument("--zid", required=True, help="Session ZID")
@@ -19381,60 +19404,92 @@ def main():
     p_render.add_argument("--seq-num", type=int, default=None, help="Parent window sequence number")
     p_render.add_argument("--bypass-lang-check", "--force-language", dest="bypass_lang_check", action="store_true", help="Bypass pre-flight language verification")
 
-    # export
-    p_export = subparsers.add_parser("export")
+    # export [DEPRECATED]
+    p_export = subparsers.add_parser(
+        "export",
+        help="[DEPRECATED] Legacy file-manifest export for native AHK GUI",
+        description="[DEPRECATED] Legacy file-manifest export subcommand (frozen / maintenance-only).",
+    )
     p_export.add_argument("--selection-manifest", required=True, help="Selection manifest path")
     p_export.add_argument("--language", required=True, help="Language code")
     p_export.add_argument("--zid", default=None, help="Session ZID")
     p_export.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
-    p_export_selected = subparsers.add_parser("export-selected")
+    p_export_selected = subparsers.add_parser(
+        "export-selected",
+        help="[DEPRECATED] Legacy TSV-file export-selected utility",
+        description="[DEPRECATED] Legacy TSV-file export-selected subcommand (frozen / maintenance-only).",
+    )
     p_export_selected.add_argument("--files", nargs="+", required=True, help="Paths to TSV files")
     p_export_selected.add_argument("--language", default=None, help="Language code")
     p_export_selected.add_argument("--pause", action="store_true", help="Pause on exit")
     p_export_selected.add_argument("--zid", default=None, help="Session ZID")
     p_export_selected.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
-    p_import_selected = subparsers.add_parser("import-selected")
+    p_import_selected = subparsers.add_parser(
+        "import-selected",
+        help="[DEPRECATED] Legacy TSV-file import-selected utility",
+        description="[DEPRECATED] Legacy TSV-file import-selected subcommand (frozen / maintenance-only).",
+    )
     p_import_selected.add_argument("--files", nargs="+", required=True, help="Paths to TSV files")
     p_import_selected.add_argument("--language", default=None, help="Language code")
     p_import_selected.add_argument("--pause", action="store_true", help="Pause on exit")
     p_import_selected.add_argument("--zid", default=None, help="Session ZID")
     p_import_selected.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
-    # reprocess
-    p_reprocess = subparsers.add_parser("reprocess")
+    # reprocess [DEPRECATED]
+    p_reprocess = subparsers.add_parser(
+        "reprocess",
+        help="[DEPRECATED] Legacy file-manifest reprocess for native AHK GUI",
+        description="[DEPRECATED] Legacy file-manifest reprocess subcommand (frozen / maintenance-only).",
+    )
     p_reprocess.add_argument("--selection-manifest", required=True, help="Selection manifest path")
     p_reprocess.add_argument("--language", required=True, help="Language code")
     p_reprocess.add_argument("--zid", default=None, help="Session ZID")
     p_reprocess.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
-    # retext
-    p_retext = subparsers.add_parser("retext")
+    # retext [DEPRECATED]
+    p_retext = subparsers.add_parser(
+        "retext",
+        help="[DEPRECATED] Legacy file-manifest retext for native AHK GUI",
+        description="[DEPRECATED] Legacy file-manifest retext subcommand (frozen / maintenance-only).",
+    )
     p_retext.add_argument("--selection-manifest", required=True, help="Selection manifest path")
     p_retext.add_argument("--language", required=True, help="Language code")
     p_retext.add_argument("--text-mode", default="single", choices=["single", "multi"], help="Text mode (single or multi)")
     p_retext.add_argument("--zid", default=None, help="Session ZID")
     p_retext.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
-    # batch-worker
-    p_batch_worker = subparsers.add_parser("batch-worker")
+    # batch-worker [DEPRECATED]
+    p_batch_worker = subparsers.add_parser(
+        "batch-worker",
+        help="[DEPRECATED] Legacy TSV-file batch-worker subcommand",
+        description="[DEPRECATED] Legacy TSV-file batch-worker subcommand (frozen / maintenance-only).",
+    )
     p_batch_worker.add_argument("--tsv", required=True, help="Explicit TSV path")
     p_batch_worker.add_argument("--prompt", required=True, help="Prompt name")
     p_batch_worker.add_argument("--rows", required=True, help="Comma-separated list of row indices")
     p_batch_worker.add_argument("--zid", default=None, help="Session ZID")
     p_batch_worker.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
-    # retext-worker
-    p_retext_worker = subparsers.add_parser("retext-worker")
+    # retext-worker [DEPRECATED]
+    p_retext_worker = subparsers.add_parser(
+        "retext-worker",
+        help="[DEPRECATED] Legacy TSV-file retext-worker subcommand",
+        description="[DEPRECATED] Legacy TSV-file retext-worker subcommand (frozen / maintenance-only).",
+    )
     p_retext_worker.add_argument("--tsv", required=True, help="Explicit TSV path")
     p_retext_worker.add_argument("--language", required=True, help="Language code")
     p_retext_worker.add_argument("--text-mode", default="single", choices=["single", "multi"], help="Text mode (single or multi)")
     p_retext_worker.add_argument("--zid", default=None, help="Session ZID")
     p_retext_worker.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
-    # progressive-worker
-    p_prog_worker = subparsers.add_parser("progressive-worker")
+    # progressive-worker [DEPRECATED]
+    p_prog_worker = subparsers.add_parser(
+        "progressive-worker",
+        help="[DEPRECATED] Legacy TSV-file progressive-worker subcommand",
+        description="[DEPRECATED] Legacy TSV-file progressive-worker subcommand (frozen / maintenance-only).",
+    )
     p_prog_worker.add_argument("--tsv", required=True, help="Explicit TSV path")
     p_prog_worker.add_argument("--language", required=True, help="Language code")
     p_prog_worker.add_argument("--target-lang", required=True, help="Target language code")
@@ -19446,16 +19501,24 @@ def main():
     p_prog_worker.add_argument("--zid", default=None, help="Session ZID")
     p_prog_worker.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
-    # edit-save
-    p_edit = subparsers.add_parser("edit-save")
+    # edit-save [DEPRECATED]
+    p_edit = subparsers.add_parser(
+        "edit-save",
+        help="[DEPRECATED] Legacy file-deltas edit-save for native AHK GUI",
+        description="[DEPRECATED] Legacy file-deltas edit-save subcommand (frozen / maintenance-only).",
+    )
     p_edit.add_argument("--deltas", required=True, help="Deltas JSON file path")
     p_edit.add_argument("--zid", required=True, help="Session ZID")
     p_edit.add_argument("--trace-id", default=None, help="Trace correlation ID")
     p_edit.add_argument("--language", help="Language code")
     p_edit.add_argument("--tsv", help="Explicit TSV path")
 
-    # merge
-    p_merge = subparsers.add_parser("merge")
+    # merge [DEPRECATED]
+    p_merge = subparsers.add_parser(
+        "merge",
+        help="[DEPRECATED] Legacy TSV-file batch merge utility",
+        description="[DEPRECATED] Legacy TSV-file batch merge subcommand (frozen / maintenance-only).",
+    )
     p_merge.add_argument("--files", nargs="+", required=True, help="List of TSV files to merge")
     p_merge.add_argument("--target", default="new", help="Merge target path, new, or first")
     p_merge.add_argument("--delete-sources", action="store_true", help="Delete source files after merge")
@@ -19463,8 +19526,12 @@ def main():
     p_merge.add_argument("--sort-frequency", action="store_true", help="Sort the merged TSV rows by lemma frequency from Kardenwort Core")
     p_merge.add_argument("--pause", action="store_true", help="Pause on exit to keep console window open")
 
-    # restore
-    p_restore = subparsers.add_parser("restore")
+    # restore [DEPRECATED]
+    p_restore = subparsers.add_parser(
+        "restore",
+        help="[DEPRECATED] Legacy file-based session restore utility",
+        description="[DEPRECATED] Legacy file-based session restore subcommand (frozen / maintenance-only).",
+    )
     p_restore.add_argument("--file", nargs="*", default=None, help="Session file to restore")
     p_restore.add_argument("--zid", default=None, help="Session ZID to restore")
     p_restore.add_argument("--project", "--project-id", dest="project", type=int, default=None, help="Project ID to synthesize")
@@ -19492,8 +19559,12 @@ def main():
     p_wordfill.add_argument("--word", required=True, help="Word to look up (lemma or inflected form)")
     p_wordfill.add_argument("--language", required=True, help="Source language code (e.g. en, de)")
 
-    # server
-    p_server = subparsers.add_parser("server")
+    # server [DEPRECATED]
+    p_server = subparsers.add_parser(
+        "server",
+        help="[DEPRECATED] Legacy HTTP server alias (use 'controller' instead)",
+        description="[DEPRECATED] Legacy HTTP server subcommand (frozen / maintenance-only; use 'controller').",
+    )
     p_server.add_argument("--host", default=None, help="Host address to bind to (overrides config)")
     p_server.add_argument("--port", type=int, default=None, help="Port number to bind to (overrides config)")
     p_server.add_argument("--no-sidecars", action="store_true", help="Do not spawn or supervise sidecar microservices")

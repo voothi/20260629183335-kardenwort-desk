@@ -1181,12 +1181,14 @@
     }
     window.hydrateSession = hydrateSession;
 
+    /** @deprecated Native AHK GUI host detection is deprecated; canonical host is launch_in_browser = true. */
     function isNativeAhkHost() {
         return window.location.protocol === 'file:' ||
                typeof window.ahkCall !== 'undefined' ||
                (window.external && typeof window.external.ahkCall !== 'undefined') ||
                !!(document.documentMode || window.ActiveXObject);
     }
+    /** @deprecated Native AHK GUI class marker is deprecated; canonical host is launch_in_browser = true. */
     function checkAhkHost() {
         if (isNativeAhkHost()) {
             if (document.body && document.body.classList) {
@@ -7897,6 +7899,7 @@
         window.getSelectedRowsArray = getSelectedRowsArray;
         window.getSelectedTokenOrdersArray = getSelectedTokenOrdersArray;
 
+        /** @deprecated Native AHK selection bridge is deprecated; canonical selection sync uses HTTP/SSE. */
         function notifyAHKSelection() {
             scheduleSelectionSave();
             if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {

@@ -1,5 +1,6 @@
 """
-Compatibility shim for Kardenwort Desk HTTP Server.
+@deprecated Compatibility shim for Kardenwort Desk HTTP Server (frozen / maintenance-only).
+Canonical HTTP/SSE daemon is kardenwort_controller.py ('controller' subcommand).
 Delegates all request dispatching and lifecycle execution to kardenwort_controller.
 """
 import sys
@@ -66,6 +67,7 @@ def run_render_flow(*args, **kwargs):
 
 def cmd_server(args=None):
     """
+    @deprecated Legacy 'server' subcommand entrypoint (frozen / maintenance-only).
     Subcommand entrypoint to start the Kardenwort Desk HTTP background server.
     Delegates directly to canonical run_controller.
     """
