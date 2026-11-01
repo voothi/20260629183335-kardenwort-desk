@@ -8253,7 +8253,7 @@
         }
 
         function historyTargetMatches(row, target) {
-            if (target.sentence_idx === '' && target.token_order === '') {
+            if (!(Number(target.sentence_idx) > 0) || target.token_order === '') {
                 return String(row.getAttribute('data-row-id')) === String(target.row_id);
             }
             var identity = {sentence_idx: row.getAttribute('data-sentence-idx'), token_order: row.getAttribute('data-token-order')};
