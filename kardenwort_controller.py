@@ -47,7 +47,8 @@ from kardenwort_desk import (
     checked_provider_rows,
     reword_query_occurrences,
     reword_query_provenances,
-    reword_occurrence_fields,
+    commit_reword_sqlite,
+    commit_reword_tsv,
     query_spacy_server,
     query_translation_server,
     query_intellifiller_server,
@@ -2230,8 +2231,6 @@ class SessionArbiter:
                 data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
 
         col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
-        col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
-
         existing_row_provs = {}
         with self._lock:
             if session_zid in self.sessions:
@@ -2278,8 +2277,9 @@ class SessionArbiter:
                             prompt_name, self.config, self.resolved_paths, run_headless_intellifiller, req_zid)
                     output = checked_provider_rows(original_rows, original_headers,
                                                    output_rows, output_headers, role_fields)
-                    headers, data_rows = reword.merge_rows(original_rows, original_headers,
-                        output, output_headers, selection, role_fields.get('sentence_index', 'SentenceSourceIndex'))
+                    keys = reword.row_keys(original_rows, original_headers,
+                        role_fields.get('sentence_index', 'SentenceSourceIndex'))
+                    headers, data_rows = output_headers, [output[key] for key in keys]
                     for index in selection.rows:
                         row = data_rows[index]
                         lemma = row[col_lemma].strip()
@@ -2335,38 +2335,23 @@ class SessionArbiter:
                             translated_provenances.update({lemma: chunk_provenance for lemma in chunk})
 
                         if translated_map:
-                            updates = []
-                            words_by_key = {(int(word['sentence_index']), int(word['token_order'])): word
-                                for word in storage_adapter.db.get_words_by_session(session_zid)} if is_sqlite else {}
-                            for r_idx in selected_row_indices:
-                                if r_idx < len(data_rows):
-                                    row = data_rows[r_idx]
-                                    sent_val, t_ord_val = selected_keys[r_idx]
-                                    if col_lemma != -1 and len(row) > col_lemma:
-                                        l_val = row[col_lemma].strip()
-                                        if l_val in translated_map and col_w_dest != -1:
-                                            t_val = translated_map[l_val]
-                                            lemma_prov_tag = translated_provenances[l_val]
-                                            existing_row_provs[r_idx] = lemma_prov_tag
-                                            existing_row_provs[str(r_idx)] = lemma_prov_tag
-                                            if t_val and str(t_val).strip():
-                                                while len(row) <= col_w_dest:
-                                                    row.append("")
-                                                row[col_w_dest] = t_val
-                                                updates.append({"token_order": t_ord_val, "sentence_index": sent_val, "field": "word_destination", "value": t_val})
-                                                updates.append({"token_order": t_ord_val, "sentence_index": sent_val, "field": "word_provenance", "value": lemma_prov_tag})
-                                                if is_sqlite and selection.visuals:
-                                                    extra = reword_occurrence_fields(words_by_key[(sent_val, t_ord_val)],
-                                                        dict(zip(headers, row)), selection, role_fields)
-                                                    updates.append(dict(sentence_index=sent_val, token_order=t_ord_val,
-                                                        field='extra_fields', value=extra))
-
+                            changes = {}
+                            for r_idx, key in zip(selection.rows, selection.keys):
+                                lemma = data_rows[r_idx][col_lemma].strip()
+                                changes[key] = {role_fields['word_translation']: translated_map[lemma],
+                                                'word_provenance': translated_provenances[lemma]}
+                                existing_row_provs[r_idx] = translated_provenances[lemma]
+                                existing_row_provs[str(r_idx)] = translated_provenances[lemma]
                             if is_sqlite:
-                                if updates:
-                                    storage_adapter.batch_update_words(session_zid=session_zid, updates_list=updates, zid=req_zid)
+                                commit_reword_sqlite(storage_adapter, session_zid, changes, selection,
+                                    role_fields, data_rows, headers, source_text, self.config, req_zid)
                             else:
-                                with storage_adapter.file_lock(tsv_path):
-                                    storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                                commit_reword_tsv(tsv_path, changes, role_fields)
+                            _, output_headers, output_rows = storage_adapter.load_tsv_rows(tsv_path)
+                            output = checked_provider_rows(data_rows, headers, output_rows, output_headers, role_fields)
+                            keys = reword.row_keys(data_rows, headers,
+                                role_fields.get('sentence_index', 'SentenceSourceIndex'))
+                            headers, data_rows = output_headers, [output[key] for key in keys]
 
                             if is_master_overview:
                                 self.propagate_translations_to_siblings(translated_map, exclude_session_zid=session_zid,
@@ -2443,6 +2428,14 @@ class SessionArbiter:
             except Exception as e_class:
                 logger.error(f"Failed to update classification fields during reword: {e_class}")
 
+        occurrence_provenances = reword_query_provenances(storage_adapter, session_zid) if is_sqlite else {
+            (str(sentence), str(token)): existing_row_provs.get(index, existing_row_provs.get(str(index), ''))
+            for index, (sentence, token) in enumerate(reword.row_keys(data_rows, headers,
+                role_fields.get('sentence_index', 'SentenceSourceIndex')))}
+        if is_sqlite:
+            existing_row_provs = {index: occurrence_provenances[tuple(map(str, key))]
+                for index, key in enumerate(reword.row_keys(data_rows, headers,
+                    role_fields.get('sentence_index', 'SentenceSourceIndex')))}
         new_fp = compute_content_fingerprint(data_rows)
 
         with self._lock:
@@ -2453,10 +2446,6 @@ class SessionArbiter:
                 self.sessions[session_zid]['headers'] = headers
 
         row_occurrences = reword_query_occurrences(storage_adapter, session_zid)
-        occurrence_provenances = reword_query_provenances(storage_adapter, session_zid) if is_sqlite else {
-            (str(sentence), str(token)): existing_row_provs.get(index, existing_row_provs.get(str(index), ''))
-            for index, (sentence, token) in enumerate(reword.row_keys(data_rows, headers,
-                role_fields.get('sentence_index', 'SentenceSourceIndex')))}
         safe_write_update_js(
             tsv_path,
             data_rows,

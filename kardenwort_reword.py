@@ -14,6 +14,15 @@ class RewordSelection:
     visual_keys: tuple = ()
 
 
+@dataclass(frozen=True)
+class ProviderResult:
+    success: bool
+    fields: dict
+
+    def __bool__(self):
+        return self.success
+
+
 def index_value(value, minimum=0):
     text = str(value).strip()
     if isinstance(value, bool) or not text.isascii() or not text.isdigit():
@@ -269,16 +278,86 @@ def fast_provider_results(lemmas, values):
     return values
 
 
-def merge_rows(rows, headers, output, output_headers, selection, sentence_field='SentenceSourceIndex'):
+def merge_changes(rows, headers, changes, sentence_field='SentenceSourceIndex'):
     keys = row_keys(rows, headers, sentence_field)
-    columns = [*headers, *(name for name in output_headers if name not in headers)]
+    lookup_occurrences(list(changes), keys)
+    columns = list(dict.fromkeys([*headers, *(name for patch in changes.values() for name in patch)]))
     result = []
     for key, row in zip(keys, rows):
         values = dict(zip(headers, row))
-        if key in selection.keys:
-            values.update(zip(output_headers, output[key]))
+        values.update(changes.get(key, {}))
         result.append([values.get(name, '') for name in columns])
     return columns, result
+
+
+def provider_changes(rows, headers, output, output_headers, selection, roles, produced=None):
+    """HTTP owns explicit output keys; full-TSV producers own deltas and their target."""
+    changes = {}
+    for index, key in zip(selection.rows, selection.keys):
+        before, after = dict(zip(headers, rows[index])), dict(zip(output_headers, output[key]))
+        fields = produced[index] if produced is not None else None
+        changes[key] = provider_values(before, after, roles, fields)
+    return changes
+
+
+def provider_values(before, after, roles, fields):
+    excluded = {'TokenOrder', 'token_order', 'word_provenance',
+                roles.get('sentence_index', 'SentenceSourceIndex'),
+                roles.get('sentence', 'SentenceSource')}
+    if fields is None:
+        target = roles.get('word_translation', 'WordDestination')
+        fields = {
+            name for name, value in after.items() if name == target or before.get(name) != value}
+    values = {name: after[name] for name in fields - excluded
+              if name.lower().replace('_', '') not in ('extrafields', 'occurrencedata')}
+    return dict(values, word_provenance='live:intellifiller')
+
+
+def http_provider_fields(items, requested):
+    """Reject incomplete/duplicate HTTP batches before modifying scratch storage."""
+    validate_http_items(items)
+    indices = [index_value(item.get('row_id')) for item in items]
+    if len(set(indices)) != len(indices) or set(indices) != set(requested):
+        raise InvalidRewordTarget('Provider changed the requested row batch')
+    metadata = {'row_id', 'status', 'zid', 'trace_id'}
+    return {index: set(item) - metadata for index, item in zip(indices, items)}
+
+
+def validate_http_items(items):
+    if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+        raise InvalidRewordTarget('Provider rows must be a list of objects')
+
+
+def occurrence_changes(occurrences, values, identity, selection, roles, owned_visuals):
+    """Replace only produced facts, retaining current facts at every other scope."""
+    validate_occurrences(occurrences, owned_visuals)
+    patch = occurrence_values(values, roles)
+    targets = [str(visual) for key, visual in selection.visual_keys if key == identity]
+    if not selection.visuals:
+        targets = list(occurrences)
+    result = {visual: dict(entry) for visual, entry in occurrences.items()}
+    for visual in targets:
+        result[visual] = dict(result.get(visual, {}), **patch)
+    return result
+
+
+def validate_occurrences(occurrences, owned_visuals):
+    if not isinstance(occurrences, dict):
+        raise InvalidRewordTarget('Malformed contextual occurrence facts')
+    if any(index_value(visual) not in owned_visuals or not isinstance(entry, dict)
+           for visual, entry in occurrences.items()):
+        raise InvalidRewordTarget('Contextual facts contradict the authoritative source manifest')
+
+
+def occurrence_values(values, roles):
+    fields = {'worddestination': 'trans', 'wordsourcepos': 'pos', 'pos': 'pos',
+              'wordsourcemorphologyai': 'morph', 'morphologyai': 'morph', 'morphology': 'morph',
+              roles.get('word_translation', 'WordDestination'): 'trans',
+              roles.get('pos', 'WordSourcePOS'): 'pos',
+              roles.get('morphology', 'WordSourceMorphologyAI'): 'morph'}
+    fields = {name.lower().replace('_', ''): field for name, field in fields.items()}
+    return {fields[name.lower().replace('_', '')]: value for name, value in values.items()
+            if name.lower().replace('_', '') in fields}
 
 
 def project_occurrences(occurrences):

@@ -4770,8 +4770,10 @@ class SqliteStorageAdapter(StorageAdapter):
                 return False
             _, updated_headers, updated_rows = load_tsv_rows(path)
             output = checked_provider_rows(rows, headers, updated_rows, updated_headers, roles)
-            updates = reword_sqlite_updates(restored['words'], output, updated_headers, selection, roles)
-            self.db.batch_update_words(session_zid, updates, zid=zid or session_zid)
+            changes = reword.provider_changes(rows, headers, output, updated_headers, selection,
+                                              roles, getattr(success, 'fields', None))
+            commit_reword_sqlite(self, session_zid, changes, selection, roles, rows, headers,
+                                 source, self.config, zid or session_zid)
         return True
 
     def delete_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
@@ -8286,9 +8288,12 @@ def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, se
         "model": model_name
     }
     with TraceTimer("intellifiller_enrichment", zid, config, resolved_paths, extra=extra_trace):
-        return _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows, reprocess, zid=zid, trace_id=trace_id)
+        fields = {}
+        success = _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths,
+            selected_rows, reprocess, zid=zid, trace_id=trace_id, produced_fields=fields)
+        return reword.ProviderResult(success, fields) if fields else success
 
-def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
+def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None, produced_fields=None):
     lock_target = Path(str(tsv_path) + ".intellifiller.lock")
     with file_lock(lock_target):
         # 1. Read [intellifiller] and timeout sections from config
@@ -8379,8 +8384,14 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
                         raise IntelliFillerError(resp.get("message", "IntelliFiller server returned error"), envelope=resp)
 
                     if resp.get("status") == "success":
+                        try:
+                            fields = reword.http_provider_fields(resp.get('enriched_rows', []), target_indices)
+                        except reword.InvalidRewordTarget as exc:
+                            raise IntelliFillerError(str(exc)) from exc
+                        if produced_fields is not None:
+                            produced_fields.update(fields)
                         for item in resp.get("enriched_rows", []):
-                            r_idx = item.get("row_id")
+                            r_idx = reword.index_value(item['row_id'])
                             if r_idx is not None and 0 <= r_idx < len(data_rows):
                                 for k, v in item.items():
                                     if k in ("row_id", "status", "zid", "trace_id"):
@@ -10653,6 +10664,7 @@ html, body {{
     col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
     row_provenances = {}
     row_occurrences = {}
+    occurrence_provenances = {}
     if is_sqlite:
         tsv_zid = extract_zid(working_tsv_path)
         for candidate_zid in [tsv_zid, zid]:
@@ -10669,6 +10681,8 @@ html, body {{
                             except Exception:
                                 pass
                             w_prov = w.get("word_provenance")
+                            if w_prov or w.get('word_destination'):
+                                occurrence_provenances[(str(w['sentence_index']), str(w['token_order']))] = w_prov or 'cached:sqlite'
                             if w_prov:
                                 t_ord = str(w.get("token_order", ""))
                                 row_provenances[t_ord] = w_prov
@@ -11632,6 +11646,7 @@ html, body {{
         pos_title_attr = f' title="{html.escape(pos_tooltip)}"' if pos_tooltip else ''
 
         prov_val = row_provenances.get(row_id) or row_provenances.get(token_order_val) or row_provenances.get(str(token_order_val))
+        prov_val = occurrence_provenances.get((str(sent_idx_val), str(token_order_val)), prov_val)
         if not prov_val and col_provenance != -1 and len(row) > col_provenance:
             prov_val = row[col_provenance]
 
@@ -12147,6 +12162,10 @@ html, body {{
             ov_pos_title = f' title="{html.escape(ov_pos_tooltip)}"' if ov_pos_tooltip else ''
 
             ov_prov_val = row_provenances.get(ov_id) or row_provenances.get(ov_token_order) or row_provenances.get(str(ov_token_order))
+            if col_index != -1 and col_token_order != -1:
+                primary_row = overview_data_rows[primary_id]
+                ov_prov_val = occurrence_provenances.get(
+                    (str(primary_row[col_index]), str(primary_row[col_token_order])), ov_prov_val)
             if not ov_prov_val and col_provenance != -1 and len(ov_r) > col_provenance:
                 ov_prov_val = ov_r[col_provenance]
 
@@ -17041,18 +17060,22 @@ def resolve_reword_request(rows, headers, role_fields, source_text='', config=No
         visuals = reword.request_visuals(targets, selectors.get('visual_indices'))
         manifest = {}
         if visuals:
-            manifest = reword.visual_manifest(rows, headers, source_text,
-                lambda text: tok.build_word_list_internal(text, keep_spaces=True),
-                sentence_field=role_fields.get('sentence_index', 'SentenceSourceIndex'),
-                source_field=role_fields.get('sentence', 'SentenceSource'),
-                lemma_field=role_fields.get('lemma', 'WordSource'),
-                quotation_field=role_fields.get('quotation', 'Quotation'),
-                article_forms=DE_UNIFIED_ARTICLE_FORMS if config is None or config.getboolean(
-                    SEC_SETTINGS, 'unify_article_pronoun_lemmas', fallback=True) else ())
+            manifest = reword_source_manifest(rows, headers, role_fields, source_text, config)
         return reword.resolve_selection(rows, headers, visual_manifest=manifest,
             sentence_field=role_fields.get('sentence_index', 'SentenceSourceIndex'), **selectors)
     except reword.InvalidRewordTarget as exc:
         raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
+
+
+def reword_source_manifest(rows, headers, roles, source, config):
+    return reword.visual_manifest(rows, headers, source,
+        lambda text: tok.build_word_list_internal(text, keep_spaces=True),
+        sentence_field=roles.get('sentence_index', 'SentenceSourceIndex'),
+        source_field=roles.get('sentence', 'SentenceSource'),
+        lemma_field=roles.get('lemma', 'WordSource'),
+        quotation_field=roles.get('quotation', 'Quotation'),
+        article_forms=DE_UNIFIED_ARTICLE_FORMS if config is None or config.getboolean(
+            SEC_SETTINGS, 'unify_article_pronoun_lemmas', fallback=True) else ())
 
 
 def reword_descriptors(selection):
@@ -17076,25 +17099,17 @@ def reword_scratch_rows(rows, headers, roles, selection, source):
     return scratch
 
 
-def reword_output_values(row, headers):
-    values = {name: value for name, value in zip(headers, row)
-              if name.lower().replace('_', '') not in ('extrafields', 'occurrencedata')}
-    values['word_provenance'] = 'live:intellifiller'
-    return values
-
-
-def reword_occurrence_fields(word, values, selection, roles):
+def reword_occurrence_fields(word, values, selection, roles, manifest, keys):
     from kardenwort_db import sanitize_extra_fields
     extra = sanitize_extra_fields(word.get('extra_fields'))
-    occurrences = dict(extra.get('occurrence_data', {}))
+    occurrences = extra.get('occurrence_data', {})
+    if not occurrences and not selection.visuals:
+        return None
     identity = (int(word['sentence_index']), int(word['token_order']))
-    entry = dict(trans=values.get(roles.get('word_translation', 'WordDestination'), ''),
-                 pos=values.get(roles.get('pos', 'WordSourcePOS'), ''),
-                 morph=values.get(roles.get('morphology', 'WordSourceMorphologyAI'), ''))
-    for key, visual in selection.visual_keys:
-        if key == identity:
-            occurrences[str(visual)] = dict(entry)
-    extra['occurrence_data'] = occurrences
+    owned = {visual for visual, indices in manifest.items()
+             if len(indices) == 1 and keys[indices[0]] == identity}
+    extra['occurrence_data'] = reword.occurrence_changes(
+        occurrences, values, identity, selection, roles, owned)
     return json.dumps(extra, ensure_ascii=False)
 
 
@@ -17112,16 +17127,53 @@ def reword_query_provenances(adapter, session_zid):
             for word in adapter.db.get_words_by_session(session_zid)}
 
 
-def reword_sqlite_updates(words, output, headers, selection, roles):
+def reword_sqlite_updates(words, changes, selection, roles, visual_manifest, keys):
     manifest = {(int(word['sentence_index']), int(word['token_order'])): word for word in words}
     updates = []
     for key in selection.keys:
+        if key not in manifest:
+            raise reword.InvalidRewordTarget('Re-word target no longer exists')
         word = manifest[key]
-        values = reword_output_values(output[key], headers)
-        if selection.visuals:
-            values['extra_fields'] = reword_occurrence_fields(word, values, selection, roles)
+        values = dict(changes[key])
+        extra = reword_occurrence_fields(word, values, selection, roles, visual_manifest, keys)
+        if extra is not None:
+            values['extra_fields'] = extra
         updates.append(dict(id=word['id'], sentence_index=key[0], token_order=key[1], updates=values))
     return updates
+
+
+def commit_reword_sqlite(adapter, session_zid, changes, selection, roles, rows, headers,
+                         source, config, zid, connection=None):
+    with (contextlib.nullcontext(connection) if connection is not None else adapter.db.transaction(zid=zid)) as conn:
+        words = [dict(row) for row in conn.execute(
+            'SELECT * FROM words WHERE session_zid = ?', (session_zid,)).fetchall()]
+        keys = reword.row_keys(rows, headers, roles.get('sentence_index', 'SentenceSourceIndex'))
+        from kardenwort_db import sanitize_extra_fields
+        contextual = any(sanitize_extra_fields(word.get('extra_fields')).get('occurrence_data')
+                         for word in words if (word['sentence_index'], word['token_order']) in changes)
+        manifest = reword_source_manifest(rows, headers, roles, source, config) if contextual or selection.visuals else {}
+        updates = reword_sqlite_updates(words, changes, selection, roles, manifest, keys)
+        return adapter.db.batch_update_words(session_zid, updates, zid=zid, connection=conn)
+
+
+def save_inline_word(adapter, session_zid, sentence, token, column, value, restored, config, zid, conn):
+    headers, rows = reword.restored_manifest_rows(restored)
+    roles = adapter._role_fields(headers)
+    if not reword.occurrence_values({column: value}, roles):
+        return adapter.update_word(session_zid, sentence, token, column, value, zid=zid, _connection=conn)
+    key = (sentence, token)
+    selection = reword.RewordSelection((key,), (), ())
+    return commit_reword_sqlite(adapter, session_zid, {key: {column: value}}, selection,
+        roles, rows, headers, restored.get('source_text', ''), config, zid, connection=conn)
+
+
+def commit_reword_tsv(path, changes, roles):
+    with file_lock(path):
+        comments, headers, rows = load_tsv_rows(path)
+        headers, rows = reword.merge_changes(rows, headers, changes,
+                                             roles.get('sentence_index', 'SentenceSourceIndex'))
+        save_tsv_rows_safely(path, comments, headers, rows)
+    return headers, rows
 
 
 def enrich_reword_tsv(path, comments, headers, rows, roles, selection, source,
@@ -17136,10 +17188,9 @@ def enrich_reword_tsv(path, comments, headers, rows, roles, selection, source,
             raise StructuredError(ErrorCode.DESK_FAILED, 'Re-word provider failed')
         _, updated_headers, updated_rows = load_tsv_rows(scratch_path)
         output = checked_provider_rows(rows, headers, updated_rows, updated_headers, roles)
-        result_headers, result = reword.merge_rows(rows, headers, output, updated_headers, selection,
-                                                 roles.get('sentence_index', 'SentenceSourceIndex'))
-    save_tsv_rows_safely(path, comments, result_headers, result)
-    return result_headers, result
+        changes = reword.provider_changes(rows, headers, output, updated_headers, selection,
+                                          roles, getattr(success, 'fields', None))
+    return commit_reword_tsv(path, changes, roles)
 
 
 def checked_provider_rows(rows, headers, updated_rows, updated_headers, role_fields):
@@ -17251,8 +17302,8 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                         if col_name.strip().lower() in ("gender", "wordsourcegender"):
                             g_clean = str(val).strip().lower()
                             val = g_clean if g_clean in ("m", "f", "n") else None
-                        if not storage_adapter.update_word(session_zid, sentence_idx, token_order, col_name, val,
-                                                           zid=zid, _connection=conn):
+                        if not save_inline_word(storage_adapter, session_zid, sentence_idx, token_order,
+                                                col_name, val, restored, config, zid, conn):
                             raise StructuredError(ErrorCode.NOT_FOUND, "Edited occurrence not found")
 
             updated_restored = storage_adapter.restore_session(session_zid)

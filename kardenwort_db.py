@@ -14,7 +14,7 @@ import time
 import sqlite3
 import logging
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple, Union, Generator
@@ -2412,11 +2412,15 @@ class KardenwortDB:
         session_zid: str,
         updates_list: List[Dict[str, Any]],
         zid: Optional[str] = None,
+        *,
+        connection: Optional[KardenwortConnection] = None,
     ) -> int:
         """
         Batch update word fields across multiple rows in a single atomic SQL transaction.
         Handles direct columns (lemma, word_destination, morphology, ipa, etc.) as well
         as dynamic custom fields stored in extra_fields JSON.
+        A supplied connection belongs to the caller's transaction; this method neither
+        commits nor closes it, allowing current-record merges inside the same boundary.
         """
         if not updates_list:
             return 0
@@ -2460,7 +2464,7 @@ class KardenwortDB:
         }
 
         updated_count = 0
-        with self.get_connection(zid=zid) as conn:
+        with (nullcontext(connection) if connection is not None else self.get_connection(zid=zid)) as conn:
             cursor = conn.cursor()
             for item in updates_list:
                 token_order = item.get("token_order")
