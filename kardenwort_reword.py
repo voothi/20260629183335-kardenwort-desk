@@ -179,12 +179,14 @@ def agree(first, second):
 
 
 def sentence_offsets(sentences, source_text, tokenize):
-    offsets, cursor = {}, 0
+    offsets, cursor, total = {}, 0, 0
     for sentence, text in sorted(sentences.items()):
         start = source_text.find(text, cursor)
         if not text or start < 0:
             raise ValueError('Coordinate alignment violation: source sentence absent from session text')
-        offsets[sentence] = len(tokenize(source_text[:start]))
+        total += len(tokenize(source_text[cursor:start]))
+        offsets[sentence] = total
+        total += len(tokenize(text))
         cursor = start + len(text)
     return offsets
 

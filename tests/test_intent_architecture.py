@@ -23,7 +23,7 @@ def complexity(node):
     return count
 
 
-@pytest.mark.parametrize('name', ['kardenwort_alignment', 'kardenwort_delivery', 'kardenwort_events', 'kardenwort_configuration'])
+@pytest.mark.parametrize('name', ['kardenwort_alignment', 'kardenwort_delivery', 'kardenwort_events', 'kardenwort_configuration', 'kardenwort_grammar', 'kardenwort_theme'])
 def test_new_boundaries_have_no_backwards_shell_imports(name):
     tree = ast.parse((ROOT / (name + '.py')).read_text(encoding='utf-8'))
     imports = set()
@@ -32,12 +32,12 @@ def test_new_boundaries_have_no_backwards_shell_imports(name):
             imports.update(alias.name.split('.')[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             imports.add(node.module.split('.')[0])
-    assert not imports.intersection({'kardenwort_desk', 'kardenwort_controller', 'http_server'})
+    assert not imports.intersection({'kardenwort_desk', 'kardenwort_controller', 'http_server', 'kardenwort_db'})
     if name == 'kardenwort_alignment':
         assert not imports
 
 
-@pytest.mark.parametrize('name', ['kardenwort_alignment', 'kardenwort_delivery', 'kardenwort_events', 'kardenwort_configuration'])
+@pytest.mark.parametrize('name', ['kardenwort_alignment', 'kardenwort_delivery', 'kardenwort_events', 'kardenwort_configuration', 'kardenwort_grammar', 'kardenwort_theme'])
 def test_new_boundary_complexity_ceiling(name):
     tree = ast.parse((ROOT / (name + '.py')).read_text(encoding='utf-8'))
     violations = {node.name: complexity(node) for node in functions(tree) if complexity(node) > 7}

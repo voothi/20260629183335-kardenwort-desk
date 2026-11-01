@@ -70,11 +70,14 @@ def resolve_theme_colors(config, theme):
     return colors
 
 
+def _allowed_theme_properties():
+    return {name for properties in THEME_COLOR_PROPERTIES.values() for name in properties}
+
+
 def theme_style(colors, theme):
     if colors and theme not in ('dark', 'light', 'white'):
         raise ValueError('Invalid configured theme')
-    allowed = {name for properties in THEME_COLOR_PROPERTIES.values() for name in properties}
-    if not set(colors).issubset(allowed):
+    if not set(colors).issubset(_allowed_theme_properties()):
         raise ValueError('Unknown configured theme property')
     declarations = ''.join(f'--{key}:{validate_color(value)};' for key, value in colors.items())
     return f'<style id="configured-theme">body.theme-{theme}{{{declarations}}}</style>' if declarations else ''

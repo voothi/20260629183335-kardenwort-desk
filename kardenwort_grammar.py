@@ -5,7 +5,7 @@ Provides normative dictionaries, suffix matching, POS mappings, and JSON-seriali
 for unified server-side and client-side table cell tooltip rendering.
 """
 
-from typing import Optional, Dict, Any, List, Set, Tuple
+from typing import Optional, Dict, Any, Set, Tuple
 
 # Normative part-of-speech tag mappings to human-readable labels
 POS_FULL_NAME_MAP: Dict[str, str] = {
@@ -153,43 +153,43 @@ GERMAN_SUFFIX_EXCLUDED_ENT: Set[str] = {
     "moment", "element", "dokument", "talent", "argument", "patent", "zement",
 }
 
+_SUFFIX_MIN_LENGTHS: Dict[str, int] = {
+    "partner": 7, "ismus": 6, "schaft": 6,
+    "mann": 4, "or": 4, "ik": 4, "ei": 4, "tum": 4, "um": 4,
+}
+_GENDER_SUFFIX_TABLE: Dict[str, Tuple[str, ...]] = {
+    "m": GERMAN_GENDER_SUFFIXES_MASCULINE,
+    "f": GERMAN_GENDER_SUFFIXES_FEMININE,
+    "n": GERMAN_GENDER_SUFFIXES_NEUTER,
+}
+_GERMAN_ARTICLE_PREFIXES: Tuple[str, ...] = tuple(a + " " for a in GERMAN_ARTICLES)
+_GERMAN_ARTICLE_BY_GENDER: Dict[str, str] = {"m": "der", "f": "die", "n": "das"}
+
+
+def _is_excluded_suffix(word: str, suffix: str) -> bool:
+    if suffix == "in":
+        return word in GERMAN_SUFFIX_EXCLUDED_IN
+    if suffix == "ent":
+        return word.endswith(tuple(GERMAN_SUFFIX_EXCLUDED_ENT))
+    return False
+
+
+def _matches_gender_suffix(word: str, suffix: str) -> bool:
+    if not word.endswith(suffix) or _is_excluded_suffix(word, suffix):
+        return False
+    return len(word) >= _SUFFIX_MIN_LENGTHS.get(suffix, 5)
+
 
 def detect_german_gender_suffix(lemma: Optional[str], gender_code: Optional[str]) -> Optional[str]:
     """
     Detects recognizable German derivational or compound gender suffixes.
     Returns format '-suffix' or None if no recognized suffix applies.
     """
-    if not lemma:
-        return None
-    w = str(lemma).strip().lower()
-    if not w:
-        return None
-
-    code = normalize_gender_code(gender_code)
-    if not code:
-        return None
-
-    if code == "m":
-        for suf in GERMAN_GENDER_SUFFIXES_MASCULINE:
-            if suf == "ent" and (w in GERMAN_SUFFIX_EXCLUDED_ENT or any(w.endswith(ex) for ex in GERMAN_SUFFIX_EXCLUDED_ENT)):
-                continue
-            min_len = 4 if suf in ("mann", "or") else (7 if suf == "partner" else (6 if suf == "ismus" else 5))
-            if len(w) >= min_len and w.endswith(suf):
-                return f"-{suf}"
-    elif code == "f":
-        for suf in GERMAN_GENDER_SUFFIXES_FEMININE:
-            if suf == "in":
-                if len(w) > 4 and w not in GERMAN_SUFFIX_EXCLUDED_IN and w.endswith("in"):
-                    return "-in"
-            else:
-                min_len = 4 if suf in ("ik", "ei") else (6 if suf == "schaft" else 5)
-                if len(w) >= min_len and w.endswith(suf):
-                    return f"-{suf}"
-    elif code == "n":
-        for suf in GERMAN_GENDER_SUFFIXES_NEUTER:
-            min_len = 4 if suf in ("tum", "um") else 5
-            if len(w) >= min_len and w.endswith(suf):
-                return f"-{suf}"
+    w = str(lemma or "").strip().lower()
+    code = normalize_gender_code(gender_code) if w else None
+    for suf in _GENDER_SUFFIX_TABLE.get(code or "", ()):
+        if _matches_gender_suffix(w, suf):
+            return f"-{suf}"
     return None
 
 
@@ -203,6 +203,20 @@ def is_ai_provenance(provenance: Optional[str]) -> bool:
     return "intellifiller" in p_str or p_str in ("ai", "live:ai")
 
 
+def _pos_is_nominal(pos: str) -> bool:
+    parts = {p.strip().rstrip('.').lower() for p in pos.split(',') if p.strip()}
+    return bool(parts & GERMAN_NOUN_TAGS) or not bool(parts & GERMAN_NON_NOUN_TAGS)
+
+
+def _allows_german_article(clean_lemma: str, pos: Optional[str]) -> bool:
+    lower_lemma = clean_lemma.lower()
+    if lower_lemma in GERMAN_ARTICLES or lower_lemma.startswith(_GERMAN_ARTICLE_PREFIXES):
+        return False
+    if pos:
+        return _pos_is_nominal(str(pos))
+    return not clean_lemma[0].islower() and lower_lemma not in GERMAN_PRONOUNS
+
+
 def format_lemma_article_tooltip(
     lemma: Optional[str],
     gender: Optional[str] = None,
@@ -213,61 +227,32 @@ def format_lemma_article_tooltip(
     Formats hover tooltip for table lemma cell.
     Prepends definite German article (der, die, das) if language is German and gender is recognized.
     """
-    if not lemma:
-        return ""
-    clean_lemma = str(lemma).strip()
-    if not clean_lemma:
-        return ""
-    cur_lang = (lang or "de").strip().lower()
-    if cur_lang == "de":
-        lower_lemma = clean_lemma.lower()
-        if lower_lemma in GERMAN_ARTICLES or lower_lemma.startswith(tuple(a + " " for a in GERMAN_ARTICLES)):
-            return clean_lemma
+    clean_lemma = str(lemma or "").strip()
+    if not clean_lemma or str(lang or "de").strip().lower() != "de":
+        return clean_lemma
+    if not _allows_german_article(clean_lemma, pos):
+        return clean_lemma
+    article = _GERMAN_ARTICLE_BY_GENDER.get(normalize_gender_code(gender))
+    return f"{article} {clean_lemma}" if article else clean_lemma
 
-        if pos:
-            pos_parts = [p.strip().rstrip('.').lower() for p in str(pos).split(',') if p.strip()]
-            has_noun = any(p in GERMAN_NOUN_TAGS for p in pos_parts)
-            has_non_noun = any(p in GERMAN_NON_NOUN_TAGS for p in pos_parts)
-            if has_non_noun and not has_noun:
-                return clean_lemma
-        else:
-            if clean_lemma[0].islower():
-                return clean_lemma
-            if lower_lemma in GERMAN_PRONOUNS:
-                return clean_lemma
 
-        g = normalize_gender_code(gender)
-        if g == "m":
-            return f"der {clean_lemma}"
-        elif g == "f":
-            return f"die {clean_lemma}"
-        elif g == "n":
-            return f"das {clean_lemma}"
-    return clean_lemma
+def _resolve_single_pos_tag(tag: str) -> str:
+    for candidate in (tag, tag.upper(), tag.lower(), tag.rstrip('.').lower()):
+        if candidate in POS_FULL_NAME_MAP:
+            return POS_FULL_NAME_MAP[candidate]
+    return tag
 
 
 def format_pos_tooltip(pos_val: Optional[str]) -> str:
     """
     Expands abbreviated POS tags (e.g. 'n.' -> 'Noun', 'VERB' -> 'Verb') into readable title strings.
     """
-    if not pos_val:
-        return ""
-    p_clean = str(pos_val).strip()
+    p_clean = str(pos_val or "").strip()
     if not p_clean:
         return ""
     if "," in p_clean:
-        parts = [format_pos_tooltip(p.strip()) for p in p_clean.split(',') if p.strip()]
-        return ", ".join(parts)
-    if p_clean in POS_FULL_NAME_MAP:
-        return POS_FULL_NAME_MAP[p_clean]
-    if p_clean.upper() in POS_FULL_NAME_MAP:
-        return POS_FULL_NAME_MAP[p_clean.upper()]
-    if p_clean.lower() in POS_FULL_NAME_MAP:
-        return POS_FULL_NAME_MAP[p_clean.lower()]
-    p_stripped = p_clean.rstrip('.').lower()
-    if p_stripped in POS_FULL_NAME_MAP:
-        return POS_FULL_NAME_MAP[p_stripped]
-    return p_clean
+        return ", ".join(_resolve_single_pos_tag(p.strip()) for p in p_clean.split(',') if p.strip())
+    return _resolve_single_pos_tag(p_clean)
 
 
 def format_gender_tooltip(
