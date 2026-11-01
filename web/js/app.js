@@ -1748,14 +1748,14 @@
                     var childSkels = (tc.querySelectorAll('.skeleton-loader, [data-pending="true"]'));
                     if (childSkels.length > 0) {
                         for (var i = 0; i < childSkels.length; i++) {
-                            childSkels[i].textContent = label;
-                            childSkels[i].setAttribute('title', String(label));
-                            childSkels[i].setAttribute('data-tooltip', String(capProv));
+                            if (childSkels[i].textContent !== label) childSkels[i].textContent = label;
+                            if (childSkels[i].getAttribute('title') !== String(label)) childSkels[i].setAttribute('title', String(label));
+                            if (childSkels[i].getAttribute('data-tooltip') !== String(capProv)) childSkels[i].setAttribute('data-tooltip', String(capProv));
                         }
                     } else if (tc.classList.contains('skeleton-loader') || tc.getAttribute('data-pending') === 'true') {
-                        tc.textContent = label;
-                        tc.setAttribute('title', String(label));
-                        tc.setAttribute('data-tooltip', String(capProv));
+                        if (tc.textContent !== label) tc.textContent = label;
+                        if (tc.getAttribute('title') !== String(label)) tc.setAttribute('title', String(label));
+                        if (tc.getAttribute('data-tooltip') !== String(capProv)) tc.setAttribute('data-tooltip', String(capProv));
                     }
                 }
             }
@@ -1764,7 +1764,10 @@
                 if (cards && cards.length > 0) {
                     for (var c = 0; c < cards.length; c++) {
                         if (cards[c].translated_text && String(cards[c].translated_text).indexOf('skeleton-loader') !== -1) {
-                            cards[c].translated_text = updateSkeletonHtml(cards[c].translated_text);
+                            var nextCardTrans = updateSkeletonHtml(cards[c].translated_text);
+                            if (nextCardTrans !== cards[c].translated_text) {
+                                cards[c].translated_text = nextCardTrans;
+                            }
                         }
                     }
                 }
@@ -1776,9 +1779,9 @@
             var tableSkels = (document.querySelectorAll('td.col-translation .skeleton-loader, td.col-translation[data-pending="true"] .skeleton-loader, td[data-col="WordDestination"] .skeleton-loader, td[data-col="word_translation"] .skeleton-loader'));
             for (var k = 0; k < tableSkels.length; k++) {
                 var tSk = tableSkels[k];
-                tSk.textContent = label;
-                tSk.setAttribute('title', String(label));
-                tSk.setAttribute('data-tooltip', String(capProv));
+                if (tSk.textContent !== label) tSk.textContent = label;
+                if (tSk.getAttribute('title') !== String(label)) tSk.setAttribute('title', String(label));
+                if (tSk.getAttribute('data-tooltip') !== String(capProv)) tSk.setAttribute('data-tooltip', String(capProv));
             }
             if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
                 var wCards = window.WorkspaceTabs.getCards();
@@ -1788,11 +1791,16 @@
                             for (var wi = 0; wi < (wCards[wc].words || []).length; wi++) {
                                 var wordObj = (wCards[wc].words || [])[wi];
                                 if (wordObj.is_pending) {
-                                    wordObj.pending_provider = pLower;
-                                    wordObj.row_html = null;
+                                    if (wordObj.pending_provider !== pLower) {
+                                        wordObj.pending_provider = pLower;
+                                        wordObj.row_html = null;
+                                    }
                                 } else if (wordObj.translation && wordObj.translation.indexOf('skeleton-loader') !== -1) {
-                                    wordObj.translation = updateSkeletonHtml(wordObj.translation);
-                                    wordObj.row_html = null;
+                                    var nextWordTrans = updateSkeletonHtml(wordObj.translation);
+                                    if (nextWordTrans !== wordObj.translation) {
+                                        wordObj.translation = nextWordTrans;
+                                        wordObj.row_html = null;
+                                    }
                                 }
                             }
                         }
@@ -2780,21 +2788,43 @@
                                 var legacyDelta = deltasByRowId[String(cw.row_id)];
                                 if (!matchingDelta && legacyDelta && !(Number(legacyDelta.sentence_idx) > 0)) matchingDelta = legacyDelta;
                                 if (matchingDelta) {
+                                    var cwMutated = false;
                                     var mTrans = (matchingDelta.trans !== undefined && matchingDelta.trans !== "") ? matchingDelta.trans : ((matchingDelta.WordDestination !== undefined && matchingDelta.WordDestination !== "") ? matchingDelta.WordDestination : matchingDelta.word_translation);
-                                    if (mTrans !== undefined && mTrans !== "") cw.translation = mTrans;
-                                    if (matchingDelta.lemma) cw.lemma = matchingDelta.lemma;
-                                    if (matchingDelta.ipa) cw.ipa = matchingDelta.ipa;
-                                    var mMorph = (matchingDelta.morph !== undefined && matchingDelta.morph !== "") ? matchingDelta.morph : ((matchingDelta.morphology !== undefined && matchingDelta.morphology !== "") ? matchingDelta.morphology : matchingDelta.WordSourceMorphologyAI);
-                                    if (mMorph !== undefined && mMorph !== "") cw.morphology = mMorph;
-                                    if (matchingDelta.pos !== undefined) cw.pos = matchingDelta.pos;
-                                    else if (matchingDelta.WordSourcePOS !== undefined) cw.pos = matchingDelta.WordSourcePOS;
-                                    if (matchingDelta.gender !== undefined) cw.gender = matchingDelta.gender;
-                                    else if (matchingDelta.WordSourceGender !== undefined) cw.gender = matchingDelta.WordSourceGender;
-                                    var newProv = (matchingDelta.provenance !== undefined && matchingDelta.provenance !== null && String(matchingDelta.provenance).trim() !== "") ? matchingDelta.provenance : (cw.provenance || (window.AppState && window.AppState.rows && ((cw.token_order !== undefined && window.AppState.rows[String(cw.token_order)] && window.AppState.rows[String(cw.token_order)].provenance) || (cw.row_id !== undefined && window.AppState.rows[String(cw.row_id)] && window.AppState.rows[String(cw.row_id)].provenance))) || "");
-                                    if (newProv) {
-                                        cw.provenance = newProv;
+                                    if (mTrans !== undefined && mTrans !== "" && cw.translation !== mTrans) {
+                                        cw.translation = mTrans;
+                                        cwMutated = true;
                                     }
-                                    cw.row_html = null;
+                                    if (matchingDelta.lemma && cw.lemma !== matchingDelta.lemma) {
+                                        cw.lemma = matchingDelta.lemma;
+                                        cwMutated = true;
+                                    }
+                                    if (matchingDelta.ipa && cw.ipa !== matchingDelta.ipa) {
+                                        cw.ipa = matchingDelta.ipa;
+                                        cwMutated = true;
+                                    }
+                                    var mMorph = (matchingDelta.morph !== undefined && matchingDelta.morph !== "") ? matchingDelta.morph : ((matchingDelta.morphology !== undefined && matchingDelta.morphology !== "") ? matchingDelta.morphology : matchingDelta.WordSourceMorphologyAI);
+                                    if (mMorph !== undefined && mMorph !== "" && cw.morphology !== mMorph) {
+                                        cw.morphology = mMorph;
+                                        cwMutated = true;
+                                    }
+                                    var nextPos = matchingDelta.pos !== undefined ? matchingDelta.pos : matchingDelta.WordSourcePOS;
+                                    if (nextPos !== undefined && cw.pos !== nextPos) {
+                                        cw.pos = nextPos;
+                                        cwMutated = true;
+                                    }
+                                    var nextGender = matchingDelta.gender !== undefined ? matchingDelta.gender : matchingDelta.WordSourceGender;
+                                    if (nextGender !== undefined && cw.gender !== nextGender) {
+                                        cw.gender = nextGender;
+                                        cwMutated = true;
+                                    }
+                                    var newProv = (matchingDelta.provenance !== undefined && matchingDelta.provenance !== null && String(matchingDelta.provenance).trim() !== "") ? matchingDelta.provenance : (cw.provenance || (window.AppState && window.AppState.rows && ((cw.token_order !== undefined && window.AppState.rows[String(cw.token_order)] && window.AppState.rows[String(cw.token_order)].provenance) || (cw.row_id !== undefined && window.AppState.rows[String(cw.row_id)] && window.AppState.rows[String(cw.row_id)].provenance))) || "");
+                                    if (newProv && cw.provenance !== newProv) {
+                                        cw.provenance = newProv;
+                                        cwMutated = true;
+                                    }
+                                    if (cwMutated) {
+                                        cw.row_html = null;
+                                    }
                                 }
                                 if (cw.all_row_ids && cw.all_row_ids.length > 1) {
                                     var anyOverlap = false;

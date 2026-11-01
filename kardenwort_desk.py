@@ -6131,7 +6131,7 @@ def run_google_translation(text, source, target, config, resolved_paths, zid=Non
         if resp:
             if resp.get("status") == "success":
                 res_text = resp.get("translated_text", "")
-                resolved_p = resp.get("provider_resolved") or resp.get("provider") or "google"
+                resolved_p = resp.get("provider_resolved") or resp.get("resolved_provider") or resp.get("provider") or "google"
                 return ProvenanceString(res_text, provenance=f"live:{resolved_p}")
             elif resp.get("status") == "error":
                 results_dir = resolve_results_dir(resolved_paths, config)
@@ -6256,7 +6256,7 @@ def run_deepl_translation(text, source, target, config, resolved_paths, zid=None
         if resp:
             if resp.get("status") == "success":
                 res_text = resp.get("translated_text", "")
-                resolved_p = resp.get("provider_resolved") or resp.get("provider") or "deepl"
+                resolved_p = resp.get("provider_resolved") or resp.get("resolved_provider") or resp.get("provider") or "deepl"
                 return ProvenanceString(res_text, provenance=f"live:{resolved_p}")
             elif resp.get("status") == "error":
                 results_dir = resolve_results_dir(resolved_paths, config)
@@ -6955,7 +6955,13 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
                 else:
                     raise
             if res is not None:
-                return ProvenanceString(res, provenance=f"live:{current_provider}")
+                existing_prov = getattr(res, 'provenance', None)
+                if existing_prov and str(existing_prov).startswith("live:"):
+                    resolved_p = str(existing_prov)[5:].strip().lower()
+                    if resolved_p and resolved_p != current_provider:
+                        notify_provider_failover(eff_task, current_provider, resolved_p, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
+                        return ProvenanceString(res, provenance=f"live:{resolved_p}")
+                return ProvenanceString(res, provenance=existing_prov or f"live:{current_provider}")
             return res
         except Exception as e:
             last_exception = e

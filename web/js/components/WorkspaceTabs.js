@@ -672,35 +672,59 @@
                                 updatedTrans = rolledTrans.join(', ');
                             }
                         }
+                        var rowMutated = false;
                         if (updatedTrans !== undefined && updatedTrans !== "") {
                             if (updatedTrans === '[FAILED]' || (typeof updatedTrans === 'string' && updatedTrans.indexOf('[Error') === 0)) {
                                 if (wordObj.is_pending || (wordObj.translation && wordObj.translation.indexOf('skeleton-loader') !== -1)) {
                                     // Preserve existing skeleton loader during intermediate failover
                                 } else if (!w.AppState || !w.AppState.isFinished) {
                                     var lemmaProv = (typeof w.getLemmaBaseProvider === 'function') ? w.getLemmaBaseProvider() : (getTextBaseProvider() || 'google');
-                                    wordObj.is_pending = true;
-                                    wordObj.pending_provider = lemmaProv;
-                                    wordObj.translation = '';
-                                } else {
+                                    if (!wordObj.is_pending || wordObj.pending_provider !== lemmaProv || wordObj.translation !== '') {
+                                        wordObj.is_pending = true;
+                                        wordObj.pending_provider = lemmaProv;
+                                        wordObj.translation = '';
+                                        rowMutated = true;
+                                    }
+                                } else if (wordObj.is_pending || wordObj.translation !== '') {
                                     wordObj.is_pending = false;
                                     wordObj.translation = '';
+                                    rowMutated = true;
                                 }
-                            } else {
+                            } else if (wordObj.is_pending || wordObj.pending_provider !== null || wordObj.translation !== updatedTrans) {
                                 wordObj.is_pending = false;
                                 wordObj.pending_provider = null;
                                 wordObj.translation = updatedTrans;
+                                rowMutated = true;
                             }
                         }
-                        if (appRow.lemma !== undefined && appRow.lemma !== "") wordObj.lemma = appRow.lemma;
-                        if (appRow.ipa !== undefined && appRow.ipa !== "") wordObj.ipa = appRow.ipa;
+                        if (appRow.lemma !== undefined && appRow.lemma !== "" && wordObj.lemma !== appRow.lemma) {
+                            wordObj.lemma = appRow.lemma;
+                            rowMutated = true;
+                        }
+                        if (appRow.ipa !== undefined && appRow.ipa !== "" && wordObj.ipa !== appRow.ipa) {
+                            wordObj.ipa = appRow.ipa;
+                            rowMutated = true;
+                        }
                         var updatedMorph = (appRow.morphology !== undefined && appRow.morphology !== "") ? appRow.morphology : ((appRow.morph !== undefined && appRow.morph !== "") ? appRow.morph : appRow.WordSourceMorphologyAI);
-                        if (updatedMorph !== undefined && updatedMorph !== "") wordObj.morphology = updatedMorph;
+                        if (updatedMorph !== undefined && updatedMorph !== "" && wordObj.morphology !== updatedMorph) {
+                            wordObj.morphology = updatedMorph;
+                            rowMutated = true;
+                        }
                         var updatedPos = (appRow.pos !== undefined) ? appRow.pos : appRow.WordSourcePOS;
-                        if (updatedPos !== undefined) wordObj.pos = updatedPos;
+                        if (updatedPos !== undefined && wordObj.pos !== updatedPos) {
+                            wordObj.pos = updatedPos;
+                            rowMutated = true;
+                        }
                         var updatedGender = (appRow.gender !== undefined) ? appRow.gender : appRow.WordSourceGender;
-                        if (updatedGender !== undefined) wordObj.gender = updatedGender;
-                        if (appRow.provenance) wordObj.provenance = appRow.provenance;
-                        if (updatedTrans || appRow.provenance || appRow.ipa || updatedMorph || appRow.lemma || updatedPos !== undefined || updatedGender !== undefined) {
+                        if (updatedGender !== undefined && wordObj.gender !== updatedGender) {
+                            wordObj.gender = updatedGender;
+                            rowMutated = true;
+                        }
+                        if (appRow.provenance && wordObj.provenance !== appRow.provenance) {
+                            wordObj.provenance = appRow.provenance;
+                            rowMutated = true;
+                        }
+                        if (rowMutated) {
                             wordObj.row_html = null;
                         }
                     }
@@ -800,7 +824,73 @@
                     );
                 }
             }
-            tbody.innerHTML = htmlParts.join('');
+            var existingTrs = tbody.querySelectorAll('tr[data-row-id]');
+            var sameRowSequence = (existingTrs.length === words.length && words.length > 0);
+            if (sameRowSequence) {
+                for (var sr = 0; sr < words.length; sr++) {
+                    var expRowId = String(words[sr].row_id);
+                    var expTokOrd = String(words[sr].token_order !== undefined && words[sr].token_order !== null ? words[sr].token_order : expRowId);
+                    var domRowId = existingTrs[sr].getAttribute('data-row-id');
+                    var domTokOrd = existingTrs[sr].getAttribute('data-token-order') || domRowId;
+                    if (domRowId !== expRowId || domTokOrd !== expTokOrd) {
+                        sameRowSequence = false;
+                        break;
+                    }
+                }
+            }
+            if (sameRowSequence && tbody.querySelector('.skeleton-loader') !== null) {
+                var tempTbody = document.createElement('tbody');
+                tempTbody.innerHTML = htmlParts.join('');
+                if (tempTbody.children.length === existingTrs.length) {
+                    for (var rIdx = 0; rIdx < existingTrs.length; rIdx++) {
+                        var oldTr = existingTrs[rIdx];
+                        var newTr = tempTbody.children[rIdx];
+                        var oldSkel = oldTr.querySelector('td.col-translation .skeleton-loader, td[data-col="WordDestination"] .skeleton-loader, .skeleton-loader');
+                        var newSkel = newTr.querySelector('td.col-translation .skeleton-loader, td[data-col="WordDestination"] .skeleton-loader, .skeleton-loader');
+                        if (oldSkel && newSkel) {
+                            if (oldSkel.textContent !== newSkel.textContent) {
+                                oldSkel.textContent = newSkel.textContent;
+                                var nTitle = newSkel.getAttribute('title');
+                                if (nTitle) oldSkel.setAttribute('title', nTitle);
+                            }
+                            var syncAttrs = ['class', 'data-selected', 'data-filter-hidden', 'data-occ', 'data-occurrence-targets', 'data-all-row-ids'];
+                            for (var sa = 0; sa < syncAttrs.length; sa++) {
+                                var attrName = syncAttrs[sa];
+                                var nVal = newTr.getAttribute(attrName);
+                                if (nVal !== null) {
+                                    if (oldTr.getAttribute(attrName) !== nVal) oldTr.setAttribute(attrName, nVal);
+                                } else if (oldTr.hasAttribute(attrName)) {
+                                    oldTr.removeAttribute(attrName);
+                                }
+                            }
+                            var oldTds = oldTr.children;
+                            var newTds = newTr.children;
+                            if (oldTds.length === newTds.length) {
+                                for (var tdIdx = 0; tdIdx < oldTds.length; tdIdx++) {
+                                    var oTd = oldTds[tdIdx];
+                                    var nTd = newTds[tdIdx];
+                                    if (oTd.classList.contains('col-translation') || oTd.getAttribute('data-col') === 'WordDestination') continue;
+                                    if (oTd.classList.contains('editing') || oTd.classList.contains('dirty')) continue;
+                                    if (oTd.querySelector('.skeleton-loader')) continue;
+                                    if (oTd.innerHTML !== nTd.innerHTML) oTd.innerHTML = nTd.innerHTML;
+                                    var nTdTitle = nTd.getAttribute('title');
+                                    if (nTdTitle !== null) {
+                                        if (oTd.getAttribute('title') !== nTdTitle) oTd.setAttribute('title', nTdTitle);
+                                    } else if (oTd.hasAttribute('title')) {
+                                        oTd.removeAttribute('title');
+                                    }
+                                }
+                            }
+                        } else if (oldTr.outerHTML !== newTr.outerHTML) {
+                            tbody.replaceChild(newTr.cloneNode(true), oldTr);
+                        }
+                    }
+                } else {
+                    tbody.innerHTML = htmlParts.join('');
+                }
+            } else {
+                tbody.innerHTML = htmlParts.join('');
+            }
             if (w.AppState && w.AppState.filterSelectedOnly) {
                 var lt = document.getElementById('lemma-table');
                 if (lt) addClass(lt, 'kw-filter-selected-only');
@@ -1279,14 +1369,6 @@
                         c3Card.translated_text = w.AppState.translatedText;
                     }
                     break;
-                }
-            }
-            for (var c4 = 0; c4 < cards.length; c4++) {
-                if (cards[c4].words) {
-                    var cWords = (cards[c4].words);
-                    for (var wIdx = 0; wIdx < cWords.length; wIdx++) {
-                        cWords[wIdx].row_html = null;
-                    }
                 }
             }
             updateActiveTabTranslation();

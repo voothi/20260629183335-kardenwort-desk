@@ -148,3 +148,44 @@ def test_missing_workspace_metadata_is_diagnosed_without_invented_values(audit_p
     assert any('Missing workspace text mode' in message for message in messages)
     assert 'en (single)' not in title
     assert '(single)' not in title
+
+
+@pytest.mark.parametrize('audit_page', [True], indirect=True)
+def test_pending_skeletons_preserve_dom_node_identity_across_polls(audit_page):
+    result = audit_page.evaluate('''() => {
+        AppState.isFinished = false;
+        AppState.translatedText = '';
+        AppState.translated_text = '';
+        if (AppState.rows && AppState.rows['0']) {
+            AppState.rows['0'].trans = '';
+            AppState.rows['0'].WordDestination = '';
+            AppState.rows['0'].word_translation = '';
+        }
+        const tc = document.getElementById('translation-container');
+        tc.innerHTML = '<span class="skeleton-loader kw-skeleton-cell" data-pending="true" title="Google...">Google...</span>';
+        const tcSkelBefore = tc.querySelector('.skeleton-loader');
+        const cards = WorkspaceTabs.getCards();
+        const card1 = cards.find(c => c.seq_num === 1) || cards[0];
+        card1.translated_text = '';
+        card1.words[0].is_pending = true;
+        card1.words[0].translation = '';
+        card1.words[0].row_html = null;
+        WorkspaceTabs.switchToTab(1, true);
+        const rowSkelBefore = document.querySelector('#lemma-table tbody tr[data-row-id="0"] .skeleton-loader');
+        AppStore.applyDeltas({
+            stage: 'translating',
+            active_text_provider: 'deepl',
+            active_lemma_provider: 'google',
+            sentences: [{sentence_index: 1, sentence_source: 'Das Haus.', sentence_destination: ''}],
+            rows: {'0': {row_id: 0, token_order: 0, sentence_idx: 1, lemma: 'Haus', trans: ''}}
+        });
+        const tcSkelAfter = tc.querySelector('.skeleton-loader');
+        const rowSkelAfter = document.querySelector('#lemma-table tbody tr[data-row-id="0"] .skeleton-loader');
+        return {
+            sameTcSkel: tcSkelBefore === tcSkelAfter,
+            tcLabel: tcSkelAfter ? tcSkelAfter.textContent : '',
+            sameRowSkel: rowSkelBefore === rowSkelAfter,
+            rowLabel: rowSkelAfter ? rowSkelAfter.textContent : ''
+        };
+    }''')
+    assert result == dict(sameTcSkel=True, tcLabel='DeepL...', sameRowSkel=True, rowLabel='Google...')

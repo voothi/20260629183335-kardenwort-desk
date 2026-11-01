@@ -69,6 +69,18 @@
             var probe = document.createElement('div');
             probe.innerHTML = html;
             var pending = translationIsPending(container);
+            var probePending = translationIsPending(probe);
+            if (pending && probePending) {
+                var existingSkel = container.querySelector('.skeleton-loader, [data-pending="true"]') || container;
+                var nextLabel = (probe.textContent || '').trim();
+                if (nextLabel && existingSkel.textContent !== nextLabel) {
+                    existingSkel.textContent = nextLabel;
+                    existingSkel.setAttribute('title', nextLabel);
+                }
+                this._projectionContext = context;
+                this._projectionHtml = html;
+                return false;
+            }
             if (!pending && this._projectionContext === context && this._projectionHtml === html && container.textContent === probe.textContent) return false;
             container.classList.remove('skeleton-loader');
             container.removeAttribute('data-pending');
