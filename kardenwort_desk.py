@@ -12638,6 +12638,7 @@ def run_lookup_flow(
     text_mode='single', wordfill_cfg=None, sentence_match_strategy=None,
     allow_checksum_fallback=None, no_checksum_lookup=False
 ):
+    """@deprecated GoldenDict lookup flow is deprecated and frozen in maintenance-only mode."""
     if wordfill_cfg is None and config is not None:
         wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
     if text: text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
@@ -13646,10 +13647,12 @@ setTimeout(function() {{
     return base_html
 
 def render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=False, fingerprint=""):
+    """@deprecated GoldenDict HTML lookup renderer is deprecated and frozen in maintenance-only mode."""
     with TraceTimer("html_generation", zid, config, resolved_paths):
         return _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=session_zid, api_token=api_token, server_enabled=server_enabled, fingerprint=fingerprint)
 
 def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=False, fingerprint=""):
+    """@deprecated Internal GoldenDict HTML lookup renderer implementation (frozen / maintenance-only)."""
     sections = goldendict.get('sections', ['translation', 'lemmas']) if isinstance(goldendict, dict) else ['translation', 'lemmas']
     column_tokens = goldendict.get('lemma_columns', ['inflected', 'lemma', 'translation']) if isinstance(goldendict, dict) else ['inflected', 'lemma', 'translation']
 
@@ -14343,6 +14346,7 @@ def core_lookup(
     bypass_lang_check=False, storage=None, sentence_match_strategy=None,
     allow_checksum_fallback=None, no_checksum_lookup=False
 ):
+    """@deprecated GoldenDict core_lookup pipeline is deprecated and frozen in maintenance-only mode."""
     import re
     if zid is None:
         zid = generate_unique_zid()
@@ -14484,7 +14488,9 @@ def core_lookup(
 
 
 def cmd_lookup(args):
+    """@deprecated GoldenDict CLI lookup subcommand is deprecated and frozen in maintenance-only mode."""
     zid = getattr(args, 'zid', None) or generate_unique_zid()
+    logger.warning("DEPRECATED: GoldenDict lookup subcommand is deprecated and frozen", extra={"zid": zid})
     logger.info("Lookup subcommand invoked", extra={"zid": zid})
     try:
         res = core_lookup(
@@ -19337,8 +19343,12 @@ def main():
     p_migrate = subparsers.add_parser("migrate-tsvs-to-db")
     p_migrate.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
 
-    # lookup
-    p_lookup = subparsers.add_parser("lookup")
+    # lookup [DEPRECATED]
+    p_lookup = subparsers.add_parser(
+        "lookup",
+        help="[DEPRECATED] GoldenDict headless lookup (frozen / maintenance-only)",
+        description="[DEPRECATED] GoldenDict headless lookup subcommand (frozen in maintenance-only mode).",
+    )
     p_lookup.add_argument("--text", required=True, help="Text to lookup")
     p_lookup.add_argument("--language", help="Source language code")
     p_lookup.add_argument("--target-lang", help="Target language code")

@@ -4085,6 +4085,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             return
 
         # 4. Consolidated Legacy & Reader Endpoints (from http_server.py & web reader)
+        # @deprecated GoldenDict HTML lookup rendering (/lookup and view_mode='goldendict') is deprecated and frozen in maintenance-only mode.
         if path in ('/lookup', '/session/render') or (path == '/' and (qs.get('text', [None])[0] or qs.get('session_zid', [None])[0] or qs.get('zid', [None])[0] or qs.get('project_id', [None])[0] or qs.get('project', [None])[0])):
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
@@ -4126,6 +4127,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 req_theme = qs.get('theme', [None])[0]
                 view_mode = qs.get('view', [None])[0]
                 synth_zid = synthesized.get("session_zid") or req_zid
+                # @deprecated GoldenDict view mode is deprecated and frozen in maintenance-only mode.
                 if view_mode == 'goldendict':
                     goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
                     goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
@@ -4315,6 +4317,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 slug = restored.get("slug") or restored.get("session", {}).get("slug", "") or (generate_slug(source_text) if source_text else "")
                 text_mode = restored.get("text_mode") or "single"
 
+                # @deprecated GoldenDict view mode is deprecated and frozen in maintenance-only mode.
                 if view_mode == 'goldendict':
                     goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
                     goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
@@ -4439,6 +4442,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if not language:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'language' query parameter")
 
+        # @deprecated GoldenDict JSON lookup endpoint (/api/v1/lookup) is deprecated and frozen in maintenance-only mode.
         if path == '/api/v1/lookup':
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")

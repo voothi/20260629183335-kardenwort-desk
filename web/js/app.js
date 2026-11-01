@@ -28,6 +28,7 @@
     var SERVER_ENABLED = false;
     var IS_OFFLINE = false;
 
+    /** @deprecated GoldenDict lookup mode is deprecated and frozen in maintenance-only mode. */
     function isLookupMode() {
         if (window.AppState) {
             if (window.AppState.is_lookup) return true;
