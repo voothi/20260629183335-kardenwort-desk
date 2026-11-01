@@ -603,4 +603,3 @@ def test_f5_alt_hand_tool_covers_all_tokens_and_native_selection(page, tmp_path)
     page.evaluate("window.setSelectableTextMode(false, false)")
     metrics_idle = page.locator("#source-container .word").first.evaluate("el => { const s = getComputedStyle(el); return {pad: s.padding, mar: s.margin, border: s.border}; }")
     assert metrics_alt == metrics_idle, f"Token box geometry must remain invariant across modes: alt={metrics_alt} vs idle={metrics_idle}"
-

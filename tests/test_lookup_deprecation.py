@@ -86,4 +86,3 @@ def test_goldendict_entrypoints_and_config_carry_deprecation_annotations():
 
     config_ini = (REPO_ROOT / "config.ini").read_text(encoding="utf-8")
     assert "[goldendict]\n; [DEPRECATED] GoldenDict lookup integration is deprecated" in config_ini.replace("\r\n", "\n")
-

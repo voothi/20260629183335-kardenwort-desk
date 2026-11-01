@@ -113,6 +113,50 @@ def format_storage_update_rows(adapter, zid, rows, headers, roles, provenances):
                         occurrence_provenances=reword_query_provenances(adapter, zid))
     return format_update_rows_dict(rows, headers, roles, row_provenances=provenances, **metadata)
 
+
+def recovery_storage_rows(arbiter, adapter, zid, memo):
+    if adapter.backend_name == 'sqlite':
+        restored = adapter.restore_session(zid)
+        headers, rows = reword.restored_manifest_rows(restored)
+        return restored, headers, rows
+    directory = resolve_results_dir(arbiter.resolved_paths, arbiter.config)
+    path = memo.get('tsv_path') or find_working_tsv(directory, zid)
+    if not path:
+        raise StructuredError(ErrorCode.NOT_FOUND, 'Committed recovery storage is unavailable')
+    with adapter.file_lock(Path(path)):
+        _, headers, rows = adapter.load_tsv_rows(Path(path))
+    return {}, headers, rows
+
+
+def recovery_row_order(rows, headers, roles, memo):
+    sentence = roles.get('sentence_index', 'SentenceSourceIndex')
+    keys = reword.row_keys(rows, headers, sentence)
+    if not memo.get('data_rows'):
+        return rows
+    original = reword.row_keys(memo['data_rows'], memo['headers'], sentence)
+    rank = {key: index for index, key in enumerate(original)}
+    return [row for key, row in sorted(zip(keys, rows), key=lambda pair: rank.get(pair[0], len(rank)))]
+
+
+def committed_recovery_snapshot(arbiter, zid):
+    adapter = getattr(arbiter, 'storage_adapter', None) or get_storage_adapter(
+        arbiter.config, arbiter.resolved_paths, read_only=True)
+    with arbiter._lock:
+        memo = dict(arbiter.sessions.get(zid, {}))
+    restored, headers, rows = recovery_storage_rows(arbiter, adapter, zid, memo)
+    mapping = load_anki_mapping(arbiter.resolved_paths['anki_mapping_file'])
+    roles = get_role_fields(mapping, headers)
+    rows = recovery_row_order(rows, headers, roles, memo)
+    snapshot = dict(session_zid=zid, rows=format_storage_update_rows(adapter, zid, rows, headers, roles, {}),
+                fingerprint=compute_content_fingerprint(rows),
+                translatedText=restored.get('sentence_translation', memo.get('translatedText', '')),
+                sentences=restored.get('sentences', []))
+    with arbiter._lock:
+        if zid in arbiter.sessions:
+            arbiter.sessions[zid].update(headers=headers, data_rows=rows,
+                fingerprint=snapshot['fingerprint'], translatedText=snapshot['translatedText'])
+    return snapshot
+
 CONFIG_API_WRITABLE_KEYS: Dict[Tuple[str, str], str] = {
     ('rendering', 'highlight_same_lemma'): 'bool',
     ('rendering', 'filter_selected_only'): 'bool',
@@ -3254,7 +3298,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if client_id:
                 events = EventDispatcher.get_instance().poll_events(
                     session_zid, str(client_id), accept=body.get('accept_updates', True), close=body.get('close', False))
-            self._send_json(200, {'ok': True, 'shared_selection': membership, 'events': events})
+            result = {'ok': True, 'shared_selection': membership, 'events': events}
+            if body.get('recover') and not body.get('close'):
+                result['snapshot'] = committed_recovery_snapshot(self.server.arbiter, session_zid)
+            self._send_json(200, result)
             return
 
         if path == '/internal/stage':
@@ -3442,6 +3489,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             zid = qs.get('zid', [''])[0]
             if not zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'zid' query parameter")
+            if qs.get('committed') == ['1']:
+                self._send_json(200, committed_recovery_snapshot(self.server.arbiter, zid))
+                return
 
             mapping_path = None
             if self.server.resolved_paths and "anki_mapping_file" in self.server.resolved_paths:

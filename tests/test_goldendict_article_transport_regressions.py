@@ -587,4 +587,3 @@ def test_2_5_credential_safety_and_authentication_failure_mutation(running_contr
     assert cur_rows[0][dest_col] == "дом", (
         f"WordDestination must remain 'дом', not 'hacked'. Got: {cur_rows[0][dest_col]}"
     )
-

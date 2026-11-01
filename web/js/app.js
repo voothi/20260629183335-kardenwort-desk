@@ -3674,7 +3674,8 @@
                     if (controller) controller.abort();
                     reject(new Error('Session status request timed out'));
                 }, 4000);
-                fetch(resolveBackendUrl('/session/status?zid=' + encodeURIComponent(session)), options).then(function(response) {
+                fetch(resolveBackendUrl('/session/status?zid=' + encodeURIComponent(session) +
+                    (options.committed ? '&committed=1' : '')), options).then(function(response) {
                     return response.json().then(function(data) { return {ok: response.ok, status: response.status, data: data}; });
                 }).then(resolve, reject);
             }).finally(function() {
@@ -4516,15 +4517,32 @@
             }
             try {
                 var response = JSON.parse(window.ahkCall('get_shared_selection', JSON.stringify({session_zid: subscription.session,
-                    client_id: subscription.consumer, accept_updates: !window.isDirty()})));
+                    client_id: subscription.consumer, accept_updates: !window.isDirty(),
+                    recover: subscription.phase === 'recovering' && !window.isDirty()})));
                 if (selectionBridge !== subscription) return;
                 var membership = selectionReadResult(response);
                 response = response.data || response;
-                (response.events || []).forEach(function(event) { window.receiveUpdate(event); });
-                window.applySharedSelection(membership);
+                applyNativePollResponse(subscription, response, membership);
             } catch (err) {
+                if (subscription.phase === 'recovering') updateSyncFeedback('failed', err.message);
                 console.error('[Selection] Native synchronization failed', err);
             }
+        }
+        function applyNativePollResponse(subscription, response, membership) {
+            (response.events || []).forEach(function(event) {
+                if (event.type === 'resync_required') {
+                    subscription.phase = 'recovering';
+                    updateSyncFeedback('syncing', 'Recovering committed native state...');
+                } else {
+                    window.receiveUpdate(event);
+                }
+            });
+            if (response.snapshot) {
+                window.receiveUpdate(response.snapshot);
+                subscription.phase = 'running';
+                updateSyncFeedback('synced', 'Committed native state synchronized');
+            }
+            window.applySharedSelection(membership);
         }
         window.stopSelectionBridge = stopSelectionBridge;
         function validateNativeSubscription(consumer, interval) {
@@ -9123,10 +9141,31 @@
         }
         window.invalidateStreamMembership = invalidateStreamMembership;
 
+        window.noteStreamMutation = function() {
+            if (streamRecovery && streamRecovery.phase === 'syncing' && streamRecovery.context.refreshStatus) {
+                statusRead = null;
+            }
+        };
+
+        function readCommittedStreamStatus(recovery) {
+            if (!recovery.context.refreshStatus) return Promise.resolve();
+            return readSessionStatus(recovery.context.session, {method: 'GET', committed: true}).then(function(response) {
+                assertCurrentRecovery(recovery);
+                var data = response.data && response.data.data ? response.data.data : response.data;
+                if (!response.ok || !data || data.error_code || data.status === 'error' || !data.rows) {
+                    throw new Error('Committed stream status is unavailable (' + response.status + ')');
+                }
+                window.receiveUpdate(data);
+            });
+        }
+
         function readStreamMembership(recovery, attempt) {
             assertCurrentRecovery(recovery);
             var revision = membershipRevision;
-            return readSharedSelections(recovery.context).then(function(membership) {
+            return readCommittedStreamStatus(recovery).then(function() {
+                assertCurrentRecovery(recovery);
+                return readSharedSelections(recovery.context);
+            }).then(function(membership) {
                 assertCurrentRecovery(recovery);
                 if (membershipRevision !== revision) throw new Error('Membership changed during synchronization');
                 window.applySharedSelection(membership);
@@ -9154,6 +9193,7 @@
         function reconcileStreamMembership(context) {
             context = context || {};
             context.session = context.session || getSessionZid();
+            if (window.SSEBridge && window.SSEBridge.needsCommittedRecovery()) context.refreshStatus = true;
             if (isPendingStreamRecovery(context)) return streamRecovery.promise;
             invalidateStreamMembership();
             statusRead = null;

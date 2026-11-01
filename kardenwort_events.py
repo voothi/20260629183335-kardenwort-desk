@@ -1,12 +1,27 @@
 """Controller-owned queues for browser and native stage delivery."""
 import queue
-import logging
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 
-logger = logging.getLogger(__name__)
+
+class SubscriberQueue(queue.Queue):
+    """The queued gap marker is the sole backlog state until the consumer reads it."""
+
+    def publish(self, payload):
+        with self.not_empty:
+            if self.queue and self.queue[0].get('type') == 'resync_required':
+                return
+            if self._qsize() >= self.maxsize:
+                self.unfinished_tasks -= self._qsize()
+                self.queue.clear()
+                self.not_full.notify_all()
+                payload = dict(type='resync_required', session_zid=payload['session_zid'])
+            self._put(payload)
+            self.unfinished_tasks += 1
+            self.not_empty.notify()
+
 
 class EventDispatcher:
     """
@@ -30,7 +45,7 @@ class EventDispatcher:
             return cls._instance
 
     def register(self, session_zid: str) -> queue.Queue:
-        q = queue.Queue(maxsize=1000)
+        q = SubscriberQueue(maxsize=1000)
         with self._lock:
             if session_zid not in self._subscribers:
                 self._subscribers[session_zid] = []
@@ -56,7 +71,7 @@ class EventDispatcher:
                 self._remove_polling_client(key)
                 return []
             if key not in self._polling_clients:
-                channel = queue.Queue(maxsize=1000)
+                channel = SubscriberQueue(maxsize=1000)
                 self._subscribers.setdefault(session_zid, []).append(channel)
                 self._polling_clients[key] = (channel, 0)
             channel = self._polling_clients[key][0]
@@ -86,11 +101,15 @@ class EventDispatcher:
     @staticmethod
     def _drain_events(channel):
         events = []
-        while True:
+        for _ in range(channel.maxsize):
             try:
-                events.append(channel.get_nowait())
+                event = channel.get_nowait()
             except queue.Empty:
                 return events
+            if event.get('type') == 'resync_required':
+                return [event]
+            events.append(event)
+        return events
 
     def has_subscribers(self, session_zid: str) -> bool:
         with self._lock:
@@ -104,7 +123,4 @@ class EventDispatcher:
         with self._lock:
             queues = list(self._subscribers.get(session_zid, []))
         for q in queues:
-            try:
-                q.put_nowait(payload)
-            except queue.Full:
-                logger.warning("Subscriber backlog is full for session %s; recover committed state through status", session_zid)
+            q.publish(payload)

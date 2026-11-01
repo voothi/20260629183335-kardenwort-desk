@@ -109,19 +109,10 @@ def parse_arguments(argv):
 def prepare_source(revision, output):
     if revision is None:
         return
-    commit = subprocess.check_output(['git', 'rev-parse', '--verify', revision + '^{commit}'],
-                                     cwd=ROOT, text=True).strip()
-    source = output / 'source'
-    shutil.copytree(ROOT / 'web', source / 'web')
-    for relative in ('kardenwort_desk.py', 'kardenwort_controller.py', 'kardenwort_reword.py',
-                     'web/js/app.js', 'web/js/types.js', 'web/js/services/sse.js',
-                     'web/js/components/WorkspaceTabs.js'):
-        # Historical trees can predate the separate Re-word helper module.
-        names = subprocess.check_output(['git', 'ls-tree', '--name-only', commit, '--', relative], cwd=ROOT, text=True)
-        if names.strip():
-            content = subprocess.check_output(['git', 'show', commit + ':' + relative], cwd=ROOT)
-            (source / relative).write_bytes(content)
-    sys.path.insert(0, str(source))
+    from scripts.release_audit_sources import materialize
+    identity = materialize(ROOT, output, 'selected', revision)
+    sys.path.insert(0, identity['source'])
+    return identity
 
 
 if __name__ == '__main__':
@@ -131,7 +122,9 @@ if __name__ == '__main__':
     try:
         capacity_preflight(OUT, int(options.reserve_mb * 1024 * 1024))
         REVISION = options.source_ref
-        prepare_source(REVISION, OUT)
+        source_identity = prepare_source(REVISION, OUT)
+        if source_identity:
+            REVISION = source_identity['commit']
     except Exception as error:
         evidence = dict(stage='preflight-failed', command=sys.argv, exit_code=2,
                         error=f'{type(error).__name__}: {error}', output_dir=str(OUT))

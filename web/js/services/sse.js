@@ -165,7 +165,7 @@
      * @param {string} sessionZid
      * @param {string} [serverUrl]
      */
-    function connect(sessionZid, serverUrl, token) {
+    function connect(sessionZid, serverUrl, token, recoverCommitted) {
         if (!sessionZid || typeof window.EventSource === 'undefined') return;
 
         var w = (window);
@@ -207,6 +207,7 @@
             w.__sseActiveZid = sessionZid;
 
             var isConnectionOpen = false;
+            es.recoveryMode = recoverCommitted ? 'committed' : 'membership';
 
             updateConnectionIndicator('reconnecting');
 
@@ -219,7 +220,8 @@
                         w.reconcileStreamMembership({
                             session: sessionZid,
                             connectionId: activeConnectionId,
-                            serverUrl: serverUrl
+                            serverUrl: serverUrl,
+                            refreshStatus: es.recoveryMode === 'committed'
                         }).catch(function(error) {
                             console.debug('[SSE] Membership recovery stopped:', error.message);
                         });
@@ -234,6 +236,7 @@
             es.onerror = function () {
                 if (activeEventSource !== es) return;
                 isConnectionOpen = false;
+                es.recoveryMode = 'committed';
                 invalidateMembership();
                 activeConnectionId = ++connectionCounter;
                 if (es.readyState === EventSource.CONNECTING) {
@@ -269,6 +272,11 @@
             /** @param {StreamEvent|null} data */
             function applyEvent(data) {
                 if (data && (data.type === 'ping' || data.type === 'heartbeat')) return;
+                if (data && data.type === 'resync_required') {
+                    disconnect();
+                    connect(sessionZid, serverUrl, token, true);
+                    return;
+                }
                 if (data && data.type === 'disconnected') {
                     disconnect();
                     return;
@@ -303,6 +311,7 @@
                     }
 
                     // The canonical update command applies each event once.
+                    if (typeof w.noteStreamMutation === 'function') w.noteStreamMutation();
                     if (typeof w.receiveUpdate === 'function') {
                         w.receiveUpdate(data);
                     } else if (w.AppStore) {
@@ -346,6 +355,7 @@
         updateConnectionIndicator: updateConnectionIndicator,
         getActiveZid: function () { return activeSessionZid; },
         getActiveConnectionId: function () { return activeConnectionId; },
+        needsCommittedRecovery: function () { return activeEventSource && activeEventSource.recoveryMode === 'committed'; },
         getServerUrl: function () { return activeServerUrl; }
     };
 
