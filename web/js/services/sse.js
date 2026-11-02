@@ -7,7 +7,7 @@
  */
 
 /**
- * @typedef {{type: 'ping'|'heartbeat'|'connected'|'disconnected'}} ConnectionEvent
+ * @typedef {{type: 'ping'|'heartbeat'|'connected'|'disconnected'|'resync_required'}} ConnectionEvent
  * @typedef {{type: 'provider_failover', task_type?: string, task?: string, new_provider?: string, to?: string, provider?: string}} ProviderFailoverEvent
  * @typedef {{type: 'tag_updated', row_id: string|number, status: boolean}} TagEvent
  * @typedef {(UpdatePayload & {type?: undefined})|ConnectionEvent|ProviderFailoverEvent|TagEvent} StreamEvent
@@ -131,11 +131,11 @@
             indicator = document.createElement('span');
             indicator.id = 'sse-status-indicator';
             indicator.className = 'kw-sse-status';
-            if (!header) indicator.style.display = 'none';
             (header || document.body).appendChild(indicator);
         }
 
         if (indicator) {
+            indicator.hidden = !header;
             indicator.className = 'kw-sse-status kw-status-' + status;
             indicator.setAttribute('data-status', status);
             if (status === 'connected') {

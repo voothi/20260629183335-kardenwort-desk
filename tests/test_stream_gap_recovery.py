@@ -159,10 +159,10 @@ def test_native_paused_overflow_recovers_through_existing_bridge(browser, tmp_pa
         page.clock.run_for(200)
         assert page.locator('#sse-status-indicator').get_attribute('data-sync') == 'syncing'
         if unauthorized_retry:
-            server.config.set('server', 'api_key', 'temporary-fixture-key')
+            server.api_key = 'temporary-fixture-key'
             page.clock.run_for(200)
             assert page.locator('#sse-status-indicator').get_attribute('data-sync') == 'failed'
-            server.config.set('server', 'api_key', TOKEN)
+            server.api_key = TOKEN
         page.clock.run_for(200)
         expect(page.locator('#lemma-table tr[data-row-id="0"] td[data-col="WordDestination"] .scrollable-cell')).to_have_text('latest native committed')
         assert page.locator('#sse-status-indicator').get_attribute('data-sync') == 'synced'

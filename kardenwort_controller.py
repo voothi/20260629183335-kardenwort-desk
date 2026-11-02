@@ -138,6 +138,18 @@ def recovery_row_order(rows, headers, roles, memo):
     return [row for key, row in sorted(zip(keys, rows), key=lambda pair: rank.get(pair[0], len(rank)))]
 
 
+def recovery_update_rows(restored, rows, headers, roles):
+    """Project rows and occurrence facts from the same restored storage bundle."""
+    from kardenwort_db import sanitize_extra_fields
+    words = restored.get('words', [])
+    occurrences = {(str(word['sentence_index']), str(word['token_order'])):
+        sanitize_extra_fields(word.get('extra_fields')).get('occurrence_data', {}) for word in words}
+    provenances = {(str(word['sentence_index']), str(word['token_order'])):
+        word.get('word_provenance', '') for word in words}
+    return format_update_rows_dict(rows, headers, roles, row_occurrences=occurrences,
+                                   occurrence_provenances=provenances)
+
+
 def committed_recovery_snapshot(arbiter, zid):
     adapter = getattr(arbiter, 'storage_adapter', None) or get_storage_adapter(
         arbiter.config, arbiter.resolved_paths, read_only=True)
@@ -147,7 +159,7 @@ def committed_recovery_snapshot(arbiter, zid):
     mapping = load_anki_mapping(arbiter.resolved_paths['anki_mapping_file'])
     roles = get_role_fields(mapping, headers)
     rows = recovery_row_order(rows, headers, roles, memo)
-    snapshot = dict(session_zid=zid, rows=format_storage_update_rows(adapter, zid, rows, headers, roles, {}),
+    snapshot = dict(session_zid=zid, rows=recovery_update_rows(restored, rows, headers, roles),
                 fingerprint=compute_content_fingerprint(rows),
                 translatedText=restored.get('sentence_translation', memo.get('translatedText', '')),
                 sentences=restored.get('sentences', []))
@@ -3028,12 +3040,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, status_code: int, data_obj: dict):
         body = json.dumps({"status": "success", "data": data_obj}, ensure_ascii=False).encode('utf-8')
-        self.send_response(status_code)
-        self._send_cors_headers()
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_bytes(status_code, body, 'application/json; charset=utf-8')
 
     def _send_error_json(self, status_code: int, error_code, message: str, details=None, zid=None):
         payload = {
@@ -3045,12 +3052,19 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if details:
             payload["details"] = details
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-        self.send_response(status_code)
-        self._send_cors_headers()
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_bytes(status_code, body, 'application/json; charset=utf-8')
+
+    def _send_bytes(self, status_code, body, content_type):
+        try:
+            self.send_response(status_code)
+            self._send_cors_headers()
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            self.close_connection = True
+            logger.debug('Peer disconnected during response to %s', self.path)
 
     def _read_json_body(self) -> dict:
         content_length_str = self.headers.get('Content-Length', '0')
@@ -3119,12 +3133,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         except Exception as e:
             raise StructuredError(ErrorCode.SERVER_ERROR, f"Failed to read file: {e}")
 
-        self.send_response(200)
-        self._send_cors_headers()
-        self.send_header('Content-Type', content_type)
-        self.send_header('Content-Length', str(len(content)))
-        self.end_headers()
-        self.wfile.write(content)
+        self._send_bytes(200, content, content_type)
 
     def do_GET(self):
         try:
@@ -3151,19 +3160,16 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         dispatcher = EventDispatcher.get_instance()
         q = dispatcher.register(zid)
 
-        self.send_response(200)
-        self._send_cors_headers()
-        self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
-        self.send_header('Cache-Control', 'no-cache')
-        self.send_header('Connection', 'keep-alive')
-        self.end_headers()
-
-        # Send initial connected greeting
-        init_data = json.dumps({"type": "connected", "session_zid": zid, "time": time.time()})
-        self.wfile.write(f"data: {init_data}\n\n".encode('utf-8'))
-        self.wfile.flush()
-
         try:
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Connection', 'keep-alive')
+            self.end_headers()
+            init_data = json.dumps({"type": "connected", "session_zid": zid, "time": time.time()})
+            self.wfile.write(f"data: {init_data}\n\n".encode('utf-8'))
+            self.wfile.flush()
             while True:
                 try:
                     event = q.get(timeout=10.0)
@@ -3174,8 +3180,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     # Heartbeat comment to detect client disconnection
                     self.wfile.write(b": ping\n\n")
                     self.wfile.flush()
-        except (socket.error, ConnectionResetError, BrokenPipeError):
-            pass
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, TimeoutError):
+            self.close_connection = True
+            logger.debug('Peer disconnected during event stream for %s', zid)
         finally:
             dispatcher.unregister(zid, q)
 

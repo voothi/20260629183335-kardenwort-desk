@@ -151,7 +151,8 @@ def run_comparison(root, tool, metrics, matrix):
     record = dict(command=sys.argv, output=str(output), protected_before=before,
                   source_before=source_before, runtime_scope='top-level Python, desktop web assets and schemas',
                   measurement_scope='dark desktop idle, active and hover metrics; pairwise matrix defined only',
-                  tool_hashes={str(tool): digest(tool), str(Path(__file__).resolve()): digest(__file__)})
+                  tool_hashes={str(tool): digest(tool), str(Path(__file__).resolve()): digest(__file__),
+                               str(Path(audit.__file__).resolve()): digest(audit.__file__)})
     code = 2
     try:
         record.update(audit.prepare_backup(output, before, int(options.reserve_mb * 1024 * 1024), root=root))

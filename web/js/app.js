@@ -3647,17 +3647,26 @@
         var lastManualStatusAt = null;
         var statusRead = null;
 
+        function assertCurrentStatusRead(pending) {
+            if (statusRead !== pending || window.__deskInstanceId !== myDeskInstanceId || getSessionZid() !== pending.session) {
+                var cancelled = new Error('Status read superseded by a save or session change');
+                cancelled.name = 'StaleStatusRead';
+                throw cancelled;
+            }
+        }
+
         function readSessionStatus(session, options) {
-            if (statusRead && statusRead.session === session) return statusRead.promise;
-            var pending = {session: session, promise: null};
+            options = options || {};
+            if (statusRead && statusRead.session === session &&
+                    (!options.committed || statusRead.kind === 'committed')) return statusRead.promise;
+            var pending = {session: session, kind: options.committed ? 'committed' : 'cached', promise: null};
             statusRead = pending;
             pending.promise = fetchSessionStatus(session, options).then(function(response) {
-                if (statusRead !== pending || window.__deskInstanceId !== myDeskInstanceId || getSessionZid() !== session) {
-                    var cancelled = new Error('Status read superseded by a save or session change');
-                    cancelled.name = 'StaleStatusRead';
-                    throw cancelled;
-                }
+                assertCurrentStatusRead(pending);
                 return response;
+            }, function(error) {
+                assertCurrentStatusRead(pending);
+                throw error;
             }).finally(function() {
                 if (statusRead === pending) statusRead = null;
             });
@@ -3859,9 +3868,8 @@
                         window.showToast("Background loading timed out. Restored table editing.", "warning");
                     }
                     if (typeof fetch !== 'undefined' && curZid) {
-                        var recoveryUrl = resolveBackendUrl("/session/status?zid=" + encodeURIComponent(curZid));
-                        fetch(recoveryUrl, { method: 'GET', headers: backendHeaders({ 'Accept': 'application/json' }) })
-                            .then(function(res) { if (res.ok) return res.json(); })
+                        readSessionStatus(curZid, {method: 'GET'})
+                            .then(function(res) { if (res.ok) return res.data; })
                             .then(function(resObj) {
                                 var data = (resObj && resObj.data) ? resObj.data : resObj;
                                 if (data && (data.rows || data.translatedText || data.translated_text || data.sentences) && window.receiveUpdate) {
@@ -3893,17 +3901,9 @@
                         return;
                     }
                     if (isWebMode && curZid && typeof fetch !== 'undefined') {
-                        var statusUrl = resolveBackendUrl("/session/status?zid=" + encodeURIComponent(curZid));
-                        var cController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-                        var cTimeoutId = cController ? setTimeout(function() {
-                            try { if (cController) cController.abort(); } catch(e) { console.debug("[AbortController] Abort failed:", e); }
-                        }, 4000) : null;
-                        var cOpts = { method: 'GET', headers: backendHeaders({ 'Accept': 'application/json' }) };
-                        if (cController) cOpts.signal = cController.signal;
-
-                        fetch(statusUrl, cOpts)
+                        readSessionStatus(curZid, {method: 'GET'})
                             .then(function(res) {
-                                if (res.ok) return res.json();
+                                if (res.ok) return res.data;
                                 throw new Error("status fetch failed");
                             })
                             .then(function(resObj) {
@@ -3952,15 +3952,13 @@
 
                                 executeCleanSkeletonStrip();
                             })
-                            .catch(function() {
+                            .catch(function(error) {
+                                if (error.name === 'StaleStatusRead') return;
                                 if (typeof navigator !== 'undefined' && navigator.onLine === false) {
                                     enterHeartbeatFallback();
                                     return;
                                 }
                                 executeCleanSkeletonStrip();
-                            })
-                            .finally(function() {
-                                if (cTimeoutId) clearTimeout(cTimeoutId);
                             });
                     } else {
                         executeCleanSkeletonStrip();
@@ -4538,6 +4536,7 @@
                 }
             });
             if (response.snapshot) {
+                statusRead = null;
                 window.receiveUpdate(response.snapshot);
                 subscription.phase = 'running';
                 updateSyncFeedback('synced', 'Committed native state synchronized');
@@ -8918,8 +8917,8 @@
                 if (data && data.rows && window.receiveUpdate) {
                     window.receiveUpdate(data);
                 } else if (data && data.status === 'success') {
-                    fetch(resolveBackendUrl('/session/status?zid=' + encodeURIComponent(curZid)), { method: 'GET', headers: backendHeaders({ 'Accept': 'application/json' }) })
-                        .then(function(r) { if (r.ok) return r.json(); })
+                    readSessionStatus(curZid, {method: 'GET'})
+                        .then(function(r) { if (r.ok) return r.data; })
                         .then(function(d) {
                             var statusData = (d && d.data) ? d.data : d;
                             if (statusData && statusData.rows && window.receiveUpdate) {
@@ -9098,6 +9097,39 @@
             return request.then(selectionReadResult);
         }
 
+        function retryFailedSynchronization() {
+            if (selectionBridge && selectionBridge.phase === 'recovering') {
+                pollSelectionBridge(selectionBridge);
+                return;
+            }
+            resumeMountedStream();
+        }
+
+        function recoveryRetryKey(event) {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                retryFailedSynchronization();
+            }
+        }
+
+        function projectRecoveryRetry(indicator, status, header) {
+            indicator.hidden = !header && status !== 'failed';
+            if (status === 'failed') {
+                if (!header) indicator.textContent = 'Sync failed - retry';
+                indicator.setAttribute('role', 'button');
+                indicator.setAttribute('tabindex', '0');
+                indicator.setAttribute('aria-label', 'Retry session synchronization');
+                indicator.onclick = retryFailedSynchronization;
+                indicator.onkeydown = recoveryRetryKey;
+            } else {
+                indicator.removeAttribute('role');
+                indicator.removeAttribute('tabindex');
+                indicator.removeAttribute('aria-label');
+                indicator.onclick = null;
+                indicator.onkeydown = null;
+            }
+        }
+
         function updateSyncFeedback(status, message) {
             var header = document.getElementById('session-header');
             var indicator = document.getElementById('sse-status-indicator');
@@ -9105,7 +9137,6 @@
                 indicator = document.createElement('span');
                 indicator.id = 'sse-status-indicator';
                 indicator.className = 'kw-sse-status';
-                if (!header) indicator.style.display = 'none';
                 (header || document.body).appendChild(indicator);
             }
             if (status) {
@@ -9119,6 +9150,7 @@
             } else {
                 indicator.removeAttribute('data-sync-message');
             }
+            projectRecoveryRetry(indicator, status, header);
         }
 
         function assertCurrentRecovery(recovery) {
@@ -9142,9 +9174,7 @@
         window.invalidateStreamMembership = invalidateStreamMembership;
 
         window.noteStreamMutation = function() {
-            if (streamRecovery && streamRecovery.phase === 'syncing' && streamRecovery.context.refreshStatus) {
-                statusRead = null;
-            }
+            statusRead = null;
         };
 
         function readCommittedStreamStatus(recovery) {

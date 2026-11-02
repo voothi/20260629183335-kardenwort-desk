@@ -89,6 +89,21 @@
 }
 
 /* Sections */
+#sse-status-indicator[hidden] {
+    display: none;
+}
+
+body > #sse-status-indicator[data-sync="failed"] {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 1000;
+    background: var(--bg-secondary);
+    color: var(--text-main);
+    border-color: var(--status-error, #f85149);
+    cursor: pointer;
+}
+
 .section,
 .kw-section {
     background: var(--section-bg, rgba(255, 255, 255, 0.03));

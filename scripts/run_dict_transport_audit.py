@@ -380,7 +380,7 @@ class Tee:
         return getattr(self.terminal, name)
 
 
-def main(options):
+def main(options, selected_source=None):
     os.environ.pop('SSLKEYLOGFILE', None)
     os.environ.setdefault('KARDENWORT_NATIVE_REPO', str(ROOT.parent / '20240411110510-autohotkey'))
     before = protected_snapshot()
@@ -388,12 +388,15 @@ def main(options):
     args = options.pytest_args + ['-q', '-p', 'no:cacheprovider', '--tb=short',
                                  '--basetemp', str(OUT / 'fixtures'), '--junitxml', str(OUT / 'junit.xml')]
     evidence = dict(stage='preflight', command=sys.argv, pytest_args=args,
-                    source_ref=REVISION or 'working-tree', source_before=source_before,
+                    source_ref=REVISION or 'working-tree', selected_source=selected_source, source_before=source_before,
                     protected_before=before, output_dir=str(OUT),
                     loaded_modules=[desk.__file__, kardenwort_controller.__file__])
     record = OUT / 'execution.json'
     result = 2
     try:
+        if selected_source:
+            from scripts.release_audit_sources import runtime_identity
+            selected_source['loaded_modules'] = runtime_identity(Path(selected_source['source']))
         evidence.update(prepare_backup(OUT, before, int(options.reserve_mb * 1024 * 1024),
                                       options.reuse_backup, options.backup_manifest))
         original_cfg, _, _, _ = _load_config(ROOT / 'config.ini')
@@ -424,4 +427,4 @@ def main(options):
 
 
 if __name__ == '__main__':
-    sys.exit(main(options))
+    sys.exit(main(options, source_identity))
