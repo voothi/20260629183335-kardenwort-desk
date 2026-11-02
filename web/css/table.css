@@ -596,6 +596,11 @@ td[data-col="WordSourceMorphologyAI"] .skeleton-loader {
     border-radius: var(--radius-sm, 3px);
 }
 
+.theme-compact #lemma-table .skeleton-loader {
+    height: calc(var(--font-size-base, 13px) * 1.5);
+    min-height: calc(var(--font-size-base, 13px) * 1.5);
+}
+
 @keyframes pulse-skeleton {
     0% { background-position: 0% 50% }
     50% { background-position: 100% 50% }

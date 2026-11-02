@@ -1,5 +1,6 @@
 """Run review probes with owned storage and a protected-file comparison."""
 import argparse
+import configparser
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import hashlib
 import ipaddress
@@ -163,6 +164,7 @@ def source_snapshot():
 
 
 _load_config = desk.load_config
+_persist_config_value = desk.persist_config_value
 _get_connection = kardenwort_db.KardenwortDB.get_connection
 PROTECTED_PORTS = {18335, 8081, 8082, 8083}
 
@@ -189,10 +191,29 @@ def load_owned_config(config_path, owner):
     owned_results.mkdir(parents=True, exist_ok=True)
     cfg.set("storage", "sqlite_db_path", str(database))
     cfg.set("project_structure", "generated_results_dir", str(owned_results))
-    paths.update(sqlite_db_path=database, results_dir=owned_results, generated_results_dir=owned_results)
+    paths.update(sqlite_db_path=database, results_dir=owned_results, generated_results_dir=owned_results, base_dir=owner)
+    write_owned_config(cfg, owner)
     if isinstance(wordfill, dict):
         wordfill.update(sqlite_db_path=database, scan_roots=[owned_results])
     return cfg, paths, gd, wordfill
+
+
+def write_owned_config(cfg, owner):
+    from scripts.release_audit_sources import scrub_credentials
+    destination = owner / 'config.ini'
+    if destination.exists():
+        return
+    snapshot = configparser.ConfigParser(interpolation=None)
+    snapshot.read_dict({section: dict(cfg[section]) for section in cfg.sections()})
+    scrub_credentials(snapshot)
+    with destination.open('w', encoding='utf-8') as output:
+        snapshot.write(output)
+
+
+def guarded_config_persistence(section, key, value, base_dir=None):
+    if base_dir is None or not Path(base_dir).resolve().is_relative_to(OUT):
+        raise AssertionError('Audit attempted configuration persistence outside its owned fixture directory')
+    return _persist_config_value(section, key, value, base_dir=base_dir)
 
 
 def guarded_connection(instance, *args, **kwargs):
@@ -359,6 +380,8 @@ def owned_runtime(owner, isolation):
         patches.setattr(tempfile, 'tempdir', str(owner))
         patches.setattr(desk, 'load_config', lambda config_path=None: load_owned_config(config_path, owner))
         patches.setattr(kardenwort_controller, 'load_config', desk.load_config)
+        patches.setattr(desk, 'persist_config_value', guarded_config_persistence)
+        patches.setattr(kardenwort_controller, 'persist_config_value', guarded_config_persistence)
         patches.setattr(kardenwort_db.KardenwortDB, 'get_connection', guarded_connection)
         with isolation.owned_network(patches):
             yield

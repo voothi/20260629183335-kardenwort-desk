@@ -1759,13 +1759,13 @@ def test_controller_session_reword_multi_sentence_container_no_shift(running_con
         storage_adapter.save_tsv_rows_safely(tsv_path, ["# test"], headers, data_rows)
 
     def mock_headless(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
-        c, h, rows = storage_adapter.load_tsv_rows(tsv_path)
+        c, h, rows = kardenwort_desk.load_tsv_rows(tsv_path)
         dest_col = h.index("WordDestination")
         lemma_col = h.index("WordSource")
         for s_idx in (selected_rows or []):
             if 0 <= s_idx < len(rows):
                 rows[s_idx][dest_col] = f"reworded_{rows[s_idx][lemma_col]}"
-        storage_adapter.save_tsv_rows_safely(tsv_path, c, h, rows)
+        kardenwort_desk.save_tsv_rows_safely(tsv_path, c, h, rows)
         return True
 
     monkeypatch.setattr(kardenwort_controller, "run_headless_intellifiller", mock_headless)

@@ -116,6 +116,13 @@ def test_reword_session_scopes_sibling_propagation_to_master_overview(tmp_path):
     tsv_file = results_dir / f"{session_zid}.de.tsv"
     tsv_file.write_text("\t".join(headers) + "\n" + "\n".join("\t".join(r) for r in rows), encoding="utf-8")
 
+    adapter = SqliteStorageAdapter(config=config, resolved_paths=resolved_paths,
+                                   db_path=tmp_path / "reword-propagation.db")
+    adapter.save_session(session_zid=session_zid, slug="reword-propagation", source_language="de",
+        target_language="ru", text_mode="multi", source_raw_text="Wir gehen.\nSie gehen.",
+        headers=headers, data_rows=rows, working_tsv_path=tsv_file)
+    arbiter.storage_adapter = adapter
+
     arbiter.sessions[session_zid] = {
         "session_zid": session_zid,
         "language": "de",

@@ -329,6 +329,22 @@
         /**
          * @param {Array<WorkspaceCard>} [explicitCards]
          */
+        function normalizeCommittedSelections(items) {
+            var selected = {};
+            items.forEach(function(card) {
+                (card.words || []).forEach(function(word) {
+                    var lemma = String(word.lemma || '').trim().toLowerCase();
+                    if (lemma && (word.selected === '1' || word.selected === 1)) selected[lemma] = true;
+                });
+            });
+            items.forEach(function(card) {
+                (card.words || []).forEach(function(word) {
+                    var lemma = String(word.lemma || '').trim().toLowerCase();
+                    if (lemma) word.selected = selected[lemma] ? '1' : '0';
+                });
+            });
+        }
+
         function init(explicitCards) {
             var w = (window);
 
@@ -373,6 +389,7 @@
             } else if (w.AppState && w.AppState.bootstrap && w.AppState.bootstrap.sentence_cards) {
                 cards = w.AppState.bootstrap.sentence_cards;
             }
+            normalizeCommittedSelections(cards);
             w._cachedSentenceCards = cards;
             w._kwSentenceCards = cards;
 

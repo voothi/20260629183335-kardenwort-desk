@@ -154,12 +154,13 @@ print('committed-with-delivery-failure')
     assert tsv.read_bytes() == before_artifact
 
 
-def test_full_subscriber_queue_is_diagnostic(caplog):
+def test_full_subscriber_queue_is_diagnostic():
     from kardenwort_events import EventDispatcher
     dispatcher = EventDispatcher()
     subscriber = dispatcher.register('20261024225159')
     for index in range(1000):
         subscriber.put_nowait({'index': index})
     dispatcher.publish('20261024225159', {'stage': 'finished'})
-    assert subscriber.qsize() == 1000
-    assert 'recover committed state through status' in caplog.text
+    assert subscriber.maxsize == 1000
+    assert subscriber.qsize() == 1
+    assert subscriber.get_nowait() == {'type': 'resync_required', 'session_zid': '20261024225159'}

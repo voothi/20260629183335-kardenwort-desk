@@ -274,7 +274,7 @@ fallback_to_tsv = true
             "quotation": "Es",
             "lemma": "es",
             "word_provenance": "corpus:wordfill",
-            "extra_fields": {"occurrence_data": {"0": {"pos": "pron.", "trans": "оно"}}},
+            "extra_fields": {"occurrence_data": {"1": {"pos": "pron.", "trans": "оно"}}},
         },
         {
             "session_zid": session_zid,
@@ -283,7 +283,7 @@ fallback_to_tsv = true
             "quotation": "wurde",
             "lemma": "werden",
             "word_provenance": "corpus:wordfill",
-            "extra_fields": {"occurrence_data": {"1": {"pos": "verb", "trans": "становиться", "morph": "past"}}},
+            "extra_fields": {"occurrence_data": {"3": {"pos": "verb", "trans": "становиться", "morph": "past"}}},
         },
     ]
     db.save_session_bundle(session, sentences, words)

@@ -31,7 +31,7 @@
     /** @deprecated GoldenDict lookup mode is deprecated and frozen in maintenance-only mode. */
     function isLookupMode() {
         if (window.AppState) {
-            if (window.AppState.is_lookup) return true;
+            if (typeof window.AppState.is_lookup === 'boolean') return window.AppState.is_lookup;
             if (window.AppState.bootstrap && window.AppState.bootstrap.is_lookup) return true;
         }
         var bootEl = typeof document !== 'undefined' && document.getElementById ? document.getElementById('kardenwort-bootstrap') : null;
@@ -948,9 +948,7 @@
             TARGET_LANG = session.target_lang || session.target_language || (bootstrapPayload && (bootstrapPayload.target_language || bootstrapPayload.target_lang)) || '';
             FINGERPRINT = session.fingerprint || '';
             SERVER_ENABLED = Boolean(session.server_enabled);
-            if (session.is_lookup || (bootstrapPayload && bootstrapPayload.is_lookup)) {
-                if (window.AppState) window.AppState.is_lookup = true;
-            }
+            window.AppState.is_lookup = Boolean(session.is_lookup || (bootstrapPayload && bootstrapPayload.is_lookup));
             if (session.server_url && typeof session.server_url === 'string') {
                 SERVER_URL = session.server_url.replace(/\/+$/, '');
             } else if (bootstrapPayload && bootstrapPayload.server_url && typeof bootstrapPayload.server_url === 'string') {
@@ -4532,6 +4530,7 @@
                     subscription.phase = 'recovering';
                     updateSyncFeedback('syncing', 'Recovering committed native state...');
                 } else {
+                    window.noteStreamMutation();
                     window.receiveUpdate(event);
                 }
             });
