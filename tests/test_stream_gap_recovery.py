@@ -1,5 +1,6 @@
 """Bounded gaps recover real committed storage without discarding local intent."""
 import json
+import threading
 
 import pytest
 from playwright.sync_api import expect
@@ -15,7 +16,7 @@ def seed_session(server, adapter):
     path = seed_storage_session(server, adapter)
     comments, headers, rows = adapter.load_tsv_rows(path)
     server.arbiter.sessions[ZID] = dict(session_zid=ZID, tsv_path=str(path), language='de',
-        headers=headers, data_rows=rows, comments=comments, translatedText='The house. The tree.')
+        headers=headers, data_rows=rows, comments=comments, translatedText='The house. The tree.', lock=threading.Lock())
 
 
 def native_http_window(browser, html, url, consumer):
