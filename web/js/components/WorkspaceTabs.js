@@ -327,10 +327,10 @@
         }
 
         /**
-         * @param {Array<WorkspaceCard>} [explicitCards]
+         * @param {Array<WorkspaceCard>} items
          */
         function normalizeCommittedSelections(items) {
-            var selected = {};
+            var selected = Object.create(null);
             items.forEach(function(card) {
                 (card.words || []).forEach(function(word) {
                     var lemma = String(word.lemma || '').trim().toLowerCase();
@@ -345,6 +345,7 @@
             });
         }
 
+        /** @param {Array<WorkspaceCard>} [explicitCards] */
         function init(explicitCards) {
             var w = (window);
 

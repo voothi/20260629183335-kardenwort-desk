@@ -49,3 +49,12 @@ def test_initial_membership_preserves_restored_local_intent(page, committed, loc
             assert all(delta['column'] == 'DeskSelected' and delta['row_id'] == local and delta['value'] == '1'
                        for delta in pending)
             assert page.evaluate('AppState.activeTokenSelections')[0]['lemma'] == words(2)[local]
+
+
+def test_committed_baseline_does_not_inherit_object_properties(page):
+    html = initial_html(False).replace(words(2)[0], 'constructor')
+    page.set_content(html)
+    page.wait_for_function('typeof getDeltas === "function" && WorkspaceTabs.getCards().length === 3')
+    committed = page.evaluate('WorkspaceTabs.getCards().flatMap(card => card.words.filter(word => word.lemma === "constructor").map(word => word.selected))')
+    assert committed
+    assert all(value == '0' for value in committed)
