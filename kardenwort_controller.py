@@ -154,7 +154,14 @@ def committed_recovery_snapshot(arbiter, zid):
     adapter = getattr(arbiter, 'storage_adapter', None) or get_storage_adapter(
         arbiter.config, arbiter.resolved_paths, read_only=True)
     with arbiter._lock:
-        memo = dict(arbiter.sessions.get(zid, {}))
+        raw_session = arbiter.sessions.get(zid)
+        memo = dict(raw_session) if raw_session is not None else {}
+        pre_identity = (
+            [list(r) if isinstance(r, list) else r for r in (raw_session.get('data_rows') or [])] if raw_session.get('data_rows') is not None else None,
+            raw_session.get('fingerprint'),
+            raw_session.get('translatedText'),
+            list(raw_session.get('headers')) if raw_session.get('headers') is not None else None,
+        ) if raw_session is not None else None
     restored, headers, rows = recovery_storage_rows(arbiter, adapter, zid, memo)
     mapping = load_anki_mapping(arbiter.resolved_paths['anki_mapping_file'])
     roles = get_role_fields(mapping, headers)
@@ -164,9 +171,17 @@ def committed_recovery_snapshot(arbiter, zid):
                 translatedText=restored.get('sentence_translation', memo.get('translatedText', '')),
                 sentences=restored.get('sentences', []))
     with arbiter._lock:
-        if zid in arbiter.sessions:
-            arbiter.sessions[zid].update(headers=headers, data_rows=rows,
-                fingerprint=snapshot['fingerprint'], translatedText=snapshot['translatedText'])
+        if zid in arbiter.sessions and pre_identity is not None:
+            current = arbiter.sessions[zid]
+            current_identity = (
+                current.get('data_rows'),
+                current.get('fingerprint'),
+                current.get('translatedText'),
+                current.get('headers'),
+            )
+            if current_identity == pre_identity:
+                current.update(headers=headers, data_rows=rows,
+                    fingerprint=snapshot['fingerprint'], translatedText=snapshot['translatedText'])
     return snapshot
 
 CONFIG_API_WRITABLE_KEYS: Dict[Tuple[str, str], str] = {

@@ -3591,7 +3591,8 @@ class SqliteStorageAdapter(StorageAdapter):
 
     def _read_shared_selection(self, session_zid, zid=None):
         with self.db.get_connection(read_only=True, zid=zid) as conn:
-            conn.execute('BEGIN')
+            if not conn.in_transaction:
+                conn.execute('BEGIN')
             session = conn.execute('SELECT 1 FROM sessions WHERE zid = ? AND deleted_at IS NULL', (session_zid,)).fetchone()
             if session is None:
                 raise StructuredError(ErrorCode.NOT_FOUND, 'Session selection membership is unavailable')
