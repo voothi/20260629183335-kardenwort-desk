@@ -8,23 +8,35 @@ Verifies:
    a single coherent database revision (old-sentence/old-word) with
    conn.in_transaction == True.
 2. Failed transaction initiation in KardenwortConnection.__enter__ closes the
-   connection and raises without executing the with block in autocommit mode.
+   connection and raises without executing the with block in autocommit mode,
+   including real SQLite lock contention and strict rejection of nested BEGIN statements.
 3. Concurrent in-memory mutations to arbiter.sessions[zid] during
-   committed_recovery_snapshot (data_rows, fingerprint, translatedText) are preserved
+   committed_recovery_snapshot (data_rows assignment, in-place row edits, fingerprint,
+   translatedText, sentence_translation, and session dict replacement) are preserved
    and not overwritten by in-flight storage reads.
 """
 
+import configparser
 import json
 import sqlite3
 import threading
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
+from kardenwort_controller import committed_recovery_snapshot
 from kardenwort_db import KardenwortConnection, KardenwortDB
 from kardenwort_desk import SqliteStorageAdapter
-from kardenwort_controller import committed_recovery_snapshot
+
+
+class _TestArbiter:
+    """Lightweight deterministic controller arbiter fixture with zero mocks."""
+
+    def __init__(self, adapter, config, resolved_paths, sessions=None):
+        self._lock = threading.Lock()
+        self.storage_adapter = adapter
+        self.config = config
+        self.resolved_paths = resolved_paths
+        self.sessions = sessions if sessions is not None else {}
 
 
 @pytest.fixture
@@ -67,24 +79,16 @@ token_order = TokenOrder
         "storage_fallback_to_tsv": False,
     }
 
-    config = MagicMock()
-    config.get.side_effect = lambda sec, opt, fallback=None: {
-        ("storage", "backend"): "sqlite",
-        ("storage", "sqlite_db_path"): str(db_path),
-        ("settings", "results_dir"): str(results_dir),
-        ("settings", "default_language"): "en",
-        ("settings", "default_target_language"): "ru",
-        ("settings", "anki_mapping_file"): str(anki_mapping),
-    }.get((sec, opt), fallback)
-    config.getboolean.side_effect = lambda sec, opt, fallback=False: {
-        ("storage", "fallback_to_tsv"): False,
-    }.get((sec, opt), fallback)
-    config.getint.side_effect = lambda sec, opt, fallback=0: fallback
-    config.has_option.side_effect = lambda sec, opt: (sec, opt) in [
-        ("storage", "backend"),
-        ("storage", "sqlite_db_path"),
-        ("settings", "results_dir"),
-    ]
+    config = configparser.ConfigParser()
+    config.add_section("storage")
+    config.set("storage", "backend", "sqlite")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    config.set("storage", "fallback_to_tsv", "false")
+    config.add_section("settings")
+    config.set("settings", "results_dir", str(results_dir))
+    config.set("settings", "default_language", "en")
+    config.set("settings", "default_target_language", "ru")
+    config.set("settings", "anki_mapping_file", str(anki_mapping))
 
     db = KardenwortDB(db_path=db_path)
     db.run_migrations()
@@ -133,6 +137,50 @@ def seed_test_session(db, session_zid="20261103210000"):
         )
 
 
+def _install_interleaving_cursor(monkeypatch, db, session_zid, recorded_states=None, committed_flags=None):
+    orig_cursor = KardenwortConnection.cursor
+
+    def wrapping_cursor(conn_self, *args, **kwargs):
+        real_c = orig_cursor(conn_self, *args, **kwargs)
+
+        class InterceptingCursor:
+            def execute(self, sql, *a, **kw):
+                res = real_c.execute(sql, *a, **kw)
+                if "FROM sentences" in sql and conn_self.read_only:
+                    if recorded_states is not None:
+                        recorded_states.append(conn_self.in_transaction)
+                    with db.get_connection(read_only=False) as writer_conn:
+                        writer_conn.execute(
+                            "UPDATE sentences SET sentence_destination = ? WHERE session_zid = ?",
+                            ("new-sentence", session_zid),
+                        )
+                        writer_conn.execute(
+                            "UPDATE words SET word_destination = ?, extra_fields = ? WHERE session_zid = ?",
+                            (
+                                "new-word",
+                                json.dumps({"word_destination": "new-word", "occurrence_data": {}}),
+                                session_zid,
+                            ),
+                        )
+                    if committed_flags is not None:
+                        committed_flags.append(True)
+                return res
+
+            def fetchone(self):
+                return real_c.fetchone()
+
+            def fetchall(self):
+                return real_c.fetchall()
+
+            def __getattr__(self, name):
+                return getattr(real_c, name)
+
+        return InterceptingCursor()
+
+    monkeypatch.setattr(KardenwortConnection, "cursor", wrapping_cursor)
+    return orig_cursor
+
+
 # ===========================================================================
 # 1. Deterministic Interleaved Concurrent Writer Tests
 # ===========================================================================
@@ -152,57 +200,17 @@ def test_get_session_bundle_atomic_snapshot_under_concurrent_writer(test_env, mo
     reader_in_transaction_states = []
     writer_committed = []
 
-    orig_cursor = KardenwortConnection.cursor
-
-    def wrapping_cursor(conn_self, *args, **kwargs):
-        real_c = orig_cursor(conn_self, *args, **kwargs)
-
-        class InterceptingCursor:
-            def execute(self, sql, *a, **kw):
-                res = real_c.execute(sql, *a, **kw)
-                if "FROM sentences" in sql and conn_self.read_only:
-                    reader_in_transaction_states.append(conn_self.in_transaction)
-                    # Concurrent writer commits new-sentence and new-word
-                    with db.get_connection(read_only=False) as writer_conn:
-                        writer_conn.execute(
-                            "UPDATE sentences SET sentence_destination = ? WHERE session_zid = ?",
-                            ("new-sentence", session_zid),
-                        )
-                        writer_conn.execute(
-                            "UPDATE words SET word_destination = ?, extra_fields = ? WHERE session_zid = ?",
-                            (
-                                "new-word",
-                                json.dumps({"word_destination": "new-word", "occurrence_data": {}}),
-                                session_zid,
-                            ),
-                        )
-                    writer_committed.append(True)
-                return res
-
-            def fetchone(self):
-                return real_c.fetchone()
-
-            def fetchall(self):
-                return real_c.fetchall()
-
-            def __getattr__(self, name):
-                return getattr(real_c, name)
-
-        return InterceptingCursor()
-
-    monkeypatch.setattr(KardenwortConnection, "cursor", wrapping_cursor)
+    orig_cursor = _install_interleaving_cursor(
+        monkeypatch, db, session_zid, reader_in_transaction_states, writer_committed
+    )
 
     bundle = db.get_session_bundle(session_zid)
 
-    # 1. Assert reader was in an explicit transaction during the read
     assert reader_in_transaction_states == [True]
     assert writer_committed == [True]
-
-    # 2. Assert bundle has coherent old revision (never mixed old-sentence + new-word)
     assert bundle["sentences"][0]["sentence_destination"] == "old-sentence"
     assert bundle["words"][0]["word_destination"] == "old-word"
 
-    # 3. Assert subsequent read outside the transaction sees the new committed state
     monkeypatch.setattr(KardenwortConnection, "cursor", orig_cursor)
     fresh_bundle = db.get_session_bundle(session_zid)
     assert fresh_bundle["sentences"][0]["sentence_destination"] == "new-sentence"
@@ -212,70 +220,64 @@ def test_get_session_bundle_atomic_snapshot_under_concurrent_writer(test_env, mo
 def test_committed_recovery_snapshot_atomic_revision_under_concurrent_writer(test_env, monkeypatch):
     """
     Verifies that committed_recovery_snapshot returns a coherent single-revision snapshot
-    under concurrent writes and does not produce torn states.
+    under concurrent writes and that durable storage reflects the committed new revision.
     """
     db = test_env["db"]
     adapter = test_env["adapter"]
     session_zid = "20261103210000"
     seed_test_session(db, session_zid)
 
-    arbiter = MagicMock()
-    arbiter._lock = threading.Lock()
-    arbiter.storage_adapter = adapter
-    arbiter.config = test_env["config"]
-    arbiter.resolved_paths = test_env["resolved_paths"]
-    arbiter.sessions = {session_zid: {}}
+    arbiter = _TestArbiter(
+        adapter=adapter,
+        config=test_env["config"],
+        resolved_paths=test_env["resolved_paths"],
+        sessions={session_zid: {}},
+    )
 
-    orig_cursor = KardenwortConnection.cursor
-
-    def wrapping_cursor(conn_self, *args, **kwargs):
-        real_c = orig_cursor(conn_self, *args, **kwargs)
-
-        class InterceptingCursor:
-            def execute(self, sql, *a, **kw):
-                res = real_c.execute(sql, *a, **kw)
-                if "FROM sentences" in sql and conn_self.read_only:
-                    with db.get_connection(read_only=False) as writer_conn:
-                        writer_conn.execute(
-                            "UPDATE sentences SET sentence_destination = ? WHERE session_zid = ?",
-                            ("new-sentence", session_zid),
-                        )
-                        writer_conn.execute(
-                            "UPDATE words SET word_destination = ?, extra_fields = ? WHERE session_zid = ?",
-                            (
-                                "new-word",
-                                json.dumps({"word_destination": "new-word", "occurrence_data": {}}),
-                                session_zid,
-                            ),
-                        )
-                return res
-
-            def fetchone(self):
-                return real_c.fetchone()
-
-            def fetchall(self):
-                return real_c.fetchall()
-
-            def __getattr__(self, name):
-                return getattr(real_c, name)
-
-        return InterceptingCursor()
-
-    monkeypatch.setattr(KardenwortConnection, "cursor", wrapping_cursor)
+    orig_cursor = _install_interleaving_cursor(monkeypatch, db, session_zid)
 
     snapshot = committed_recovery_snapshot(arbiter, session_zid)
     monkeypatch.setattr(KardenwortConnection, "cursor", orig_cursor)
 
-    # Assert coherent old snapshot
     assert snapshot["translatedText"] == "old-sentence"
     assert snapshot["sentences"][0]["sentence_destination"] == "old-sentence"
-    # rows is dict mapping index to row dict
     assert snapshot["rows"][0]["trans"] == "old-word"
+
+    # Durable storage after the writer completes contains the new revision
+    post_snapshot = committed_recovery_snapshot(arbiter, session_zid)
+    assert post_snapshot["translatedText"] == "new-sentence"
+    assert post_snapshot["sentences"][0]["sentence_destination"] == "new-sentence"
+    assert post_snapshot["rows"][0]["trans"] == "new-word"
 
 
 # ===========================================================================
 # 2. Fail-Fast Transaction Ownership Tests
 # ===========================================================================
+
+def test_kardenwort_connection_enter_fails_fast_on_real_write_lock_contention(test_env):
+    """
+    Verifies against a real SQLite WAL database that when BEGIN IMMEDIATE; fails in
+    KardenwortConnection.__enter__ due to active write lock contention, the connection
+    is closed immediately and sqlite3.OperationalError is raised without executing
+    the with block body in autocommit mode.
+    """
+    db = test_env["db"]
+    contending_db = KardenwortDB(db_path=test_env["db_path"], busy_timeout_ms=1)
+
+    with db.get_connection(read_only=False) as holder_conn:
+        holder_conn.execute(
+            "INSERT INTO sessions (zid, slug, source_language, target_language, text_mode, source_raw_text) "
+            "VALUES ('20261103219999', 'lock-holder', 'en', 'ru', 'single', 'Held.')"
+        )
+        contending_conn = contending_db.get_connection(read_only=False)
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            with contending_conn:
+                pytest.fail("Block body must not execute when BEGIN IMMEDIATE fails")
+
+        assert contending_conn._in_context_block is False
+        with pytest.raises(sqlite3.ProgrammingError, match="Cannot operate on a closed database"):
+            contending_conn.execute("SELECT 1;")
+
 
 def test_kardenwort_connection_enter_fails_fast_and_closes_on_read_only(test_env):
     """
@@ -283,46 +285,69 @@ def test_kardenwort_connection_enter_fails_fast_and_closes_on_read_only(test_env
     the connection is closed immediately and the exception is raised without entering
     the with block in autocommit mode.
     """
-    db = test_env["db"]
-    conn = db.get_connection(read_only=True)
+    class FaultingReadOnlyConnection(KardenwortConnection):
+        def execute(self, sql, *args, **kwargs):
+            if sql.strip().upper().startswith("BEGIN"):
+                raise sqlite3.DatabaseError("simulated WAL index read failure")
+            return super().execute(sql, *args, **kwargs)
 
-    with patch.object(conn, "execute", side_effect=sqlite3.OperationalError("database is locked")):
-        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
-            with conn:
-                pytest.fail("Block body must not be executed when transaction initiation fails")
+    conn = sqlite3.connect(
+        test_env["db_path"].as_uri() + "?mode=rw",
+        uri=True,
+        factory=FaultingReadOnlyConnection,
+    )
+    conn.read_only = True
 
-    # Connection must be closed
+    with pytest.raises(sqlite3.DatabaseError, match="simulated WAL index read failure"):
+        with conn:
+            pytest.fail("Block body must not execute when transaction initiation fails")
+
     assert conn._in_context_block is False
     with pytest.raises(sqlite3.ProgrammingError, match="Cannot operate on a closed database"):
         conn.execute("SELECT 1;")
 
 
-def test_kardenwort_connection_enter_fails_fast_and_closes_on_writable(test_env):
+def test_kardenwort_connection_rejects_nested_begin_inside_active_transaction(test_env):
     """
-    Verifies that when BEGIN IMMEDIATE; fails in KardenwortConnection.__enter__ for writable,
-    the connection is closed immediately and the exception is raised.
+    Verifies that KardenwortConnection does not silently swallow nested BEGIN or
+    BEGIN IMMEDIATE statements when already inside a context-managed transaction.
     """
     db = test_env["db"]
-    conn = db.get_connection(read_only=False)
-
-    with patch.object(conn, "execute", side_effect=sqlite3.DatabaseError("disk I/O error")):
-        with pytest.raises(sqlite3.DatabaseError, match="disk I/O error"):
-            with conn:
-                pytest.fail("Block body must not be executed when transaction initiation fails")
-
-    # Connection must be closed
-    assert conn._in_context_block is False
-    with pytest.raises(sqlite3.ProgrammingError, match="Cannot operate on a closed database"):
-        conn.execute("SELECT 1;")
+    with db.get_connection(read_only=True) as conn:
+        assert conn.in_transaction is True
+        with pytest.raises(sqlite3.OperationalError, match="cannot start a transaction within a transaction"):
+            conn.execute("BEGIN;")
+        with pytest.raises(sqlite3.OperationalError, match="attempt to write a readonly database"):
+            conn.execute("BEGIN IMMEDIATE;")
 
 
 # ===========================================================================
 # 3. Guarded Controller Recovery Cache Publication Tests
 # ===========================================================================
 
+def _make_initial_session_cache():
+    headers = [
+        "Quotation",
+        "WordSource",
+        "WordDestination",
+        "SentenceSource",
+        "SentenceDestination",
+        "SentenceSourceIndex",
+        "TokenOrder",
+    ]
+    rows = [["cat", "cat", "old-word", "The cat sat on the mat.", "old-sentence", "1", "0"]]
+    return {
+        "headers": headers,
+        "data_rows": rows,
+        "fingerprint": "initial-fp",
+        "translatedText": "old-sentence",
+        "sentence_translation": "old-sentence",
+    }
+
+
 def test_committed_recovery_preserves_concurrent_data_rows_mutation(test_env, monkeypatch):
     """
-    Verifies that if arbiter.sessions[zid]['data_rows'] is concurrently mutated
+    Verifies that if arbiter.sessions[zid]['data_rows'] is replaced or mutated in-place
     while storage read is in flight, committed_recovery_snapshot does not overwrite it.
     """
     db = test_env["db"]
@@ -330,43 +355,30 @@ def test_committed_recovery_preserves_concurrent_data_rows_mutation(test_env, mo
     session_zid = "20261103210000"
     seed_test_session(db, session_zid)
 
-    arbiter = MagicMock()
-    arbiter._lock = threading.Lock()
-    arbiter.storage_adapter = adapter
-    arbiter.config = test_env["config"]
-    arbiter.resolved_paths = test_env["resolved_paths"]
-
-    initial_headers = ["Quotation", "WordSource", "WordDestination", "SentenceSource", "SentenceDestination", "SentenceSourceIndex", "TokenOrder"]
-    initial_rows = [["cat", "cat", "old-word", "The cat sat on the mat.", "old-sentence", "1", "0"]]
-
-    arbiter.sessions = {
-        session_zid: {
-            "headers": list(initial_headers),
-            "data_rows": [list(r) for r in initial_rows],
-            "fingerprint": "initial-fp",
-            "translatedText": "old-sentence",
-        }
-    }
+    arbiter = _TestArbiter(
+        adapter=adapter,
+        config=test_env["config"],
+        resolved_paths=test_env["resolved_paths"],
+        sessions={session_zid: _make_initial_session_cache()},
+    )
 
     from kardenwort_controller import recovery_storage_rows as orig_recovery_storage_rows
 
     def mutating_recovery_storage_rows(arb, adap, zid, memo):
         res = orig_recovery_storage_rows(arb, adap, zid, memo)
-        # Simulate concurrent in-memory mutation by another thread
         with arbiter._lock:
-            arbiter.sessions[session_zid]["data_rows"] = [["cat", "cat", "concurrent-user-edit", "...", "...", "1", "0"]]
+            # In-place mutation of an existing cell inside data_rows
+            arbiter.sessions[session_zid]["data_rows"][0][2] = "in-place-user-edit"
         return res
 
     monkeypatch.setattr("kardenwort_controller.recovery_storage_rows", mutating_recovery_storage_rows)
 
     snapshot = committed_recovery_snapshot(arbiter, session_zid)
 
-    # 1. Snapshot returns restored data
-    assert snapshot is not None
-    # 2. arbiter.sessions[session_zid]['data_rows'] was NOT overwritten!
+    assert snapshot["rows"][0]["trans"] == "old-word"
     with arbiter._lock:
         current_rows = arbiter.sessions[session_zid]["data_rows"]
-    assert current_rows == [["cat", "cat", "concurrent-user-edit", "...", "...", "1", "0"]]
+    assert current_rows[0][2] == "in-place-user-edit"
 
 
 def test_committed_recovery_preserves_concurrent_fingerprint_mutation(test_env, monkeypatch):
@@ -379,23 +391,12 @@ def test_committed_recovery_preserves_concurrent_fingerprint_mutation(test_env, 
     session_zid = "20261103210000"
     seed_test_session(db, session_zid)
 
-    arbiter = MagicMock()
-    arbiter._lock = threading.Lock()
-    arbiter.storage_adapter = adapter
-    arbiter.config = test_env["config"]
-    arbiter.resolved_paths = test_env["resolved_paths"]
-
-    initial_headers = ["Quotation", "WordSource", "WordDestination", "SentenceSource", "SentenceDestination", "SentenceSourceIndex", "TokenOrder"]
-    initial_rows = [["cat", "cat", "old-word", "The cat sat on the mat.", "old-sentence", "1", "0"]]
-
-    arbiter.sessions = {
-        session_zid: {
-            "headers": list(initial_headers),
-            "data_rows": [list(r) for r in initial_rows],
-            "fingerprint": "original-fp",
-            "translatedText": "old-sentence",
-        }
-    }
+    arbiter = _TestArbiter(
+        adapter=adapter,
+        config=test_env["config"],
+        resolved_paths=test_env["resolved_paths"],
+        sessions={session_zid: _make_initial_session_cache()},
+    )
 
     from kardenwort_controller import recovery_storage_rows as orig_recovery_storage_rows
 
@@ -416,31 +417,20 @@ def test_committed_recovery_preserves_concurrent_fingerprint_mutation(test_env, 
 
 def test_committed_recovery_preserves_concurrent_translation_mutation(test_env, monkeypatch):
     """
-    Verifies that if arbiter.sessions[zid]['translatedText'] is concurrently mutated,
-    committed_recovery_snapshot does not overwrite it.
+    Verifies that if arbiter.sessions[zid]['translatedText'] or ['sentence_translation']
+    is concurrently mutated, committed_recovery_snapshot does not overwrite it.
     """
     db = test_env["db"]
     adapter = test_env["adapter"]
     session_zid = "20261103210000"
     seed_test_session(db, session_zid)
 
-    arbiter = MagicMock()
-    arbiter._lock = threading.Lock()
-    arbiter.storage_adapter = adapter
-    arbiter.config = test_env["config"]
-    arbiter.resolved_paths = test_env["resolved_paths"]
-
-    initial_headers = ["Quotation", "WordSource", "WordDestination", "SentenceSource", "SentenceDestination", "SentenceSourceIndex", "TokenOrder"]
-    initial_rows = [["cat", "cat", "old-word", "The cat sat on the mat.", "old-sentence", "1", "0"]]
-
-    arbiter.sessions = {
-        session_zid: {
-            "headers": list(initial_headers),
-            "data_rows": [list(r) for r in initial_rows],
-            "fingerprint": "original-fp",
-            "translatedText": "initial-translation",
-        }
-    }
+    arbiter = _TestArbiter(
+        adapter=adapter,
+        config=test_env["config"],
+        resolved_paths=test_env["resolved_paths"],
+        sessions={session_zid: _make_initial_session_cache()},
+    )
 
     from kardenwort_controller import recovery_storage_rows as orig_recovery_storage_rows
 
@@ -469,21 +459,12 @@ def test_committed_recovery_publishes_cache_when_unmodified(test_env):
     session_zid = "20261103210000"
     seed_test_session(db, session_zid)
 
-    arbiter = MagicMock()
-    arbiter._lock = threading.Lock()
-    arbiter.storage_adapter = adapter
-    arbiter.config = test_env["config"]
-    arbiter.resolved_paths = test_env["resolved_paths"]
-
-    # Initial cached state matches disk
-    arbiter.sessions = {
-        session_zid: {
-            "headers": ["Quotation", "WordSource", "WordDestination", "SentenceSource", "SentenceDestination", "SentenceSourceIndex", "TokenOrder"],
-            "data_rows": [["cat", "cat", "old-word", "The cat sat on the mat.", "old-sentence", "1", "0"]],
-            "fingerprint": "initial-fp",
-            "translatedText": "old-sentence",
-        }
-    }
+    arbiter = _TestArbiter(
+        adapter=adapter,
+        config=test_env["config"],
+        resolved_paths=test_env["resolved_paths"],
+        sessions={session_zid: _make_initial_session_cache()},
+    )
 
     snapshot = committed_recovery_snapshot(arbiter, session_zid)
 

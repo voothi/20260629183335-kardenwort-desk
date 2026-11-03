@@ -121,16 +121,6 @@ class KardenwortConnection(sqlite3.Connection):
         self.read_only: bool = False
         self._in_context_block: bool = False
 
-    def execute(self, sql: str, *args, **kwargs):
-        if self.in_transaction and sql.strip().rstrip(";").upper() in (
-            "BEGIN",
-            "BEGIN DEFERRED",
-            "BEGIN IMMEDIATE",
-            "BEGIN EXCLUSIVE",
-        ):
-            return self.cursor()
-        return super().execute(sql, *args, **kwargs)
-
     def __enter__(self) -> "KardenwortConnection":
         self._in_context_block = True
         if not self.in_transaction:
