@@ -123,24 +123,28 @@ class KardenwortConnection(sqlite3.Connection):
 
     def __enter__(self) -> "KardenwortConnection":
         self._in_context_block = True
-        if not self.read_only:
+        if not self.in_transaction:
+            sql = "BEGIN;" if self.read_only else "BEGIN IMMEDIATE;"
             try:
-                self.execute("BEGIN IMMEDIATE;")
-            except (sqlite3.OperationalError, sqlite3.DatabaseError):
-                pass
+                self.execute(sql)
+            except Exception:
+                self._in_context_block = False
+                self.close()
+                raise
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         try:
             if exc_type is not None:
                 try:
-                    self.rollback()
+                    if self.in_transaction:
+                        self.rollback()
                 except Exception:
                     pass
                 return False
             else:
                 try:
-                    if not self.read_only:
+                    if self.in_transaction:
                         self.commit()
                 except Exception:
                     try:
