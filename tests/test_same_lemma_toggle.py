@@ -781,6 +781,7 @@ def test_unified_article_only_single_role_preserves_pure_art_pos(page, tmp_path)
 def test_active_subtoken_click_does_not_highlight_earlier_duplicate_token(page, tmp_path):
     """Verifies that clicking a duplicate lemma token (second 'der') does not apply solid active highlight to the earlier token (Task 3.1)."""
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    config.set("rendering", "highlight_same_lemma", "false")
     if not config.has_section("settings"):
         config.add_section("settings")
     config.set("settings", "unify_article_pronoun_lemmas", "true")
@@ -1292,6 +1293,7 @@ def test_frontend_decide_token_click_action(page, tmp_path):
 def test_separable_verb_peer_highlight_across_sentences(page, tmp_path):
     """Verifies that secondary occurrences of a separable verb receive lemma-peer-highlight when Lemma toggle is ON."""
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    config.set("rendering", "highlight_same_lemma", "false")
     if not config.has_section("settings"):
         config.add_section("settings")
     config.set("settings", "unify_article_pronoun_lemmas", "true")
@@ -1370,6 +1372,7 @@ def test_contraction_peer_highlight_across_sentences(page, tmp_path):
     (e.g. 'you're' decomposed into 'you' and 'be', and 'be' in a subsequent sentence) receive
     lemma-peer-highlight when Lemma toggle is ON, and baseline styling when OFF."""
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    config.set("rendering", "highlight_same_lemma", "false")
     if not config.has_section("settings"):
         config.add_section("settings")
     config.set("settings", "unify_article_pronoun_lemmas", "true")
