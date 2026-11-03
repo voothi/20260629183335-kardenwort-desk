@@ -3260,9 +3260,10 @@ def test_ebike_zweisitzer_lastenrad_click_and_drag_selection(page):
     assert page.evaluate("document.querySelector(\"span[data-lower-clean='lastenrad']\").classList.contains('highlight-orange-active')") is True
 
 
-def test_sample_file_ai_curated_bidirectional_selection(page, monkeypatch):
+def test_sample_file_ai_curated_bidirectional_selection(page, monkeypatch, tmp_path):
     import configparser
     import sys
+    import shutil
     from pathlib import Path
     from kardenwort_desk import run_render_flow
     import kardenwort_desk
@@ -3270,10 +3271,16 @@ def test_sample_file_ai_curated_bidirectional_selection(page, monkeypatch):
     monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
 
     workspace_path = Path(kardenwort_desk.__file__).parent
-    tsv_path = workspace_path / "results" / "20260816202412-this-digest-is-ai.en.tsv"
-    txt_path = workspace_path / "results" / "20260816202412-this-digest-is-ai.en.txt"
-    if not tsv_path.exists() or not txt_path.exists():
+    fixture_path = Path(__file__).resolve().parent / "fixtures"
+    tsv_fixture = fixture_path / "20260816202412-this-digest-is-ai.en.tsv"
+    txt_fixture = fixture_path / "20260816202412-this-digest-is-ai.en.txt"
+    if not tsv_fixture.exists() or not txt_fixture.exists():
         pytest.skip("Sample files not present")
+
+    tsv_path = tmp_path / tsv_fixture.name
+    txt_path = tmp_path / txt_fixture.name
+    shutil.copyfile(tsv_fixture, tsv_path)
+    shutil.copyfile(txt_fixture, txt_path)
 
     config = configparser.ConfigParser()
     config.add_section("settings")
@@ -3303,7 +3310,8 @@ def test_sample_file_ai_curated_bidirectional_selection(page, monkeypatch):
     resolved_paths = {
         "kardenwort_workspace": workspace_path,
         "anki_mapping_file": str(mapping_file),
-        "kardenwort_python": sys.executable
+        "kardenwort_python": sys.executable,
+        "results_dir": tmp_path
     }
 
     text_content = txt_path.read_text(encoding="utf-8").strip()
