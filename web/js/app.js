@@ -2483,6 +2483,7 @@
     function init() {
         if (isInitialized) return;
         isInitialized = true;
+        document.documentElement.style.minHeight = '';
         if (window.invalidateStreamMembership) window.invalidateStreamMembership();
         window.__deskInstanceId = (window.__deskInstanceId || 0) + 1;
         var myDeskInstanceId = window.__deskInstanceId;
@@ -5802,6 +5803,24 @@
         window.getWordLemma = getWordLemma;
         window.getWordInflectedForm = getWordInflectedForm;
 
+        // Filtering can shorten the document below the current viewport mid-gesture.
+        // Reserve only the visible extent, releasing it as the user scrolls back up.
+        function reserveSelectionViewport() {
+            if (window.AppState && window.AppState.filterSelectedOnly) {
+                document.documentElement.style.minHeight = (window.pageYOffset + window.innerHeight) + 'px';
+            }
+        }
+
+        function updateSelectionViewport() {
+            if (document.documentElement.style.minHeight) reserveSelectionViewport();
+        }
+
+        if (window.__deskSelectionViewportScroll) {
+            window.removeEventListener('scroll', window.__deskSelectionViewportScroll);
+        }
+        window.__deskSelectionViewportScroll = updateSelectionViewport;
+        addEvent(window, 'scroll', updateSelectionViewport);
+
         /** @param {HTMLElement} span */
         function wireTokenSpan(span) {
             if (!span || span.__kw_token_instance === myDeskInstanceId) return;
@@ -5812,6 +5831,7 @@
                     e = (e || window.event);
 
                     if (e.button === 0) { // LMB
+                        reserveSelectionViewport();
                         var lt = document.getElementById('lemma-table');
                         if (lt) {
                             lt.classList.add('kw-table-dragging');
@@ -6661,6 +6681,7 @@
     function handleMouseUp(e) {
             if (window.__deskInstanceId && myDeskInstanceId !== window.__deskInstanceId) return;
             e = (e || window.event);
+            if (isTokenDragSelecting) reserveSelectionViewport();
             var lt = document.getElementById('lemma-table');
             if (lt) {
                 lt.classList.remove('kw-table-dragging');
@@ -6990,7 +7011,7 @@
                 var nextRow = visibleRows[nextVisIdx];
                 if (nextRow) {
                     focusedRowId = parseInt(String(nextRow.getAttribute('data-row-id')), 10);
-                    updateRowFocus();
+                    updateRowFocus(true);
                 }
             } else if (keyCode === 46) { // Delete
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
@@ -7251,14 +7272,15 @@
             updateRowFocus();
         }
 
-        function updateRowFocus() {
+        /** @param {boolean} [reveal] */
+        function updateRowFocus(reveal) {
             for (var i = 0; i < tableRows.length; i++) {
                 var row = tableRows[i];
                 var rowId = parseInt(String(row.getAttribute('data-row-id')), 10);
                 if (rowId === focusedRowId) {
                     row.style.outline = '1px solid #58a6ff';
                     row.classList.add('focused-row');
-                    if (row.scrollIntoView) {
+                    if (reveal && row.scrollIntoView) {
                         row.scrollIntoView({ block: 'nearest' });
                     }
                 } else {
@@ -10512,6 +10534,7 @@
 
         /** @param {boolean} active */
         function setFilterSelectedOnly(active) {
+            if (!active) document.documentElement.style.minHeight = '';
             if (window.AppStore) window.AppStore.dispatch({type: 'TOGGLE_FILTER_SELECTED', payload: !!active});
             if (window.AppState) {
                 window.AppState.filterSelectedOnly = !!active;
