@@ -29,6 +29,128 @@ import translate_server
 from translate_server import TranslationHTTPServer, TranslationRequestHandler
 
 
+@pytest.fixture
+def provider_routing_service(tmp_path, monkeypatch):
+    """Real HTTP routing; only the unmanaged translation engines are replaced."""
+    calls = []
+    failures = set()
+
+    def engine(provider):
+        def translate(self, text, source, target, *args):
+            calls.append(provider)
+            if provider in failures:
+                raise translate_server.TranslationServerException(
+                    503, "ERR_NETWORK_UNREACHABLE", "Test provider unavailable"
+                )
+            return "\n".join(f"{provider}: {line}" for line in text.splitlines())
+        return translate
+
+    for provider in ("google", "deepl", "argos"):
+        monkeypatch.setattr(TranslationRequestHandler, f"_translate_{provider}", engine(provider))
+    server = TranslationHTTPServer(
+        ("127.0.0.1", 0), TranslationRequestHandler,
+        enable_cache=False, auto_failover=True, google_delay=0,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    config = configparser.ConfigParser()
+    config.read_dict({
+        "services": {"translation_server_url": f"http://127.0.0.1:{server.server_port}"},
+        "pipeline": {"text_provider_chain": "google, deepl, argos", "failover_strategy": "chain",
+                     "text_reprocess_provider": "deepl"},
+        "environment": {"deepl_settings_file": "deepl-settings.ini"},
+        "settings": {"default_target_language": "ru"},
+        "storage": {"backend": "sqlite"},
+        "timeouts": {"translation_timeout": "5"},
+    })
+    (tmp_path / "deepl-settings.ini").write_text("[Security]\nSecretsPath=secrets.ini\n", encoding="utf-8")
+    (tmp_path / "secrets.ini").write_text("[DeepL]\nKey=dGVzdC1rZXk=\n", encoding="utf-8")
+    paths = {
+        "base_dir": tmp_path, "results_dir": tmp_path,
+        "sqlite_db_path": tmp_path / "routing.db",
+        "migrations_dir": Path(kardenwort_desk.__file__).parent / "schemas" / "migrations",
+        "anki_mapping_file": Path(kardenwort_desk.__file__).parent / "anki-mapping.ini",
+    }
+    try:
+        yield config, paths, calls, failures
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("provider", ["google", "deepl", "argos"])
+@pytest.mark.parametrize("strategy", ["chain", "strict", "offline_fallback"])
+def test_explicit_provider_survives_http_global_chain(provider_routing_service, provider, strategy):
+    config, paths, calls, _ = provider_routing_service
+    config.set("pipeline", "text_provider_chain", "argos, google, deepl")
+    config.set("pipeline", "failover_strategy", strategy)
+    result = kardenwort_desk.dispatch_single_provider(provider, "Hello.", "en", "ru", config, paths)
+    assert result == f"{provider}: Hello."
+    assert calls == [provider]
+
+
+def test_explicit_provider_http_failure_does_not_trigger_server_failover(provider_routing_service):
+    config, paths, calls, failures = provider_routing_service
+    failures.add("deepl")
+    with pytest.raises(kardenwort_desk.TranslationException, match="Test provider unavailable"):
+        kardenwort_desk.dispatch_single_provider("deepl", "Hello.", "en", "ru", config, paths)
+    assert calls == ["deepl"]
+
+
+@pytest.mark.parametrize("fail_deepl", [False, True])
+@pytest.mark.parametrize("sources", [
+    ("Hello.", "Thanks."),
+    ("This stored sentence has a deliberately long first part to exceed the wrapping threshold. "
+     "Its second part must remain within the same authoritative sentence identity.",),
+], ids=["multi-sentence", "single-stored-unit"])
+def test_retext_http_provider_order_persistence_and_event(provider_routing_service, fail_deepl, sources):
+    from kardenwort_controller import SessionArbiter
+
+    config, paths, calls, failures = provider_routing_service
+    if fail_deepl:
+        failures.add("deepl")
+    adapter = kardenwort_desk.SqliteStorageAdapter(config, paths, db_path=paths["sqlite_db_path"])
+    session_zid = "20261104235948"
+    headers = ["TokenOrder", "Quotation", "WordSource", "SentenceSourceIndex",
+               "SentenceSource", "SentenceDestination", "WordDestination"]
+    rows = [[str(i), source.split()[0], source.split()[0].lower(), str(i + 1), source, "Old", "old"]
+            for i, source in enumerate(sources)]
+    adapter.save_session(session_zid=session_zid, slug="routing", source_language="en",
+                         target_language="ru", text_mode="multi" if len(sources) > 1 else "single",
+                         source_raw_text="\n".join(sources),
+                         data_rows=rows, headers=headers)
+    assert len(adapter.db.get_sentences_by_session(session_zid)) == len(sources)
+    arbiter = SessionArbiter(config, paths)
+    arbiter.storage_adapter = adapter
+    arbiter.sessions[session_zid] = {
+        "language": "en", "headers": headers, "data_rows": rows,
+        "tsv_path": str(paths["results_dir"] / f"{session_zid}-routing.en.tsv"),
+        "role_fields": {"sentence_destination": "SentenceDestination", "sentence_index": "SentenceSourceIndex"},
+    }
+    events = arbiter.register_subscriber(session_zid)
+    try:
+        result = arbiter.retext_session(session_zid, language="en")
+        provider = "google" if fail_deepl else "deepl"
+        expected = {i + 1: f"{provider}: {source}" for i, source in enumerate(sources)}
+        assert calls == (["deepl", "google"] if fail_deepl else ["deepl"])
+        assert result["sentences"] == expected
+        assert result["active_text_provider"] == provider
+        assert result["text_provenance"] == f"live:{provider}"
+        stored = adapter.db.get_sentences_by_session(session_zid)
+        assert {s["sentence_index"]: s["sentence_destination"] for s in stored} == expected
+        assert all(s["text_provenance"] == f"live:{provider}" for s in stored)
+        delivered = []
+        while not events.empty():
+            delivered.append(events.get_nowait())
+        update = next(event for event in delivered if event.get("stage") == "translated_text")
+        assert update["sentences"] == expected
+        assert update["translated_text"] == result["translated_text"]
+        assert update["active_text_provider"] == provider
+    finally:
+        arbiter.unregister_subscriber(session_zid, events)
+
+
 
 @pytest.fixture(scope="module")
 def translation_test_server():

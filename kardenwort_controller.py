@@ -2125,10 +2125,11 @@ class SessionArbiter:
         memo = self._retext_memo(session_zid)
         path = self._retext_path(adapter, session_zid, memo)
         text = self._read_retext_source(adapter, session_zid, memo, path, records)
-        mode = 'multi' if len(records) > 1 else text_mode
+        mode = 'multi' if records else text_mode
         raw, provider = self._translate_retext(text, language, target, mode, req_zid)
         main, padded = self._align_retext(raw, records)
-        provenance = getattr(raw, 'provenance', f'live:{provider}')
+        provenance = getattr(raw, 'provenance', None) or f'live:{provider}'
+        provider = provenance.removeprefix('live:')
         translated = format_translated_html(raw, text_mode=mode, text=text, config=self.config)
         result = self._persist_retext_updates(session_zid, raw, provenance, req_zid, path, provider, translated, main, padded)
         return self._publish_retext_result(result, main, language)

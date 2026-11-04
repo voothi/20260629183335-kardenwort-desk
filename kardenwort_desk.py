@@ -6129,7 +6129,8 @@ def run_google_translation(text, source, target, config, resolved_paths, zid=Non
         server_timeout = (call_timeout + 2.0) if is_chained else (config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60)
         resp = query_translation_server(
             text, source, target, provider="google", server_url=server_url, zid=zid, trace_id=trace_id,
-            deepl_api_key=deepl_key, timeout=server_timeout, chain=chain, strategy=strategy
+            deepl_api_key=deepl_key, timeout=server_timeout,
+            chain=["google"], strategy="strict", auto_failover=False
         )
         if resp:
             if resp.get("status") == "success":
@@ -6254,7 +6255,8 @@ def run_deepl_translation(text, source, target, config, resolved_paths, zid=None
         server_timeout = (call_timeout + 2.0) if is_chained else (config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60)
         resp = query_translation_server(
             text, source, target, provider="deepl", server_url=server_url, zid=zid, trace_id=trace_id,
-            deepl_api_key=deepl_key, timeout=server_timeout, chain=chain, strategy=strategy
+            deepl_api_key=deepl_key, timeout=server_timeout,
+            chain=["deepl"], strategy="strict", auto_failover=False
         )
         if resp:
             if resp.get("status") == "success":
@@ -6361,7 +6363,10 @@ def run_argos_translation(text, source, target, config, resolved_paths, zid=None
 
     if server_url:
         timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) * 2 if config else 120
-        resp = query_translation_server(text, source, target, provider="argos", server_url=server_url, zid=zid, trace_id=trace_id, timeout=timeout)
+        resp = query_translation_server(
+            text, source, target, provider="argos", server_url=server_url, zid=zid, trace_id=trace_id,
+            timeout=timeout, chain=["argos"], strategy="strict", auto_failover=False
+        )
         if resp:
             if resp.get("status") == "success":
                 return resp.get("translated_text", "")
