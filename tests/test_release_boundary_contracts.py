@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
@@ -159,11 +160,38 @@ def open_browser(page, tmp_path, url, selected=False):
     html = boundary_html(tmp_path, selected)
     page.route(url + '/', lambda route: route.fulfill(content_type='text/html', body=html.replace('<head>', '<head>' + GATED_SSE)))
     page.set_extra_http_headers({'X-API-Token': TOKEN})
-    page.goto(url + '/')
-    page.wait_for_function("typeof toggleRowSelection === 'function'")
-    page.evaluate('args => { SSEBridge.disconnect(); SSEBridge.connect(args.zid, args.url); }',
-                  dict(zid=ZID, url=url))
-    page.wait_for_function("document.getElementById('sse-status-indicator').dataset.status === 'connected'")
+    stream_events = []
+
+    def record_stream(event, request, **details):
+        if urllib.parse.urlsplit(request.url).path == '/api/v1/events':
+            stream_events.append(dict(event=event, **details))
+
+    listeners = (
+        ('request', lambda request: record_stream('request', request)),
+        ('response', lambda response: record_stream('response', response.request, status=response.status)),
+        ('requestfailed', lambda request: record_stream('failed', request, error=request.failure)),
+    )
+    for event, listener in listeners:
+        page.on(event, listener)
+    try:
+        page.goto(url + '/')
+        page.wait_for_function("typeof toggleRowSelection === 'function'")
+        page.evaluate('args => { SSEBridge.disconnect(); SSEBridge.connect(args.zid, args.url); }',
+                      dict(zid=ZID, url=url))
+        page.wait_for_function("document.getElementById('sse-status-indicator').dataset.status === 'connected'")
+    except BrowserTimeout as error:
+        state = page.evaluate("""() => {
+            const indicator = document.getElementById('sse-status-indicator');
+            return {status:indicator && indicator.dataset.status,
+                sync:indicator && indicator.dataset.sync,
+                session:window.SSEBridge && SSEBridge.getActiveZid(),
+                connection:window.SSEBridge && SSEBridge.getActiveConnectionId()};
+        }""")
+        raise BrowserTimeout(f'{error}\nSSE startup diagnostics: ' +
+                             json.dumps(dict(state=state, events=stream_events))) from error
+    finally:
+        for event, listener in listeners:
+            page.remove_listener(event, listener)
 
 
 @pytest.mark.parametrize('remote_selected', [True, False], ids=['remote-select', 'remote-deselect'])
@@ -381,7 +409,8 @@ def test_native_lifecycle_disposes_its_subscription(browser, tmp_path, running_c
             page.reload()
             page.reload()
         elif lifecycle == 'close':
-            page.close(run_before_unload=True)
+            with page.expect_event('close', timeout=5000):
+                page.close(run_before_unload=True)
         else:
             page.evaluate('stopSelectionBridge(); stopSelectionBridge()')
         drain_native(page, url, requests)
