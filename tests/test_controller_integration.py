@@ -1,10 +1,8 @@
 import json
-import socket
 import sys
 import threading
 import time
 import urllib.request
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -12,12 +10,7 @@ import pytest
 import kardenwort_desk
 from kardenwort_controller import ControllerRequestHandler, ProcessSupervisor, SessionArbiter
 from kardenwort_desk import SqliteStorageAdapter
-
-
-def get_free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
+from tests.browser_test_server import create_browser_test_server
 
 
 @pytest.fixture
@@ -33,8 +26,8 @@ def running_controller(tmp_path):
 
     adapter = SqliteStorageAdapter(config=config, resolved_paths=resolved_paths, db_path=str(db_file))
 
-    port = get_free_port()
-    server = ThreadingHTTPServer(('127.0.0.1', port), ControllerRequestHandler)
+    server = create_browser_test_server(ControllerRequestHandler)
+    port = server.server_port
     server.allow_reuse_address = True
     server.daemon_threads = True
     server.disable_nagle_algorithm = True
@@ -312,8 +305,8 @@ def test_live_session_20261019235609_endpoint_verification(tmp_path):
     assert db_file.exists(), "Production sqlite db must exist"
     seed_provenance_endpoint(adapter)
 
-    port = get_free_port()
-    server = ThreadingHTTPServer(('127.0.0.1', port), ControllerRequestHandler)
+    server = create_browser_test_server(ControllerRequestHandler)
+    port = server.server_port
     server.allow_reuse_address = True
     server.daemon_threads = True
     server.disable_nagle_algorithm = True

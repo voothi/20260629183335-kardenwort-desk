@@ -1,5 +1,4 @@
 import json
-import socket
 import threading
 import time
 import urllib.request
@@ -8,13 +7,8 @@ from pathlib import Path
 import pytest
 
 import kardenwort_desk
-from http_server import APIRequestHandler, ThreadingHTTPServer
-
-
-def get_free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
+from http_server import APIRequestHandler
+from tests.browser_test_server import create_browser_test_server
 
 
 @pytest.fixture
@@ -22,8 +16,8 @@ def test_server():
     desk_dir = Path(__file__).resolve().parent.parent
     config, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
 
-    port = get_free_port()
-    server = ThreadingHTTPServer(('127.0.0.1', port), APIRequestHandler)
+    server = create_browser_test_server(APIRequestHandler)
+    port = server.server_port
     server.allow_reuse_address = True
     server.daemon_threads = True
     server.disable_nagle_algorithm = True

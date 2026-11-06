@@ -13,6 +13,7 @@ import urllib.request
 
 import pytest
 from playwright.sync_api import TimeoutError as BrowserTimeout
+from playwright.sync_api import Error as BrowserError
 
 import kardenwort_desk as desk
 from kardenwort_events import EventDispatcher
@@ -180,13 +181,16 @@ def open_browser(page, tmp_path, url, selected=False):
                       dict(zid=ZID, url=url))
         page.wait_for_function("document.getElementById('sse-status-indicator').dataset.status === 'connected'")
     except BrowserTimeout as error:
-        state = page.evaluate("""() => {
-            const indicator = document.getElementById('sse-status-indicator');
-            return {status:indicator && indicator.dataset.status,
-                sync:indicator && indicator.dataset.sync,
-                session:window.SSEBridge && SSEBridge.getActiveZid(),
-                connection:window.SSEBridge && SSEBridge.getActiveConnectionId()};
-        }""")
+        try:
+            state = page.evaluate("""() => {
+                const indicator = document.getElementById('sse-status-indicator');
+                return {status:indicator && indicator.dataset.status,
+                    sync:indicator && indicator.dataset.sync,
+                    session:window.SSEBridge && SSEBridge.getActiveZid(),
+                    connection:window.SSEBridge && SSEBridge.getActiveConnectionId()};
+            }""")
+        except BrowserError as diagnostic_error:
+            state = {'unavailable': type(diagnostic_error).__name__}
         raise BrowserTimeout(f'{error}\nSSE startup diagnostics: ' +
                              json.dumps(dict(state=state, events=stream_events))) from error
     finally:
