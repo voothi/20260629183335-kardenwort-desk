@@ -7,6 +7,16 @@ import pytest
 
 LIVE_DAEMON_PORTS = {8081, 8082, 8083, 59999}
 
+
+@pytest.fixture
+def owned_browser_lifetime(browser, monkeypatch):
+    from tests.browser_test_clients import BrowserClients
+    clients = BrowserClients(browser, monkeypatch)
+    try:
+        yield clients
+    finally:
+        clients.close()
+
 @pytest.fixture(autouse=True)
 def capture_raw_stdout_in_tests(monkeypatch):
     """

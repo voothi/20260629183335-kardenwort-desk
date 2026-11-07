@@ -1,4 +1,4 @@
-"""Run review probes with owned storage and a protected-file comparison."""
+"""Run maintained tests by default, or explicit probes, with owned storage."""
 import argparse
 import configparser
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -104,6 +104,8 @@ def parse_arguments(argv):
     options = parser.parse_args(argv)
     if options.pytest_args[:1] == ['--']:
         options.pytest_args.pop(0)
+    if not options.pytest_args:
+        options.pytest_args = ['tests']
     return options
 
 

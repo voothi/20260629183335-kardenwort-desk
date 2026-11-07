@@ -3174,9 +3174,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             logger.error(f"Unhandled Controller error on POST {self.path}: {e}\n{traceback.format_exc()}")
             self._send_error_json(500, ErrorCode.SERVER_ERROR, f"Internal server error: {e}")
 
+    def _event_dispatcher(self):
+        return EventDispatcher.get_instance()
+
     def _handle_sse_events(self, zid: str):
         """Streams Server-Sent Events (SSE) for the specified session ZID."""
-        dispatcher = EventDispatcher.get_instance()
+        dispatcher = self._event_dispatcher()
         q = dispatcher.register(zid)
 
         try:

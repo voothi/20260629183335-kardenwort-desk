@@ -515,6 +515,25 @@ This MVP overlay is designed as a host-side overlay. When the full `202607021541
 └── README.md               # Project documentation
 ```
 
+### Isolated regression verification
+
+Default pytest discovery is confined to `tests/`. The audit runner also defaults
+to the maintained suite and protects workspace configuration, data, and services:
+
+```powershell
+python scripts/run_dict_transport_audit.py --output-dir results/OWNED-NEW-RUN
+python scripts/run_dict_transport_audit.py --output-dir results/OWNED-COLLECTION -- --collect-only
+```
+
+Each output directory must be new. Explicit paths outside `tests/` remain valid
+for owned generated failure probes; discovery configuration does not exclude them.
+Promote unexpected thread failures with
+`-W error::pytest.PytestUnhandledThreadExceptionWarning` when selecting contracts.
+
+Historical SSE controls must use that revision's frozen fixtures. The current
+owned-server fixture requires the private dispatcher ownership hook and rejects
+older SSE handlers explicitly rather than leaving heartbeat-blocked workers.
+
 ### Managing Dependencies
 
 This project natively supports a hybrid dependency model. You can either use a standard Python environment or a local vendored package for a zero-install runtime.

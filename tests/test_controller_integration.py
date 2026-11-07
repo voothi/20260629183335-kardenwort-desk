@@ -29,7 +29,7 @@ def running_controller(tmp_path):
     server = create_browser_test_server(ControllerRequestHandler)
     port = server.server_port
     server.allow_reuse_address = True
-    server.daemon_threads = True
+    server.daemon_threads = False
     server.disable_nagle_algorithm = True
 
     server.config = config
@@ -47,15 +47,16 @@ def running_controller(tmp_path):
 
     server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
 
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    time.sleep(0.1)
+    server_thread = server.start()
 
     server_url = f"http://127.0.0.1:{port}"
     yield server_url, server, adapter
 
-    server.shutdown()
-    server.server_close()
+    try:
+        server.server_close()
+    finally:
+        if server.resources_stopped():
+            server.arbiter.enrichment_queue.shutdown(wait=True)
 
 
 def test_retext_payload_structure_and_multidiv_separation(running_controller, monkeypatch):

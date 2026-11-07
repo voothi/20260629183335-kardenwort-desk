@@ -1,8 +1,8 @@
 """Explicit two-sentence fixtures; only unmanaged provider responses are replaced."""
 import configparser
+from contextlib import ExitStack
 import json
 from http.client import HTTPConnection
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 import queue
 import tempfile
@@ -13,6 +13,7 @@ import pytest
 
 import kardenwort_controller as controller
 import kardenwort_desk as desk
+from tests.browser_test_server import create_browser_test_server
 
 ZID = '20261029222449'
 SIBLING = '20261029222450'
@@ -160,8 +161,35 @@ def provider_name():
     return 'google'
 
 
+def owned_clients(request):
+    if 'browser' in request.fixturenames:
+        return request.getfixturevalue('owned_browser_lifetime')
+    return None
+
+
+def release_world(world, temporary=None):
+    for zid, channel in world.subscriptions:
+        world.arbiter.unregister_subscriber(zid, channel)
+    world.arbiter.enrichment_queue.shutdown(wait=True)
+    if temporary is not None:
+        temporary.cleanup()
+
+
+def release_stopped_world(world, server, temporary):
+    if server.resources_stopped():
+        release_world(world, temporary)
+
+
+def dispose_world(world, server, clients=None, temporary=None):
+    with ExitStack() as lifetime:
+        lifetime.callback(release_stopped_world, world, server, temporary)
+        lifetime.callback(server.server_close)
+        if clients is not None:
+            clients.close()
+
+
 @pytest.fixture
-def world(tmp_path, monkeypatch, backend, provider_name):
+def world(tmp_path, monkeypatch, backend, provider_name, request):
     # The directory belongs to this fixture and is removed after server/DB users stop.
     temporary = tempfile.TemporaryDirectory(prefix='reword-', dir=tmp_path)
     owner = Path(temporary.name).resolve()
@@ -172,7 +200,8 @@ def world(tmp_path, monkeypatch, backend, provider_name):
     else:
         module = desk if backend == 'sqlite' else controller
         monkeypatch.setattr(module, 'run_headless_intellifiller', world.provider.enrich)
-    server = ThreadingHTTPServer(('127.0.0.1', 0), RewordRequestHandler)
+    clients = owned_clients(request)
+    server = create_browser_test_server(RewordRequestHandler)
     server.daemon_threads = False
     server.config, server.resolved_paths = world.config, world.paths
     server.goldendict, server.api_key = {}, TOKEN
@@ -180,16 +209,9 @@ def world(tmp_path, monkeypatch, backend, provider_name):
     server.start_time, server.arbiter = time.time(), world.arbiter
     server.supervisor = controller.ProcessSupervisor(world.config, world.paths, enabled=False)
     world.port = server.server_port
-    thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.02})
-    thread.start()
+    thread = server.start()
     try:
         yield world
     finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+        dispose_world(world, server, clients, temporary)
         assert not thread.is_alive(), 'Owned HTTP server did not stop'
-        for zid, channel in world.subscriptions:
-            world.arbiter.unregister_subscriber(zid, channel)
-        world.arbiter.enrichment_queue.shutdown(wait=True)
-        temporary.cleanup()
