@@ -3067,7 +3067,7 @@
                     if (infCell && !infCell.classList.contains('dirty') && rowData.hasOwnProperty('inflected') && rowData.inflected !== undefined && rowData.inflected !== "") {
                         var div = (infCell.querySelector('.scrollable-cell'));
                         var val = rowData.inflected || "";
-                        var oldVal = div ? (div.textContent || div.innerText) : (infCell.classList.contains('editing') ? null : (infCell.textContent || infCell.innerText));
+                        var oldVal = div ? div.textContent : (infCell.classList.contains('editing') ? null : infCell.textContent);
                         var existingTitle = infCell.getAttribute('data-orig-title') || infCell.getAttribute('title') || (div ? (div.getAttribute('data-orig-title') || div.getAttribute('title')) : '');
                         var sentText = rowData.sentence_source || rowData.SentenceSource || (window.AppState ? window.AppState.sourceText : "") || (document.getElementById('source-container') ? requireElement('source-container').textContent : "");
                         var infTip = rowData.inflected_tooltip || ((oldVal === val && existingTitle) ? existingTitle : formatInflectedTooltip(sentText || '', val, rowData.token_order || rowId, rowData.lemma || ''));
@@ -3098,7 +3098,7 @@
                             else if (!lemCell.classList.contains('editing')) setCellText(lemCell, val);
                             updated = true;
                         } else {
-                            var oldVal = div ? (div.textContent || div.innerText) : (lemCell.classList.contains('editing') ? null : (lemCell.textContent || lemCell.innerText));
+                            var oldVal = div ? div.textContent : (lemCell.classList.contains('editing') ? null : lemCell.textContent);
                             if (oldVal !== val) {
                                 if (div) setCellText(div, val);
                                 else if (!lemCell.classList.contains('editing')) setCellText(lemCell, val);
@@ -3108,7 +3108,7 @@
                         var activeLang = (typeof getSessionLang === 'function' ? getSessionLang() : '') || (window.AppConfig ? window.AppConfig.language : '');
                         var rawG = rowData.gender !== undefined ? rowData.gender : (rowData.WordSourceGender || "");
                         var curPosCell = (tr.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]'));
-                        var rawPos = rowData.pos !== undefined ? rowData.pos : (rowData.WordSourcePos !== undefined ? rowData.WordSourcePos : (curPosCell ? (curPosCell.textContent || curPosCell.innerText || "").trim() : ""));
+                        var rawPos = rowData.pos !== undefined ? rowData.pos : (rowData.WordSourcePos !== undefined ? rowData.WordSourcePos : (curPosCell ? (curPosCell.textContent || "").trim() : ""));
                         var lemTip = formatLemmaTooltip(val, rawG, activeLang, rawPos);
                         if (lemTip) {
                             lemCell.setAttribute('title', String(lemTip));
@@ -3119,7 +3119,7 @@
                         }
                         var curGenderCell = (tr.querySelector('td.col-gender, td[data-col="WordSourceGender"]'));
                         if (curGenderCell) {
-                            var curGenVal = rawG || (curGenderCell.textContent || curGenderCell.innerText || "").trim();
+                            var curGenVal = rawG || (curGenderCell.textContent || "").trim();
                             var curProv = rowData.provenance || rowData._provenance || rowData.transProvenance;
                             if (!curProv) {
                                 var curTransCell = (tr.querySelector('td.col-translation, td[data-col="WordDestination"]'));
@@ -3184,7 +3184,7 @@
                             var midParts = allRowIdsAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
                             if (midParts.length > 1) {
                                 var rolledTrans = [];
-                                var parentLem = (rowData.lemma || (lemCell ? (lemCell.textContent || lemCell.innerText) : '') || '').trim().toLowerCase();
+                                var parentLem = (rowData.lemma || (lemCell ? lemCell.textContent : '') || '').trim().toLowerCase();
                                 for (var mp = 0; mp < midParts.length; mp++) {
                                     var mRow = window.AppState.rows[midParts[mp]];
                                     if (mRow) {
@@ -3208,7 +3208,7 @@
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (val !== "" || globalStage === 'translated' || globalStage === 'translated_words' || globalStage === 'translated_lemmas' || isTerm) {
-                            var oldVal = transTd.classList.contains('editing') ? null : (div.textContent || div.innerText);
+                            var oldVal = transTd.classList.contains('editing') ? null : div.textContent;
                             targetVal = val;
                             if (isTerm && targetVal === "" && window.AppState.lastError && oldVal && oldVal.indexOf('skeleton-loader') === -1) {
                                 targetVal = oldVal;
@@ -3221,7 +3221,7 @@
                             }
                             updated = true;
                         } else {
-                            var oldVal = transTd.classList.contains('editing') ? null : (div.textContent || div.innerText);
+                            var oldVal = transTd.classList.contains('editing') ? null : div.textContent;
                             var shouldUpdate = (oldVal !== val) || hasSkeleton;
                             if (shouldUpdate) {
                                 if (val === "" && isTerm) {
@@ -3253,7 +3253,7 @@
                         }
                     } else if (transTd && !transTd.classList.contains('dirty') && !transTd.classList.contains('editing')) {
                         var div = (transTd.querySelector('.scrollable-cell')) || transTd;
-                        var curText = (div.textContent || div.innerText || '').trim();
+                        var curText = (div.textContent || '').trim();
                         if (curText && curText !== '...' && curText !== 'Loading...' && ! (div.querySelector('.skeleton-loader'))) {
                             applyCellProvenance(curText);
                         }
@@ -3276,7 +3276,7 @@
                             }
                             updated = true;
                         } else if (val !== "") {
-                            var oldVal = ipaCell.classList.contains('editing') ? null : (div.textContent || div.innerText);
+                            var oldVal = ipaCell.classList.contains('editing') ? null : div.textContent;
                             if (oldVal !== val || hasSkeleton) {
                                 if (!ipaCell.classList.contains('editing')) setCellText(div, val);
                                 if (val.indexOf('skeleton-loader') === -1) {
@@ -3396,7 +3396,7 @@
                                     else normPos = pClean;
                                 }
                             }
-                            var oldPosVal = (div.textContent || div.innerText || '').trim();
+                            var oldPosVal = (div.textContent || '').trim();
                             if (oldPosVal !== normPos) {
                                 if (!posCell.classList.contains('editing')) setCellText(div, normPos);
                                 updated = true;
@@ -3433,7 +3433,7 @@
                                 var lemmaCell = (tr.querySelector('td.col-lemma, td[data-col="WordSource"]'));
                                 if (lemmaCell) {
                                     var lemDiv = (lemmaCell.querySelector('.scrollable-cell')) || lemmaCell;
-                                    rowLemma = (lemDiv.textContent || lemDiv.innerText || '').trim();
+                                    rowLemma = (lemDiv.textContent || '').trim();
                                 }
                             }
                             var effProv = rowData.provenance || rowData._provenance || rowData.transProvenance;
