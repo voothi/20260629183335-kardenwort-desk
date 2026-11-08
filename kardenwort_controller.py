@@ -1,5 +1,7 @@
 import sys
 import kardenwort_reword as reword
+from kardenwort_preference_contract import parse_preference_command
+from kardenwort_preferences import commit_preference, PreferencePersistenceError
 import os
 import re
 import json
@@ -186,11 +188,6 @@ def committed_recovery_snapshot(arbiter, zid):
             current.update(headers=headers, data_rows=rows,
                 fingerprint=snapshot['fingerprint'], translatedText=snapshot['translatedText'])
     return snapshot
-
-CONFIG_API_WRITABLE_KEYS: Dict[Tuple[str, str], str] = {
-    ('rendering', 'highlight_same_lemma'): 'bool',
-    ('rendering', 'filter_selected_only'): 'bool',
-}
 
 ERROR_STATUS_MATRIX = {
     "INVALID_PAYLOAD": 400,
@@ -3085,6 +3082,22 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             logger.debug('Peer disconnected during response to %s', self.path)
 
+    def _update_ui_preference(self, body):
+        try:
+            command = parse_preference_command(body)
+        except ValueError as error:
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(error)) from error
+        paths = getattr(self.server, 'resolved_paths', None) or {}
+        base_dir = paths.get('base_dir')
+        if not base_dir and getattr(self.server, 'config_path', None):
+            base_dir = Path(self.server.config_path).parent
+        try:
+            result = commit_preference(command, getattr(self.server, 'config', None),
+                getattr(self.server, 'ui_cfg', None), base_dir, persist_config_value)
+        except (OSError, PreferencePersistenceError) as error:
+            raise StructuredError(ErrorCode.CONFIGURATION_ERROR, 'Preference could not be saved') from error
+        self._send_json(200, result)
+
     def _read_json_body(self) -> dict:
         content_length_str = self.headers.get('Content-Length', '0')
         try:
@@ -4786,60 +4799,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             elif method == 'POST':
                 body = self._read_json_body()
                 self._authenticate_token(body)
-                sec = body.get('section', 'rendering')
-                key = body.get('key')
-                val = body.get('value')
-                if not key and 'highlight_same_lemma' in body:
-                    key = 'highlight_same_lemma'
-                    val = body.get('highlight_same_lemma')
-                elif not key and 'filter_selected_only' in body:
-                    key = 'filter_selected_only'
-                    val = body.get('filter_selected_only')
-
-                target_pair = (str(sec).strip().lower() if sec else '', str(key).strip().lower() if key else '')
-                matched_pair = None
-                expected_type = None
-                for (w_sec, w_key), k_type in CONFIG_API_WRITABLE_KEYS.items():
-                    if (w_sec.lower(), w_key.lower()) == target_pair:
-                        matched_pair = (w_sec, w_key)
-                        expected_type = k_type
-                        break
-
-                if not matched_pair:
-                    raise StructuredError(
-                        ErrorCode.INVALID_PAYLOAD,
-                        f"Field '{key}' in section '{sec}' is not permitted for configuration updates",
-                    )
-
-                sec, key = matched_pair
-                if expected_type == 'bool':
-                    if isinstance(val, bool):
-                        bool_val = val
-                    else:
-                        bool_val = str(val).lower() in ('1', 'true', 'yes')
-                    norm_val = 'true' if bool_val else 'false'
-                else:
-                    norm_val = str(val) if val is not None else ''
-
-                if hasattr(self.server, 'config') and self.server.config:
-                    if not self.server.config.has_section(sec):
-                        self.server.config.add_section(sec)
-                    self.server.config.set(sec, key, norm_val)
-                    if hasattr(self.server, 'ui_cfg') and self.server.ui_cfg is not None:
-                        if expected_type == 'bool':
-                            self.server.ui_cfg[key] = bool_val
-                        else:
-                            self.server.ui_cfg[key] = norm_val
-
-                    base_dir = None
-                    if hasattr(self.server, 'resolved_paths') and self.server.resolved_paths:
-                        base_dir = self.server.resolved_paths.get('base_dir')
-                    if not base_dir and getattr(self.server, 'config_path', None):
-                        base_dir = Path(self.server.config_path).parent
-
-                    persist_config_value(sec, key, norm_val, base_dir=base_dir)
-
-                self._send_json(200, {"ok": True, "section": sec, "key": key, "value": norm_val})
+                self._update_ui_preference(body)
                 return
             else:
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")

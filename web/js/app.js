@@ -10473,6 +10473,55 @@
         };
 
         /** @param {boolean} active */
+        var preferenceButtons = {
+            highlight_same_lemma: 'kw-btn-same-lemma', filter_selected_only: 'kw-btn-filter-selected'
+        };
+        function projectPreferenceFeedback(key, phase) {
+            var button = document.getElementById(preferenceButtons[key]);
+            if (button) {
+                button.setAttribute('data-preference-state', phase);
+                button.setAttribute('aria-busy', String(phase === 'pending'));
+                var title = button.getAttribute('data-preference-title') || button.title;
+                button.setAttribute('data-preference-title', title);
+                button.title = {pending: 'Saving preference...', failed: 'Preference not saved. Toggle again to retry.'}[phase] || title;
+            }
+        }
+        function projectPreferenceStatus(key, phase, value, error) {
+            projectPreferenceFeedback(key, phase);
+            if (phase === 'saved' || phase === 'local') {
+                try { localStorage.setItem('kw_' + key, String(value)); }
+                catch (storageError) { console.error('[Preferences] Local restoration unavailable', storageError); }
+            }
+            if (phase === 'failed') window.showToast('Preference not saved: ' + error.message, 'error');
+        }
+        function sendPreference(key, value) {
+            return fetch(resolveBackendUrl('/api/v1/config'), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', 'X-API-Token': getApiToken()},
+                body: JSON.stringify({section: 'rendering', key: key, value: String(value)})
+            }).then(function(response) {
+                return response.json().then(function(payload) {
+                    var data = payload.data || payload;
+                    if (!response.ok || data.ok !== true) throw new Error('Backend did not acknowledge the preference');
+                });
+            });
+        }
+        var preferenceCommands = window.PreferenceCommands.create(sendPreference, projectPreferenceStatus);
+        function persistPreference(key, value) {
+            if (isServerDisabled()) {
+                projectPreferenceStatus(key, 'local', value);
+                return;
+            }
+            return preferenceCommands.submit(key, value);
+        }
+
+        function projectPreferenceClass(elementId, className, active) {
+            var element = document.getElementById(elementId);
+            if (!element) return;
+            if (active) addClass(element, className);
+            else removeClass(element, className);
+        }
+
         function setHighlightSameLemma(active) {
             if (window.AppStore) window.AppStore.dispatch({type: 'TOGGLE_HIGHLIGHT_SAME_LEMMA', payload: !!active});
             if (window.AppState) {
@@ -10481,29 +10530,11 @@
             if (window.__CONFIG__) {
                 window.__CONFIG__.highlight_same_lemma = !!active;
             }
-            try {
-                localStorage.setItem('kw_highlight_same_lemma', String(!!active));
-            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-            var btn = (document.getElementById('kw-btn-same-lemma'));
-            if (btn) {
-                if (active) {
-                    addClass(btn, 'active');
-                } else {
-                    removeClass(btn, 'active');
-                }
-            }
+            projectPreferenceClass('kw-btn-same-lemma', 'active', active);
             if (typeof updateBidirectionalHighlights === 'function') {
                 updateBidirectionalHighlights();
             }
-            if (!isServerDisabled()) {
-                try {
-                    fetch(resolveBackendUrl('/api/v1/config'), {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'X-API-Token': getApiToken() },
-                        body: JSON.stringify({ section: 'rendering', key: 'highlight_same_lemma', value: String(!!active) })
-                    }).catch(function(err) { console.debug("[Async] Non-fatal operation caught:", err); });
-                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-            }
+            persistPreference('highlight_same_lemma', !!active);
         }
         window.setHighlightSameLemma = setHighlightSameLemma;
 
@@ -10542,37 +10573,12 @@
             if (window.__CONFIG__) {
                 window.__CONFIG__.filter_selected_only = !!active;
             }
-            try {
-                localStorage.setItem('kw_filter_selected_only', String(!!active));
-            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-            var lemmaTable = document.getElementById('lemma-table');
-            if (lemmaTable) {
-                if (active) {
-                    addClass(lemmaTable, 'kw-filter-selected-only');
-                } else {
-                    removeClass(lemmaTable, 'kw-filter-selected-only');
-                }
-            }
-            var filterBtn = (document.getElementById('kw-btn-filter-selected'));
-            if (filterBtn) {
-                if (active) {
-                    addClass(filterBtn, 'btn-filter-active');
-                } else {
-                    removeClass(filterBtn, 'btn-filter-active');
-                }
-            }
+            projectPreferenceClass('lemma-table', 'kw-filter-selected-only', active);
+            projectPreferenceClass('kw-btn-filter-selected', 'btn-filter-active', active);
             if (typeof updateEmptySelectionState === 'function') {
                 updateEmptySelectionState();
             }
-            if (!isServerDisabled()) {
-                try {
-                    fetch(resolveBackendUrl('/api/v1/config'), {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'X-API-Token': getApiToken() },
-                        body: JSON.stringify({ section: 'rendering', key: 'filter_selected_only', value: String(!!active) })
-                    }).catch(function(err) { console.debug("[Async] Non-fatal operation caught:", err); });
-                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-            }
+            persistPreference('filter_selected_only', !!active);
         }
         window.setFilterSelectedOnly = setFilterSelectedOnly;
 

@@ -13625,6 +13625,7 @@ def render_declarative_web_shell(
         "components/LemmaTable.js",
         "components/WorkspaceTabs.js",
         "services/sse.js",
+        "features/preferences.js",
         "app.js",
     ):
         p_script = web_dir / "js" / script_rel
@@ -13962,6 +13963,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         "components/LemmaTable.js",
         "components/WorkspaceTabs.js",
         "services/sse.js",
+        "features/preferences.js",
         "app.js",
     ):
         p_script = web_dir / "js" / script_rel
@@ -17979,16 +17981,8 @@ def persist_default_language(language: str, base_dir=None) -> bool:
     desk_config = base_dir / "config.ini"
     if desk_config.exists():
         try:
-            content = desk_config.read_text(encoding="utf-8-sig")
-            if re.search(r'(?i)^\s*default_language\s*=', content, flags=re.MULTILINE):
-                new_content = re.sub(
-                    r'(?i)^(\s*default_language)\s*=\s*.*$',
-                    r'\g<1> = ' + language,
-                    content,
-                    flags=re.MULTILINE
-                )
-                desk_config.write_text(new_content, encoding="utf-8")
-                success = True
+            from kardenwort_preferences import write_legacy_language
+            success = write_legacy_language(language, base_dir)
         except Exception as e:
             logger.warning(f"Failed to update desk config.ini with default_language={language}: {e}")
 
@@ -18012,11 +18006,8 @@ def persist_config_value(section: str, key: str, value: Any, base_dir=None) -> b
         return False
 
     try:
-        from kardenwort_configuration import patch_ini_value
-        content = desk_config.read_bytes().decode('utf-8')
-        changed = patch_ini_value(content, section, key, str(value))
-        desk_config.write_bytes(changed.encode('utf-8'))
-        return True
+        from kardenwort_preferences import write_legacy_value
+        return write_legacy_value(section, key, value, base_dir)
     except Exception as e:
         logger.warning(f"Failed to update desk config.ini with [{section}] {key}={value}: {e}")
         return False

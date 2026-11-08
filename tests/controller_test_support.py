@@ -71,6 +71,8 @@ def owned_configuration(owner, translation_url, backend):
         'timeouts': {'translation_timeout': '15'},
         'server': {'update_delivery': 'controller'},
     })
+    with (owner / 'config.ini').open('w', encoding='utf-8') as stream:
+        config.write(stream)
     paths.update(base_dir=owner, results_dir=results, generated_results_dir=results,
                  sqlite_db_path=database, storage_backend=backend)
     goldendict.update(run_intellifiller=False)
