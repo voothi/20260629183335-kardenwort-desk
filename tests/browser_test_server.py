@@ -83,7 +83,7 @@ class _BrowserTestHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = False
     daemon_threads = False
 
-    def __init__(self, address, handler):
+    def __init__(self, address, handler, **server_options):
         self.streams = OwnedEventStreams()
         self.connections = set()
         self.cancelled_connections = set()
@@ -94,7 +94,7 @@ class _BrowserTestHTTPServer(ThreadingHTTPServer):
         self.serving = threading.Event()
         self.server_thread = None
         self.closed = False
-        super().__init__(address, owned_handler(handler))
+        super().__init__(address, owned_handler(handler), **server_options)
 
     def get_request(self):
         connection, address = super().get_request()
@@ -191,11 +191,12 @@ class _BrowserTestHTTPServer(ThreadingHTTPServer):
         return not any(active)
 
 
-def create_browser_test_server(handler):
+def create_browser_test_server(handler, server_class=_BrowserTestHTTPServer, **server_options):
     for attempt in range(128):
         port = random.randrange(49152, 65536)
         try:
-            return _BrowserTestHTTPServer(('127.0.0.1', port), handler)
+            return server_class(('127.0.0.1', port), handler, **server_options)
         except OSError as error:
             if error.errno != errno.EADDRINUSE or attempt == 127:
+                error.add_note(f'Owned test listener bind: 127.0.0.1:{port}; attempt {attempt + 1}')
                 raise

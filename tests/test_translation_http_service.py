@@ -8,6 +8,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 import kardenwort_desk
+from tests.controller_test_support import translation_service
 from kardenwort_desk import (
     run_google_translation,
     run_deepl_translation,
@@ -47,36 +48,27 @@ def provider_routing_service(tmp_path, monkeypatch):
 
     for provider in ("google", "deepl", "argos"):
         monkeypatch.setattr(TranslationRequestHandler, f"_translate_{provider}", engine(provider))
-    server = TranslationHTTPServer(
-        ("127.0.0.1", 0), TranslationRequestHandler,
-        enable_cache=False, auto_failover=True, google_delay=0,
-    )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    config = configparser.ConfigParser()
-    config.read_dict({
-        "services": {"translation_server_url": f"http://127.0.0.1:{server.server_port}"},
-        "pipeline": {"text_provider_chain": "google, deepl, argos", "failover_strategy": "chain",
-                     "text_reprocess_provider": "deepl"},
-        "environment": {"deepl_settings_file": "deepl-settings.ini"},
-        "settings": {"default_target_language": "ru"},
-        "storage": {"backend": "sqlite"},
-        "timeouts": {"translation_timeout": "5"},
-    })
-    (tmp_path / "deepl-settings.ini").write_text("[Security]\nSecretsPath=secrets.ini\n", encoding="utf-8")
-    (tmp_path / "secrets.ini").write_text("[DeepL]\nKey=dGVzdC1rZXk=\n", encoding="utf-8")
-    paths = {
-        "base_dir": tmp_path, "results_dir": tmp_path,
-        "sqlite_db_path": tmp_path / "routing.db",
-        "migrations_dir": Path(kardenwort_desk.__file__).parent / "schemas" / "migrations",
-        "anki_mapping_file": Path(kardenwort_desk.__file__).parent / "anki-mapping.ini",
-    }
-    try:
+    with translation_service(TranslationRequestHandler, auto_failover=True) as server:
+        config = configparser.ConfigParser()
+        config.read_dict({
+            "services": {"translation_server_url": f"http://127.0.0.1:{server.server_port}"},
+            "pipeline": {"text_provider_chain": "google, deepl, argos", "failover_strategy": "chain",
+                         "text_reprocess_provider": "deepl", "fast_connectivity_check_ips": ""},
+            "environment": {"deepl_settings_file": "deepl-settings.ini"},
+            "settings": {"default_target_language": "ru"},
+            "storage": {"backend": "sqlite"},
+            "timeouts": {"translation_timeout": "5"},
+        })
+        (tmp_path / "deepl-settings.ini").write_text("[Security]\nSecretsPath=secrets.ini\n", encoding="utf-8")
+        (tmp_path / "secrets.ini").write_text("[DeepL]\nKey=dGVzdC1rZXk=\n", encoding="utf-8")
+        paths = {
+            "base_dir": tmp_path, "results_dir": tmp_path,
+            "sqlite_db_path": tmp_path / "routing.db",
+            "migrations_dir": Path(kardenwort_desk.__file__).parent / "schemas" / "migrations",
+            "anki_mapping_file": Path(kardenwort_desk.__file__).parent / "anki-mapping.ini",
+        }
         yield config, paths, calls, failures
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+
 
 
 @pytest.mark.parametrize("provider", ["google", "deepl", "argos"])

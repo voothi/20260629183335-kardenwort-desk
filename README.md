@@ -534,6 +534,27 @@ Historical SSE controls must use that revision's frozen fixtures. The current
 owned-server fixture requires the private dispatcher ownership hook and rejects
 older SSE handlers explicitly rather than leaving heartbeat-blocked workers.
 
+Controller authentication, lookup and retext contracts use fresh owned storage
+and a real translation HTTP service whose unmanaged Google engine returns
+deterministic responses. Session creation, routing, serialization, SQLite/TSV
+persistence and provider provenance still execute normally. Provider fallback
+contracts configure their connectivity policy explicitly; host connectivity
+checks retain separate executable coverage.
+
+To exercise the same three public-action test functions against the real Google
+engine, select the live scope explicitly (it requires network access):
+
+```powershell
+Remove-Item Env:SSLKEYLOGFILE -ErrorAction SilentlyContinue
+python scripts/run_dict_transport_audit.py --output-dir results/OWNED-LIVE-PROVIDER -- verification/test_live_translation_provider.py -W error::pytest.PytestUnhandledThreadExceptionWarning
+```
+
+The live scope owns its service, configuration and storage, uses strict Google
+routing without fallback, and reports failures separately. Ordinary controller
+cases remain in the maintained suite. DeepL, Argos and IntelliFiller engine
+certification requires separately provisioned live checks; deterministic HTTP
+tests and `live:*` metadata do not certify those engines.
+
 ### Managing Dependencies
 
 This project natively supports a hybrid dependency model. You can either use a standard Python environment or a local vendored package for a zero-install runtime.

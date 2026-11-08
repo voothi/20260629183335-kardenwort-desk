@@ -1,5 +1,6 @@
 """Real transport disposal preserves failures and independent subscriptions."""
 from http.client import HTTPConnection, RemoteDisconnected
+from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler
 import json
 import socket
@@ -22,20 +23,15 @@ ZID = '20261107230052'
 
 @pytest.fixture
 def controllers(tmp_path):
-    owners = []
-    for name in ('first', 'second'):
-        owner = tmp_path / name
-        owner.mkdir()
-        lifetime = running_controller.__wrapped__(owner)
-        owners.append((lifetime, next(lifetime)))
-    try:
-        yield [value for _, value in owners]
-    finally:
-        for lifetime, _ in owners:
-            try:
-                next(lifetime)
-            except StopIteration:
-                pass
+    with ExitStack() as lifetimes:
+        owners = []
+        for name in ('first', 'second'):
+            owner = tmp_path / name
+            owner.mkdir()
+            lifetime = running_controller.__wrapped__(owner)
+            owners.append(next(lifetime))
+            lifetimes.callback(next, lifetime, None)
+        yield owners
 
 
 def open_stream(server):

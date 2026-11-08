@@ -16,6 +16,7 @@ from http.server import ThreadingHTTPServer
 import kardenwort_desk
 import kardenwort_controller
 from tests.thread_support import sse_events
+from tests.controller_test_support import controller_world
 from kardenwort_controller import (
     ProcessSupervisor,
     SessionArbiter,
@@ -33,42 +34,9 @@ def get_free_port():
         return s.getsockname()[1]
 
 
-@pytest.fixture(scope="module")
-def running_controller():
-    desk_dir = Path(__file__).resolve().parent.parent
-    config, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
-
-    port = get_free_port()
-    server = ThreadingHTTPServer(('127.0.0.1', port), ControllerRequestHandler)
-    server.allow_reuse_address = True
-    server.daemon_threads = True
-    server.disable_nagle_algorithm = True
-
-    server.config = config
-    server.resolved_paths = resolved_paths
-    server.goldendict = goldendict
-    server.api_key = "test-controller-api-key"
-    server.seq_counter = 0
-    server.seq_lock = threading.Lock()
-    server.start_time = time.time()
-    server.server_port = port
-
-    # In-memory arbiter
-    server.arbiter = SessionArbiter(config, resolved_paths)
-    server.arbiter.goldendict = goldendict
-
-    # Disabled supervisor for test isolation (unit tests test supervisor separately)
-    server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
-
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    server_url = f"http://127.0.0.1:{port}"
-    yield server_url, server
-
-    server.shutdown()
-    server.server_close()
-    server_thread.join(timeout=3)
-    assert not server_thread.is_alive()
+@pytest.fixture
+def running_controller(controller_world):
+    yield controller_world
 
 
 # ---------------------------------------------------------------------------
