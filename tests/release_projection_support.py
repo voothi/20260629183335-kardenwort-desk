@@ -13,7 +13,7 @@ from tests.browser_test_server import create_browser_test_server
 
 @pytest.fixture
 def checked_controller(tmp_path, owned_browser_lifetime, page, record_testsuite_property, request):
-    lifetime = running_controller.__wrapped__(tmp_path)
+    lifetime = running_controller.__wrapped__(tmp_path, request)
     value = next(lifetime)
     _, server, _ = value
     server.daemon_threads = False

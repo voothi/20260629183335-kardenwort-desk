@@ -9,35 +9,42 @@ import pytest
 import kardenwort_desk
 from http_server import APIRequestHandler
 from tests.browser_test_server import create_browser_test_server
+from tests.controller_test_support import (
+    translation_service, DeterministicTranslationHandler, owned_configuration, seed_toolbar_session,
+)
+from tests.browser_test_clients import owned_clients
 
 
 @pytest.fixture
-def test_server():
-    desk_dir = Path(__file__).resolve().parent.parent
-    config, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
+def test_server(tmp_path, request):
+    with translation_service(DeterministicTranslationHandler) as translator:
+        config, resolved_paths, goldendict = owned_configuration(
+            tmp_path, f'http://127.0.0.1:{translator.server_port}', 'sqlite')
+        seed_toolbar_session(config, resolved_paths)
+        server = create_browser_test_server(APIRequestHandler)
+        port = server.server_port
+        server.allow_reuse_address = True
+        server.daemon_threads = True
+        server.disable_nagle_algorithm = True
 
-    server = create_browser_test_server(APIRequestHandler)
-    port = server.server_port
-    server.allow_reuse_address = True
-    server.daemon_threads = True
-    server.disable_nagle_algorithm = True
+        server.config = config
+        server.resolved_paths = resolved_paths
+        server.goldendict = goldendict
+        server.api_key = "test-api-key"
+        server.server_port = port
+        server.seq_counter = 0
+        server.seq_lock = threading.Lock()
 
-    server.config = config
-    server.resolved_paths = resolved_paths
-    server.goldendict = goldendict
-    server.api_key = "test-api-key"
-    server.server_port = port
-    server.seq_counter = 0
-    server.seq_lock = threading.Lock()
+        thread = server.start()
+        clients = owned_clients(request)
 
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    time.sleep(0.15)
+        yield port
 
-    yield port
-
-    server.shutdown()
-    server.server_close()
+        try:
+            if clients is not None:
+                clients.close()
+        finally:
+            server.server_close()
 
 
 def test_static_routes_http_delivery(test_server):

@@ -1,4 +1,5 @@
 """Explicit two-sentence fixtures; only unmanaged provider responses are replaced."""
+from tests.browser_test_clients import owned_clients
 import configparser
 from contextlib import ExitStack
 import json
@@ -159,12 +160,6 @@ def backend():
 @pytest.fixture
 def provider_name():
     return 'google'
-
-
-def owned_clients(request):
-    if 'browser' in request.fixturenames:
-        return request.getfixturevalue('owned_browser_lifetime')
-    return None
 
 
 def release_world(world, temporary=None):

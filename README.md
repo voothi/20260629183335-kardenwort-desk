@@ -527,6 +527,8 @@ python scripts/run_dict_transport_audit.py --output-dir results/OWNED-COLLECTION
 
 Each output directory must be new. Explicit paths outside `tests/` remain valid
 for owned generated failure probes; discovery configuration does not exclude them.
+Use short output names: source-identity probes create nested checkouts, which
+can exceed the Windows path limit under a long evidence directory name.
 Promote unexpected thread failures with
 `-W error::pytest.PytestUnhandledThreadExceptionWarning` when selecting contracts.
 
@@ -534,12 +536,20 @@ Historical SSE controls must use that revision's frozen fixtures. The current
 owned-server fixture requires the private dispatcher ownership hook and rejects
 older SSE handlers explicitly rather than leaving heartbeat-blocked workers.
 
-Controller authentication, lookup and retext contracts use fresh owned storage
-and a real translation HTTP service whose unmanaged Google engine returns
-deterministic responses. Session creation, routing, serialization, SQLite/TSV
+Controller authentication, lookup, retext and affected browser contracts use
+fresh owned storage and a real translation HTTP service whose unmanaged Google,
+DeepL and Argos engines return deterministic responses. The ordinary controller
+authentication/lookup selection pins Google. Session creation, routing, serialization, SQLite/TSV
 persistence and provider provenance still execute normally. Provider fallback
 contracts configure their connectivity policy explicitly; host connectivity
 checks retain separate executable coverage.
+
+Cached lookup fixtures seed their explicit inputs in real storage. The static
+toolbar fixture also stores the session shown by its injected bootstrap, so its
+render action has a matching database record. Browser routes and native bridge
+handles finish before owned clients and HTTP workers close. On Windows, an
+access-denied bind advances to another candidate only when numeric local TCP
+endpoints confirm occupation; unconfirmed permission errors still fail.
 
 To exercise the same three public-action test functions against the real Google
 engine, select the live scope explicitly (it requires network access):

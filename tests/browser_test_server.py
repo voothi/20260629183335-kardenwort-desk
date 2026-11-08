@@ -1,9 +1,11 @@
 """Own real HTTP workers, sockets and exact event-stream subscriptions."""
 import errno
+import os
 from http.server import ThreadingHTTPServer
 import queue
 import random
 import socket
+import subprocess
 import sys
 import threading
 from time import monotonic
@@ -180,8 +182,12 @@ class _BrowserTestHTTPServer(ThreadingHTTPServer):
         live = [worker.name for worker in self.workers if worker.is_alive()]
         invalid = [not self.resources_stopped(), monotonic() >= deadline]
         if any(invalid):
-            self.errors.append(AssertionError(f'Owned HTTP cleanup exceeded its contract: workers={live}, '
-                f'streams={len(self.streams.handles)}, sockets={len(self.connections)}'))
+            failure = AssertionError(f'Owned HTTP cleanup exceeded its contract: workers={live}, '
+                f'streams={len(self.streams.handles)}, sockets={len(self.connections)}')
+            for worker in self.workers:
+                if worker.is_alive():
+                    failure.add_note(worker_stack(worker))
+            self.errors.append(failure)
         if self.errors:
             raise BaseExceptionGroup('Owned HTTP worker/disposal failures', self.errors)
 
@@ -191,12 +197,40 @@ class _BrowserTestHTTPServer(ThreadingHTTPServer):
         return not any(active)
 
 
+def worker_stack(worker):
+    frame = sys._current_frames().get(worker.ident)
+    stack = ''.join(traceback.format_stack(frame)) if frame is not None else 'frame unavailable'
+    return worker.name + '\n' + stack
+
+
+def occupied_windows_port(error, port):
+    if os.name != 'nt' or error.errno not in {errno.EACCES, 10013}:
+        return False
+    try:
+        result = subprocess.run(['netstat', '-ano', '-p', 'tcp'], capture_output=True,
+                                text=True, timeout=1, check=True)
+    except subprocess.SubprocessError as probe:
+        error.add_note(f'Occupied-port inspection failed: {type(probe).__name__}')
+        return False
+    endpoints = {f'0.0.0.0:{port}', f'127.0.0.1:{port}', f'[::]:{port}', f'[::1]:{port}'}
+    return any(occupied_endpoint(fields, endpoints)
+               for fields in (line.split() for line in result.stdout.splitlines()))
+
+
+def occupied_endpoint(fields, endpoints):
+    return len(fields) >= 4 and fields[0] == 'TCP' and fields[1] in endpoints
+
+
+def allocation_collision(error, port):
+    return error.errno == errno.EADDRINUSE or occupied_windows_port(error, port)
+
+
 def create_browser_test_server(handler, server_class=_BrowserTestHTTPServer, **server_options):
     for attempt in range(128):
         port = random.randrange(49152, 65536)
         try:
             return server_class(('127.0.0.1', port), handler, **server_options)
         except OSError as error:
-            if error.errno != errno.EADDRINUSE or attempt == 127:
+            if attempt == 127 or not allocation_collision(error, port):
                 error.add_note(f'Owned test listener bind: 127.0.0.1:{port}; attempt {attempt + 1}')
                 raise

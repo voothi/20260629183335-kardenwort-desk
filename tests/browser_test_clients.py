@@ -3,6 +3,12 @@ from functools import wraps
 from playwright._impl._errors import TargetClosedError
 
 
+def owned_clients(request):
+    if request is not None and 'browser' in request.fixturenames:
+        return request.getfixturevalue('owned_browser_lifetime')
+    return None
+
+
 class BrowserClients:
     def __init__(self, browser, monkeypatch):
         self.contexts = []
@@ -34,10 +40,10 @@ class BrowserClients:
         def close_context(*args, **kwargs):
             if context in self.closed:
                 return
-            for page in list(context.pages):
-                self.attempt(page.close)
             self.attempt(lambda: self.cancel_routes(context))
             self.attempt(lambda: context.unroute_all(behavior='wait'))
+            for page in list(context.pages):
+                self.attempt(page.close)
             return close(*args, **kwargs)
 
         self.monkeypatch.setattr(context, 'close', close_context)

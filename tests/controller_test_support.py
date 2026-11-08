@@ -25,11 +25,20 @@ class OwnedTranslationServer(_BrowserTestHTTPServer, TranslationHTTPServer):
 
 
 class DeterministicTranslationHandler(TranslationRequestHandler):
-    """Replace only the unmanaged Google engine, after real HTTP routing."""
+    """Replace unmanaged engines after real provider routing, never controller/storage."""
+
+    def translate(self, provider, text, source, target):
+        self.server.provider_calls.append((text, source, target))
+        return '\n'.join(f'{provider}: {line}' for line in text.splitlines())
 
     def _translate_google(self, text, source, target, *args):
-        self.server.provider_calls.append((text, source, target))
-        return '\n'.join(f'google: {line}' for line in text.splitlines())
+        return self.translate('google', text, source, target)
+
+    def _translate_deepl(self, text, source, target, *args):
+        return self.translate('deepl', text, source, target)
+
+    def _translate_argos(self, text, source, target, *args):
+        return self.translate('argos', text, source, target)
 
 
 @contextmanager
@@ -99,4 +108,30 @@ def controller_world(tmp_path, request):
     """A fresh controller and real database per contract; no domain replacements."""
     with translation_service(DeterministicTranslationHandler) as translator:
         with controller_lifetime(tmp_path, translator, getattr(request, 'param', 'sqlite')) as world:
+            seed_cached_lookup_inputs(world[1])
             yield world
+
+
+def seed_cached_lookup_inputs(server):
+    """Explicit cache preconditions formerly inherited from earlier module cases."""
+    adapter = desk.get_storage_adapter(server.config, server.resolved_paths)
+    headers = ['TokenOrder', 'Quotation', 'WordSource', 'SentenceSourceIndex',
+               'SentenceSource', 'SentenceDestination', 'WordDestination']
+    for zid, word in [('20261108113001', 'apple'), ('20261108113002', 'dog')]:
+        adapter.save_session(session_zid=zid, slug=word, source_language='en', target_language='ru',
+            text_mode='single', source_raw_text=word, headers=headers,
+            data_rows=[['0', word, word, '1', word, f'cached: {word}', f'cached: {word}']],
+            text_provenance='cached:fixture', working_tsv_path=server.resolved_paths['results_dir'] / f'{zid}-{word}.en.tsv')
+
+
+def seed_toolbar_session(config, paths):
+    """Back the static toolbar's injected bootstrap with its real stored session."""
+    source, destination = 'Ein schneller Fuchs springt.', 'Быстрая лиса прыгает.'
+    headers = ['TokenOrder', 'Quotation', 'WordSourceInflectedForm', 'WordSource',
+               'WordSourcePOS', 'WordDestination', 'SentenceSourceIndex', 'SentenceSource', 'SentenceDestination']
+    rows = [['0', 'Fuchs', 'Fuchs', 'Fuchs', 'n.', 'лиса', '1', source, destination],
+            ['1', 'springt', 'springt', 'springen', 'v.', 'прыгает', '1', source, destination]]
+    adapter = desk.get_storage_adapter(config, paths)
+    adapter.save_session(session_zid='20261017230000', slug='ein-schneller-fuchs-springt',
+        source_language='de', target_language='ru', text_mode='single', source_raw_text=source,
+        headers=headers, data_rows=rows, text_provenance='cached:fixture')

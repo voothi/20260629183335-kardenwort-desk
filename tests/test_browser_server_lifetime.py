@@ -28,7 +28,7 @@ def controllers(tmp_path):
         for name in ('first', 'second'):
             owner = tmp_path / name
             owner.mkdir()
-            lifetime = running_controller.__wrapped__(owner)
+            lifetime = running_controller.__wrapped__(owner, None)
             owners.append(next(lifetime))
             lifetimes.callback(next, lifetime, None)
         yield owners
