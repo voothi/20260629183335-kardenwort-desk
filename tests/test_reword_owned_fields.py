@@ -16,7 +16,8 @@ RUN_PROVIDER = desk.run_headless_intellifiller
 
 
 def http_provider(world, monkeypatch, respond):
-    world.config.add_section('services')
+    if not world.config.has_section('services'):
+        world.config.add_section('services')
     world.config.set('services', 'intellifiller_server_url', 'http://fixture-provider.invalid')
     monkeypatch.setattr(desk, 'run_headless_intellifiller', RUN_PROVIDER)
     monkeypatch.setattr(desk, 'query_intellifiller_server', respond)
@@ -112,14 +113,14 @@ def test_later_occurrence_or_storage_failure_rolls_back_whole_batch(world, failu
 def test_provider_merges_context_against_current_transaction_record(world, monkeypatch):
     visuals, _ = occurrence_world(world)
     entered, release = threading.Event(), threading.Event()
-    original = world.provider.enrich
+    original = world.provider.query
 
     def held(*args, **kwargs):
         entered.set()
         assert release.wait(10)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(desk, 'run_headless_intellifiller', held)
+    monkeypatch.setattr(desk, 'query_intellifiller_server', held)
     with ThreadPoolExecutor(max_workers=1) as pool:
         pending = pool.submit(world.post, world.payload(
             target_coordinates=[dict(visual_idx=visuals[0])], sentence_idx=1))

@@ -1,0 +1,17 @@
+"""Strict JSONL record boundary for the configured word extractor."""
+import json
+
+
+def extraction_rows(stdout, headers):
+    records = [json.loads(line) for line in stdout.splitlines() if line.strip()]
+    if not records:
+        raise ValueError('Extractor returned no word records')
+    return [extraction_row(record, headers) for record in records]
+
+
+def extraction_row(record, headers):
+    if not isinstance(record, dict) or set(record) != set(headers):
+        raise ValueError('Extractor changed the requested column manifest')
+    if any(not isinstance(value, (str, int, float)) for value in record.values()):
+        raise ValueError('Extractor returned a non-scalar field')
+    return [str(record[name]) for name in headers]

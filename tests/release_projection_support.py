@@ -41,6 +41,8 @@ def checked_world(tmp_path, monkeypatch, backend, provider_name, request, record
     module = controller if provider_name == 'google' or backend == 'tsv' else desk
     method = 'translate_lemmas_fast_path' if provider_name == 'google' else 'run_headless_intellifiller'
     provider = world.provider.translate if provider_name == 'google' else world.provider.enrich
+    if provider_name == 'intellifiller' and backend == 'sqlite':
+        method, provider = 'query_intellifiller_server', world.provider.query
     monkeypatch.setattr(module, method, provider)
     clients = owned_clients(request)
     server = create_browser_test_server(RewordRequestHandler)

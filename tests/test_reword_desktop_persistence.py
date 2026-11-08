@@ -12,7 +12,8 @@ def open_generated_desktop(page, world, text):
     url = f'http://127.0.0.1:{world.port}'
     world.config.set('server', 'enabled', 'true')
     world.config.set('server', 'port', str(world.port))
-    world.config.add_section('rendering')
+    if not world.config.has_section('rendering'):
+        world.config.add_section('rendering')
     world.config.set('rendering', 'auto_save_on_edit', 'false')
     world.config.set('rendering', 'filter_selected_only', 'false')
     world.config.set('sentences_mode', 'enabled', 'true')

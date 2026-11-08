@@ -1008,7 +1008,22 @@ class EnrichmentQueue:
                 if self._inflight_lemmas.get(key) is fut:
                     del self._inflight_lemmas[key]
 
-    def _execute_enrich_lemma(
+    def _execute_enrich_lemma(self, lemma, language='de', prompt_name='', zid=None, trace_id=None):
+        if self.resolved_paths.get('storage_backend') != 'sqlite':
+            return self._execute_legacy_enrich_lemma(lemma, language, prompt_name, zid, trace_id)
+        from kardenwort_enrichment import request_batch
+        prompt = prompt_name or self.config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
+        batch = [dict(row_id=0, WordSource=lemma.strip())]
+        try:
+            result = request_batch(batch, prompt, language, self.config,
+                                   query_intellifiller_server, zid, trace_id)[0]
+        except ValueError as exc:
+            raise StructuredError(ErrorCode.DESK_FAILED, str(exc)) from exc
+        with self._lock:
+            self._cache[(lemma.strip(), language)] = dict(result)
+        return result
+
+    def _execute_legacy_enrich_lemma(
         self,
         lemma: str,
         language: str = "de",
@@ -1198,7 +1213,7 @@ class EnrichmentQueue:
                     }
 
             if not session_data:
-                t_cand = find_working_tsv(results_dir, session_zid, language, storage_adapter=storage_adapter)
+                t_cand = None if is_sqlite else find_working_tsv(results_dir, session_zid, language, storage_adapter=storage_adapter)
                 if t_cand and t_cand.exists():
                     c, h, dr = storage_adapter.load_tsv_rows(t_cand)
                     source_txt = t_cand.with_suffix('.txt')
@@ -1238,13 +1253,14 @@ class EnrichmentQueue:
             sess_lang = session_data["language"] or language
             sess_target = session_data["target_lang"] or target_lang
             role_fields = get_role_fields(mapping, headers) if mapping else {}
-            tsv_path = Path(session_data["tsv_path"]) if session_data.get("tsv_path") else (results_dir / f"{session_zid}.{sess_lang}.tsv" if results_dir else Path(f"{session_zid}.tsv"))
+            tsv_path = session_zid if is_sqlite else (Path(session_data["tsv_path"]) if session_data.get("tsv_path") else results_dir / f"{session_zid}.{sess_lang}.tsv")
 
             col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else (headers.index('WordSource') if 'WordSource' in headers else -1)
             col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else (headers.index('WordDestination') if 'WordDestination' in headers else -1)
             col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
             col_sentence_idx = headers.index(role_fields['sentence_index']) if 'sentence_index' in role_fields and role_fields['sentence_index'] in headers else (headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1)
             col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+            occurrence_keys = reword.row_keys(data_rows, headers, role_fields.get('sentence_index', 'SentenceSourceIndex')) if is_sqlite else None
 
             # Emit initial source stage if not already emitted
             sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
@@ -1424,7 +1440,7 @@ class EnrichmentQueue:
                             for row_idx, row in enumerate(data_rows):
                                 if col_lemma != -1 and len(row) > col_lemma and col_word_dest != -1 and len(row) > col_word_dest and row[col_word_dest].strip():
                                     t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
-                                    updates.append({"token_order": t_ord, "field": "word_destination", "value": row[col_word_dest]})
+                                    updates.append(dict(sentence_index=occurrence_keys[row_idx][0], token_order=t_ord, field="word_destination", value=row[col_word_dest]))
                             if updates:
                                 storage_adapter.batch_update_words(session_zid=session_zid, updates_list=updates, zid=req_zid)
                         else:
@@ -1446,6 +1462,8 @@ class EnrichmentQueue:
                 if trans_order == 'bottom_to_top':
                     lemmas_to_translate = list(reversed(lemmas_to_translate))
 
+                lemma_chain, _ = resolve_provider_chain(self.config, task_type='lemma') if self.config else (['google'], 'chain')
+                lemma_provider = lemma_chain[0] if lemma_chain else 'google'
                 translated_map: Dict[str, str] = {}
                 if lemmas_to_translate:
                     lemma_chain, _ = resolve_provider_chain(self.config, task_type='lemma') if self.config else (['google'], 'chain')
@@ -1476,6 +1494,7 @@ class EnrichmentQueue:
                             provider=lemma_provider,
                             zid=session_zid,
                         )
+                        reword.fast_provider_results(chunk, chunk_trans)
                         if chunk_trans:
                             chunk_prov = getattr(chunk_trans, 'provenance', None)
                             if chunk_prov:
@@ -1509,8 +1528,10 @@ class EnrichmentQueue:
                                             row.append("")
                                         row[col_word_dest] = t_val
                                         t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
-                                        updates.append({"token_order": t_ord, "field": "word_destination", "value": t_val})
-                                        updates.append({"token_order": t_ord, "field": "word_provenance", "value": lemma_prov_tag})
+                                        if is_sqlite:
+                                            updates.append(dict(sentence_index=occurrence_keys[row_idx][0],
+                                                token_order=occurrence_keys[row_idx][1],
+                                                updates=dict(word_destination=t_val, word_provenance=lemma_prov_tag)))
 
                         if is_sqlite:
                             if updates:
@@ -1962,7 +1983,7 @@ class SessionArbiter:
                 session["fingerprint"] = res["fingerprint"]
                 stored_path = session.get('tsv_path') or res.get('tsv_path')
                 if adapter.backend_name == 'sqlite' or (stored_path and Path(stored_path).is_file()):
-                    _, current_headers, current_rows = adapter.load_tsv_rows(stored_path or session_zid)
+                    _, current_headers, current_rows = adapter.load_tsv_rows(session_zid if adapter.backend_name == 'sqlite' else stored_path)
                     session['headers'] = current_headers
                     session['data_rows'] = current_rows
 
@@ -1988,6 +2009,8 @@ class SessionArbiter:
             return dict(self.sessions.get(session_zid, {}))
 
     def _retext_path(self, adapter, session_zid, memo, path=None):
+        if adapter.backend_name == 'sqlite':
+            return session_zid
         candidate = path or memo.get('tsv_path')
         if candidate:
             return Path(candidate)
@@ -2284,7 +2307,7 @@ class SessionArbiter:
         is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
         results_dir = resolve_results_dir(self.resolved_paths, self.config)
-        tsv_path = find_working_tsv(results_dir, session_zid, lang, storage_adapter=storage_adapter)
+        tsv_path = session_zid if is_sqlite else find_working_tsv(results_dir, session_zid, lang, storage_adapter=storage_adapter)
         if not tsv_path:
             tsv_path = results_dir / f"{session_zid}.{lang}.tsv"
 
@@ -2700,6 +2723,7 @@ class SessionArbiter:
         zid: Optional[str] = None,
         trace_id: Optional[str] = None,
         token_orders: Optional[List[Any]] = None,
+        target_coordinates=None,
     ) -> Dict[str, Any]:
         req_zid = zid or generate_unique_zid()
         eff_trace_id = trace_id or f"{session_zid}:retry"
@@ -2709,7 +2733,7 @@ class SessionArbiter:
         storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
         is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
-        tsv_path = None
+        tsv_path = session_zid if is_sqlite else None
         with self._lock:
             if session_zid in self.sessions:
                 sess = self.sessions[session_zid]
@@ -2717,7 +2741,7 @@ class SessionArbiter:
                     lang = sess["language"]
                 if sess.get("target_lang"):
                     target_l = sess["target_lang"]
-                if sess.get("tsv_path"):
+                if not is_sqlite and sess.get("tsv_path"):
                     cand = Path(sess["tsv_path"])
                     if cand.exists() or is_sqlite:
                         tsv_path = cand
@@ -2751,31 +2775,42 @@ class SessionArbiter:
         if col_lemma == -1:
             raise StructuredError(ErrorCode.DESK_FAILED, f"Lemma column not found for session {session_zid}")
 
-        target_indices = []
-        if token_orders is not None and len(token_orders) > 0:
-            token_orders_set = {str(to).strip() for to in token_orders if to is not None and str(to).strip() != ""}
-            for idx, r in enumerate(data_rows):
-                t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else str(idx)
-                if t_ord in token_orders_set:
-                    target_indices.append(idx)
-        elif row_ids is not None and len(row_ids) > 0:
-            for r in row_ids:
-                if str(r).isdigit() and 0 <= int(r) < len(data_rows):
-                    target_indices.append(int(r))
-                else:
-                    r_str = str(r).strip()
-                    for idx, row in enumerate(data_rows):
-                        t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(idx)
-                        if t_ord == r_str:
-                            target_indices.append(idx)
+        if is_sqlite:
+            source = storage_adapter.restore_session(session_zid).get('source_text', '')
+            selected = row_ids
+            if row_ids is None and token_orders is None and target_coordinates is None:
+                selected = [index for index, row in enumerate(data_rows)
+                            if col_word_dest == -1 or not row[col_word_dest].strip()
+                            or row[col_word_dest] == '[FAILED]' or 'skeleton-loader' in row[col_word_dest]]
+            selection = resolve_reword_request(data_rows, headers, role_fields, source, self.config,
+                targets=target_coordinates, selected_rows=selected, token_orders=token_orders)
+            target_indices = list(selection.rows)
         else:
-            for idx, r in enumerate(data_rows):
-                if len(r) > col_lemma and r[col_lemma].strip():
-                    dest_val = r[col_word_dest].strip() if col_word_dest != -1 and len(r) > col_word_dest else ""
-                    if not dest_val or 'skeleton-loader' in dest_val or dest_val == '[FAILED]':
+            target_indices = []
+            if token_orders is not None and len(token_orders) > 0:
+                token_orders_set = {str(to).strip() for to in token_orders if to is not None and str(to).strip() != ""}
+                for idx, r in enumerate(data_rows):
+                    t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else str(idx)
+                    if t_ord in token_orders_set:
                         target_indices.append(idx)
+            elif row_ids is not None and len(row_ids) > 0:
+                for r in row_ids:
+                    if str(r).isdigit() and 0 <= int(r) < len(data_rows):
+                        target_indices.append(int(r))
+                    else:
+                        r_str = str(r).strip()
+                        for idx, row in enumerate(data_rows):
+                            t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(idx)
+                            if t_ord == r_str:
+                                target_indices.append(idx)
+            else:
+                for idx, r in enumerate(data_rows):
+                    if len(r) > col_lemma and r[col_lemma].strip():
+                        dest_val = r[col_word_dest].strip() if col_word_dest != -1 and len(r) > col_word_dest else ""
+                        if not dest_val or 'skeleton-loader' in dest_val or dest_val == '[FAILED]':
+                            target_indices.append(idx)
 
-        target_indices = list(dict.fromkeys(target_indices))
+            target_indices = list(dict.fromkeys(target_indices))
 
         lemmas_to_retry = []
         seen = set()
@@ -2801,6 +2836,7 @@ class SessionArbiter:
                     self.resolved_paths,
                     provider,
                 )
+                reword.fast_provider_results(lemmas_to_retry, translated_map)
                 fast_prov = getattr(translated_map, 'provenance', None) or f"live:{provider}"
             except Exception as e:
                 logger.error(f"Retry translation failed: {e}")
@@ -2825,14 +2861,13 @@ class SessionArbiter:
                                 row.append("")
                             row[col_word_dest] = t_val
                             t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
-                            updates.append({"token_order": t_ord, "field": "word_destination", "value": t_val})
+                            if is_sqlite:
+                                updates.append(dict(sentence_index=selection.keys[selection.rows.index(row_idx)][0],
+                                    token_order=t_ord, updates=dict(word_destination=t_val, word_provenance=fast_prov)))
 
             if is_sqlite:
                 if updates:
-                    try:
-                        storage_adapter.batch_update_words(session_zid=session_zid, updates_list=updates, zid=req_zid)
-                    except Exception as e:
-                        logger.warning(f"Failed to batch update words during retry for session {session_zid}: {e}")
+                    storage_adapter.batch_update_words(session_zid=session_zid, updates_list=updates, zid=req_zid)
             else:
                 with storage_adapter.file_lock(tsv_path):
                     storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
@@ -3453,22 +3488,20 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if not session_zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
 
-            row_ids = body.get('row_ids') or body.get('selected_rows') or []
-            if isinstance(row_ids, (int, str)) and str(row_ids).isdigit():
+            row_ids = body.get('row_ids', body.get('selected_rows'))
+            if isinstance(row_ids, (int, str)) and not isinstance(row_ids, bool) and str(row_ids).isdigit():
                 row_ids = [int(row_ids)]
-            elif not isinstance(row_ids, list):
-                row_ids = []
-            row_ids = [int(r) for r in row_ids if str(r).isdigit() or isinstance(r, int)]
             token_orders = body.get('token_orders')
 
             res = self.server.arbiter.retry_session_rows(
                 session_zid=session_zid,
-                row_ids=row_ids if row_ids else None,
+                row_ids=row_ids,
                 language=body.get('language'),
                 target_lang=body.get('target_lang'),
                 zid=body.get('zid'),
                 trace_id=body.get('trace_id'),
                 token_orders=token_orders,
+                target_coordinates=body.get('target_coordinates'),
             )
             self._send_json(200, res)
             return
@@ -3708,7 +3741,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             storage_adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
             is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
-            tsv_path = find_working_tsv(results_dir, zid) if results_dir else None
+            tsv_path = find_working_tsv(results_dir, zid) if results_dir and not is_sqlite else None
             session_found = False
             is_busy = False
             restored = None
@@ -3734,7 +3767,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     restored = storage_adapter.restore_session(zid, results_dir=results_dir)
                     if restored:
                         session_found = True
-                        if results_dir and results_dir.exists():
+                        if not is_sqlite and results_dir and results_dir.exists():
                             possible_locks = list(results_dir.glob(f"{zid}*.lock"))
                             for lk in possible_locks:
                                 if check_coordination_busy(lk):

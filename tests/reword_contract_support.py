@@ -35,9 +35,14 @@ class ProviderResponse:
         self.calls = []
         self.reverse = False
 
-    def translate(self, lemmas, **kwargs):
+    def translate(self, lemmas, *args, **kwargs):
         self.calls.append(list(lemmas))
         return {lemma: 'fresh-' + lemma for lemma in lemmas}
+
+    def query(self, rows, **kwargs):
+        self.calls.append([{key: value for key, value in row.items() if key != 'row_id'} for row in rows])
+        enriched = [dict(row_id=row['row_id'], WordDestination='fresh-' + row['WordSource']) for row in rows]
+        return dict(status='success', enriched_rows=list(reversed(enriched)) if self.reverse else enriched)
 
     def enrich(self, tsv_path, *args, selected_rows=None, **kwargs):
         comments, headers, rows = desk.load_tsv_rows(tsv_path)
@@ -71,6 +76,7 @@ class RewordWorld:
             'wordfill': {'enabled': 'false'}, 'sentences_mode': {'delivery_mode': 'container'},
             'triggers': {'run_text_translation': 'manual', 'run_lemma_base_translation': 'manual',
                          'run_lemma_enrichment': 'manual'},
+            'services': {'intellifiller_server_url': 'http://fixture-provider.invalid'},
             'server': {'api_key': TOKEN}, 'environment': {'kardenwort_workspace': str(owner)},
         })
         self.paths = dict(sqlite_db_path=owner / 'fixture.db', storage_backend=backend,
@@ -194,7 +200,9 @@ def world(tmp_path, monkeypatch, backend, provider_name, request):
         monkeypatch.setattr(controller, 'translate_lemmas_fast_path', world.provider.translate)
     else:
         module = desk if backend == 'sqlite' else controller
-        monkeypatch.setattr(module, 'run_headless_intellifiller', world.provider.enrich)
+        method = 'query_intellifiller_server' if backend == 'sqlite' else 'run_headless_intellifiller'
+        provider = world.provider.query if backend == 'sqlite' else world.provider.enrich
+        monkeypatch.setattr(module, method, provider)
     clients = owned_clients(request)
     server = create_browser_test_server(RewordRequestHandler)
     server.daemon_threads = False

@@ -3973,21 +3973,8 @@ class SqliteStorageAdapter(StorageAdapter):
         with TraceTimer("sqlite_restore", zid, self.config, self.resolved_paths):
             bundle = self.db.get_session_bundle(zid, parse_json=True, zid=zid)
 
-            if not bundle or not bundle.get("session"):
-                fallback = True
-                if self.resolved_paths and "storage_fallback_to_tsv" in self.resolved_paths:
-                    fallback = self.resolved_paths["storage_fallback_to_tsv"]
-                elif self.config and hasattr(self.config, "getboolean"):
-                    fallback = self.config.getboolean(SEC_STORAGE, "fallback_to_tsv", fallback=True)
-
-                if fallback:
-                    logger.info(f"Session ZID '{zid}' not found in SQLite. Falling back to legacy TSV.")
-                    return self._tsv_fallback.restore_session(zid, results_dir=results_dir, **kwargs)
-                else:
-                    raise StructuredError(
-                        ErrorCode.NOT_FOUND,
-                        f"Session with ZID '{zid}' not found in SQLite database.",
-                    )
+            if not bundle or not bundle.get('session'):
+                raise StructuredError(ErrorCode.NOT_FOUND, f"Session '{zid}' not found in SQLite database")
 
             session = bundle["session"]
             db_sentences = bundle.get("sentences", [])
@@ -4417,6 +4404,9 @@ class SqliteStorageAdapter(StorageAdapter):
         tsv_path: Path,
         **kwargs,
     ) -> Tuple[List[str], List[str], List[List[str]]]:
+        if isinstance(tsv_path, str) and re.fullmatch(r'[0-9]{14}', tsv_path):
+            restored = self.restore_session(tsv_path)
+            return restored.get('comments', []), *reword.restored_manifest_rows(restored)
         if tsv_path:
             p = Path(tsv_path)
             if p.exists():
@@ -4465,9 +4455,9 @@ class SqliteStorageAdapter(StorageAdapter):
         return self._tsv_fallback.load_tsv_rows(tsv_path)
 
     @contextlib.contextmanager
-    def file_lock(self, file_path: Path):
-        with self._tsv_fallback.file_lock(file_path):
-            yield
+    def file_lock(self, file_path):
+        # SQLite transactions own concurrency; file identities cannot lock SQL records.
+        yield
 
     def update_word(
         self,
@@ -4762,22 +4752,15 @@ class SqliteStorageAdapter(StorageAdapter):
             visual_indices=visual_indices, all_rows=selected_rows is None)
         if not selection.rows:
             return True
+        from kardenwort_enrichment import enrich_rows
         scratch = reword_scratch_rows(rows, headers, roles, selection, source)
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / f'{session_zid}-ephemeral.tsv'
-            save_tsv_rows_safely(path, restored.get('comments', []), headers, scratch)
-            success = run_headless_intellifiller(tsv_path=path, prompt_name=prompt_name,
-                config=self.config, resolved_paths=self.resolved_paths,
-                selected_rows=list(selection.rows), reprocess=reprocess, zid=zid or session_zid,
-                trace_id=trace_id)
-            if not success:
-                return False
-            _, updated_headers, updated_rows = load_tsv_rows(path)
-            output = checked_provider_rows(rows, headers, updated_rows, updated_headers, roles)
-            changes = reword.provider_changes(rows, headers, output, updated_headers, selection,
-                                              roles, getattr(success, 'fields', None))
-            commit_reword_sqlite(self, session_zid, changes, selection, roles, rows, headers,
-                                 source, self.config, zid or session_zid)
+        updated_headers, updated_rows, fields = enrich_rows(
+            scratch, headers, selection, restored.get('source_language'), prompt_name,
+            self.config, query_intellifiller_server, zid or session_zid, trace_id)
+        output = checked_provider_rows(rows, headers, updated_rows, updated_headers, roles)
+        changes = reword.provider_changes(rows, headers, output, updated_headers, selection, roles, fields)
+        commit_reword_sqlite(self, session_zid, changes, selection, roles, rows, headers,
+                             source, self.config, zid or session_zid)
         return True
 
     def delete_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
@@ -6523,6 +6506,15 @@ _provider_cooldowns: Dict[str, float] = {}
 _cooldown_lock = threading.Lock()
 _COOLDOWN_FILE_NAME = "provider_cooldowns.json"
 
+def sqlite_provider_database(config=None, resolved_paths=None):
+    backend = (resolved_paths or {}).get('storage_backend')
+    if backend is None and config is not None:
+        backend = config.get(SEC_STORAGE, 'backend', fallback='tsv')
+    if backend == 'sqlite':
+        return get_storage_adapter(config, resolved_paths).db
+    return None
+
+
 def _get_shared_cooldown_file_path(config=None, resolved_paths=None) -> Path:
     results_dir = resolve_results_dir(resolved_paths, config) if 'resolve_results_dir' in globals() else Path('results').resolve()
     try:
@@ -6568,6 +6560,11 @@ def record_provider_cooldown(provider: str, duration: float = DEFAULT_PROVIDER_C
         except Exception:
             pass
     expire_at = time.time() + eff_duration
+    database = sqlite_provider_database(config, resolved_paths)
+    if database is not None:
+        from kardenwort_provider_state import set_cooldown
+        set_cooldown(database, key, expire_at)
+        return
     with _cooldown_lock:
         _provider_cooldowns[key] = expire_at
         try:
@@ -6582,6 +6579,10 @@ def record_provider_cooldown(provider: str, duration: float = DEFAULT_PROVIDER_C
 
 def is_provider_cooled_down(provider: str, config=None, resolved_paths=None, task_type: Optional[str] = None) -> bool:
     """Check whether a provider is currently cooled down, checking in-memory and shared process store."""
+    database = sqlite_provider_database(config, resolved_paths)
+    if database is not None:
+        from kardenwort_provider_state import remaining
+        return remaining(database, (provider or '').strip().lower(), task_type, time.time()) > 0
     if not provider:
         return False
     p_norm = provider.strip().lower()
@@ -6618,6 +6619,11 @@ def is_provider_cooled_down(provider: str, config=None, resolved_paths=None, tas
 
 def clear_provider_cooldowns(config=None, resolved_paths=None) -> None:
     """Clear all active provider cooldowns both in memory and in shared store."""
+    database = sqlite_provider_database(config, resolved_paths)
+    if database is not None:
+        from kardenwort_provider_state import clear
+        clear(database)
+        return
     with _cooldown_lock:
         _provider_cooldowns.clear()
         try:
@@ -6632,6 +6638,10 @@ def clear_provider_cooldowns(config=None, resolved_paths=None) -> None:
 
 def get_provider_cooldown_remaining(provider: str, config=None, resolved_paths=None, task_type: Optional[str] = None) -> float:
     """Get remaining cooldown duration in seconds, or 0.0 if not cooled down."""
+    database = sqlite_provider_database(config, resolved_paths)
+    if database is not None:
+        from kardenwort_provider_state import remaining
+        return remaining(database, (provider or '').strip().lower(), task_type, time.time())
     if not provider:
         return 0.0
     p_norm = provider.strip().lower()
@@ -6780,6 +6790,19 @@ def record_session_active_provider(
 ) -> None:
     if not zid:
         return
+    database = sqlite_provider_database(config, resolved_paths)
+    if database is not None:
+        from kardenwort_provider_state import set_providers
+        values = {}
+        if text or (task == 'text' and provider):
+            values['active_text_provider'] = str(text or provider).strip().lower()
+        if lemma or (task == 'lemma' and provider):
+            values['active_lemma_provider'] = str(lemma or provider).strip().lower()
+        active = provider or kwargs.get('active_provider') or lemma or text
+        if active:
+            values['active_provider'] = str(active).strip().lower()
+        set_providers(database, str(zid), values)
+        return
     with _session_providers_lock:
         entry = _active_session_providers.setdefault(str(zid), {})
         if text:
@@ -6809,6 +6832,10 @@ def record_session_active_provider(
 def get_session_active_providers(zid: str, config=None, resolved_paths=None) -> Dict[str, str]:
     if not zid:
         return {}
+    database = sqlite_provider_database(config, resolved_paths)
+    if database is not None:
+        from kardenwort_provider_state import providers
+        return providers(database, str(zid))
     with _session_providers_lock:
         entry = dict(_active_session_providers.get(str(zid), {}))
     if not entry:
@@ -8635,6 +8662,8 @@ def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, l
                 logger.info(f"Progressive translation task successfully enqueued in controller daemon for {zid}")
                 return True
     except Exception as e:
+        if sqlite_provider_database(config, resolved_paths) is not None:
+            raise StructuredError(ErrorCode.DESK_FAILED, 'Controller progressive enqueue failed') from e
         logger.debug(f"Controller daemon not available or enqueue failed ({e}); falling back to detached subprocess")
 
     python_exe = (resolved_paths.get('kardenwort_python') if isinstance(resolved_paths, dict) else None) or sys.executable
@@ -8799,7 +8828,9 @@ def generate_und_tsv(text: str, text_mode: str, out_file_path: Path, mapping: Di
             data_rows.append(row)
 
     comments = ["# Generated by Kardenwort Desk (und)"]
-    save_tsv_rows_safely(out_file_path, comments, headers, data_rows)
+    if out_file_path is not None:
+        save_tsv_rows_safely(out_file_path, comments, headers, data_rows)
+    return comments, headers, data_rows
 
 
 def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, *, ttl_seconds, cache_key, text_mode='single', will_split=False):
@@ -8830,7 +8861,7 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
         results_dir.mkdir(parents=True, exist_ok=True)
         if working_tsv_path.exists():
             if ttl_seconds <= 0 or (time.time() - working_tsv_path.stat().st_mtime) <= ttl_seconds:
-                return working_tsv_path
+                return str(zid) if is_sqlite else working_tsv_path
 
         if ttl_seconds > 0:
             m = re.match(r'^\d{14}-(.+)', cache_key)
@@ -8858,7 +8889,7 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
             )
             if cached_bundle and cached_bundle.get("session"):
                 cached_zid = cached_bundle["session"].get("zid")
-                return results_dir / f"{cached_zid}-{slug_part}.{language}.tsv"
+                return str(cached_zid)
 
     stem = cache_key
     if stem.endswith('.tsv'):
@@ -8902,17 +8933,12 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
         combine_source_words = workflow_res.combine_source_words
 
         if is_sqlite:
-            temp_dir_obj = tempfile.TemporaryDirectory()
-            temp_dir_path = Path(temp_dir_obj.name)
+            temp_content = text
             if eff_mode == 'single':
-                split_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
-                temp_content = "\n".join(split_lines)
-            else:
-                temp_content = text
-            temp_src_file = temp_dir_path / f"{stem}.txt"
-            temp_src_file.write_text(temp_content, encoding='utf-8')
-            text_file_to_pass = temp_src_file
-            out_file_to_pass = temp_dir_path / cache_key
+                temp_content = '\n'.join(split_single_mode_text(text, wrap_max_chars,
+                    abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks))
+            text_file_to_pass = None
+            out_file_to_pass = None
         else:
             text_file_to_pass = source_text_path
             out_file_to_pass = working_tsv_path
@@ -8932,7 +8958,7 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
                 text_file_to_pass = temp_file_path
 
         if language == "und":
-            generate_und_tsv(text, eff_mode, out_file_to_pass, mapping, config, wrap_max_chars=wrap_max_chars)
+            comments, headers, data_rows = generate_und_tsv(text, eff_mode, out_file_to_pass, mapping, config, wrap_max_chars=wrap_max_chars)
         else:
             use_simplemma_correction = config.getboolean(SEC_SETTINGS, 'use_simplemma_correction', fallback=False)
             simplemma_after_spacy = config.getboolean(SEC_SETTINGS, 'simplemma_after_spacy', fallback=False)
@@ -8954,6 +8980,12 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
                 "--text1-file", str(text_file_to_pass),
                 "--tts-destination-lang", target_lang
             ]
+
+            if is_sqlite:
+                for option in ('--output-file', '--text1-file'):
+                    index = cmd.index(option)
+                    del cmd[index:index + 2]
+                cmd.append('--structured-output')
 
             if use_simplemma_correction:
                 cmd.append("--use-simplemma-correction")
@@ -9033,7 +9065,12 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
 
             logger.info(f"Running kardenwort.py: {' '.join(cmd)}")
             try:
-                subprocess.run(cmd, check=True, timeout=kardenwort_timeout, env=env, capture_output=True, text=True, encoding='utf-8')
+                result = subprocess.run(cmd, check=True, timeout=kardenwort_timeout, env=env,
+                    capture_output=True, text=True, encoding='utf-8', **({'input': temp_content} if is_sqlite else {}))
+                if is_sqlite:
+                    from kardenwort_extraction import extraction_rows
+                    comments, headers = [], fields
+                    data_rows = extraction_rows(result.stdout, headers)
             except subprocess.TimeoutExpired as e:
                 print_structured_error("TIMEOUT", f"kardenwort.py timed out after {kardenwort_timeout} seconds")
                 sys.exit(1)
@@ -9048,9 +9085,10 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
             elif sbc.context_mode == eff_mode:
                 apply_padding = True
 
-        if out_file_to_pass.exists():
+        if is_sqlite or out_file_to_pass.exists():
             try:
-                comments, headers, data_rows = load_tsv_rows(out_file_to_pass)
+                if not is_sqlite:
+                    comments, headers, data_rows = load_tsv_rows(out_file_to_pass)
                 role_fields = get_role_fields(mapping, headers)
                 col_src_idx = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
                 col_src_sent = headers.index(role_fields.get('sentence_source', 'SentenceSource')) if role_fields.get('sentence_source', 'SentenceSource') in headers else -1
@@ -9088,6 +9126,8 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
                     if apply_padding:
                         save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
             except Exception as e:
+                if is_sqlite:
+                    raise StructuredError(ErrorCode.DESK_FAILED, str(e)) from e
                 logger.error(f"Failed to process prepared TSV tokens: {e}")
     finally:
         if temp_file_path is not None:
@@ -9101,7 +9141,7 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
             except Exception:
                 pass
 
-    return working_tsv_path
+    return str(zid) if is_sqlite else working_tsv_path
 
 def is_complex_inflected_form(form, apostrophe_chars):
     if any(c in form for c in apostrophe_chars) or '-' in form or ' ' in form:
@@ -10575,18 +10615,18 @@ html, body {{
             )
 
     if is_mismatch:
-        working_tsv_path = Path(tsv_path) if tsv_path else (results_dir / f"{zid}-{slug}.{language}.tsv")
+        working_tsv_path = str(extract_zid(tsv_path) or zid) if is_sqlite else (Path(tsv_path) if tsv_path else results_dir / f"{zid}-{slug}.{language}.tsv")
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file']) if (resolved_paths and 'anki_mapping_file' in resolved_paths) else {}
         comments = []
         headers = ["WordSource", "WordDestination", "WordSourceInflectedForm", "WordSourceIPA", "WordSourceMorphologyAI", "DeskSelected"]
         data_rows = []
     elif (tsv_path and (Path(tsv_path).exists() or is_sqlite)) or (is_sqlite and session_exists_in_storage):
-        working_tsv_path = Path(tsv_path) if tsv_path else (results_dir / f"{zid}-{slug}.{language}.tsv")
+        working_tsv_path = str(extract_zid(tsv_path) or zid) if is_sqlite else (Path(tsv_path) if tsv_path else results_dir / f"{zid}-{slug}.{language}.tsv")
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
     elif cached_session_bundle and cached_session_bundle.get("session"):
         cached_zid = cached_session_bundle["session"].get("zid")
-        working_tsv_path = results_dir / f"{cached_zid}-{slug}.{language}.tsv"
+        working_tsv_path = str(cached_zid) if is_sqlite else results_dir / f"{cached_zid}-{slug}.{language}.tsv"
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
     else:
@@ -10598,7 +10638,7 @@ html, body {{
         comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
 
     tsv_slug = slug
-    tsv_match = re.match(r'^\d{14}-(.*?)(?:\.[a-z]{2})?\.tsv$', working_tsv_path.name, re.IGNORECASE)
+    tsv_match = re.match(r'^\d{14}-(.*?)(?:\.[a-z]{2})?\.tsv$', (str(working_tsv_path) if is_sqlite else working_tsv_path.name), re.IGNORECASE)
     if tsv_match:
         tsv_slug = tsv_match.group(1)
 
@@ -10772,8 +10812,8 @@ html, body {{
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
 
     is_progressive = display_mode_val == 'progressive'
-    updates_dir = working_tsv_path.parent / f"{working_tsv_path.stem}.updates"
-    if _file_updates_enabled(config) and is_progressive and updates_dir.exists():
+    updates_dir = None if is_sqlite else working_tsv_path.parent / f"{working_tsv_path.stem}.updates"
+    if updates_dir is not None and _file_updates_enabled(config) and is_progressive and updates_dir.exists():
         try:
             for js_file in updates_dir.glob("*.js"):
                 with open(js_file, 'r', encoding='utf-8') as f:
@@ -10795,7 +10835,7 @@ html, body {{
     storage_adapter = get_storage_adapter(config, resolved_paths)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
-    source_text_path = working_tsv_path.with_suffix('.txt')
+    source_text_path = None if is_sqlite else working_tsv_path.with_suffix('.txt')
     if not is_sqlite and not is_mismatch:
         if eff_mode == 'single':
             source_text_path.write_text(text, encoding='utf-8')
@@ -11002,7 +11042,7 @@ html, body {{
         sentence_provenance = getattr(sentence_translations_raw, 'provenance', f"live:{main_text_provider}")
     elif 'translated_paragraph' in locals() and translated_paragraph and str(translated_paragraph).strip() and not translation_fast_failed:
         sentence_provenance = getattr(translated_paragraph, 'provenance', f"live:{main_text_provider}")
-        if translation_text_path.exists():
+        if not is_sqlite and translation_text_path.exists():
             translation_lines = translation_text_path.read_text(encoding='utf-8').splitlines()
             if eff_mode == 'single':
                 sentence_translations[0] = " ".join(translation_lines)
@@ -11020,7 +11060,7 @@ html, body {{
                         c_idx += 1
                     else:
                         sentence_translations[a_idx] = ""
-    elif translation_text_path.exists():
+    elif not is_sqlite and translation_text_path.exists():
         stored_sent_prov = next((s.get("text_provenance") for s in db_sents if s.get("text_provenance")), None) if (is_sqlite and db_sents) else None
         sentence_provenance = stored_sent_prov if stored_sent_prov else ("cached:file" if not is_sqlite else None)
         translation_lines = translation_text_path.read_text(encoding='utf-8').splitlines()
@@ -11114,13 +11154,19 @@ html, body {{
                         )
                     worker_launched = True
                 except Exception as e:
+                    if is_sqlite:
+                        raise
                     logger.error(f"Failed to launch progressive worker async: {e}")
                     worker_launched = False
         else:
             # Monolithic mode enrichment
             if run_enrich == 'auto' and enrich_provider == 'intellifiller' and language != 'und' and prompt_name:
-                run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
-                comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+                if is_sqlite:
+                    storage_adapter.enrich_session_intellifiller(zid, prompt_name, reprocess=True, zid=zid)
+                    comments, headers, data_rows = storage_adapter.load_tsv_rows(str(zid))
+                else:
+                    run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
+                    comments, headers, data_rows = load_tsv_rows(working_tsv_path)
 
     if is_progressive and not worker_launched:
         write_update_js(working_tsv_path, data_rows, headers, role_fields, stage="finished", empty_payload=True, row_provenances=row_provenances, config=config)
@@ -12705,6 +12751,8 @@ def run_lookup_flow(
         effective_allow_fallback = bool(allow_checksum_fallback)
 
     storage_adapter = get_storage_adapter(config, resolved_paths)
+    if storage_adapter.backend_name == 'sqlite':
+        working_tsv_path = str(zid)
 
     sentence_translations = None
     if effective_strategy != "none" and hasattr(storage_adapter, 'find_sentence_by_strategy'):
@@ -12754,7 +12802,7 @@ def run_lookup_flow(
                         try:
                             restored = storage_adapter.restore_session(cached_zid)
                             if restored and restored.get("data_rows"):
-                                cached_tsv_path = results_dir / f"{cached_zid}-{slug}.{language}.tsv"
+                                cached_tsv_path = str(cached_zid)
                                 return LookupResultTuple(
                                     restored.get("comments", []),
                                     *reword.restored_manifest_rows(restored),
@@ -14479,7 +14527,7 @@ def core_lookup(
         slug = generate_slug(text)
         working_tsv_path = results_dir / f"{zid}-{slug}.{language}.tsv"
 
-    session_zid = extract_zid(working_tsv_path) or working_tsv_path.stem
+    session_zid = extract_zid(working_tsv_path) or Path(working_tsv_path).stem
     storage_adapter = get_storage_adapter(config, resolved_paths)
     if storage_adapter.backend_name == 'sqlite' and session_zid:
         try:
@@ -15673,19 +15721,19 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     import time
     global _update_seq_counter
 
+    relational = isinstance(tsv_path, str) and re.fullmatch(r'[0-9]{14}', tsv_path) is not None
     if zid is None and tsv_path:
-        m = re.match(r"^(\d{14})", tsv_path.name)
-        if m:
-            zid = m.group(1)
+        zid = extract_zid(tsv_path)
     if not tsv_path:
         return None
-    tsv_path = Path(tsv_path)
-    if not tsv_path.is_absolute() and not str(tsv_path).startswith((".", "/", "\\")):
-        return None
-
     from kardenwort_delivery import delivery_sinks
-    sinks = delivery_sinks(config, diskless=bool(extra_kwargs.get('diskless')))
-    updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
+    sinks = delivery_sinks(config, diskless=relational or bool(extra_kwargs.get('diskless')))
+    updates_dir = None
+    if not relational:
+        tsv_path = Path(tsv_path)
+        if not tsv_path.is_absolute() and not str(tsv_path).startswith(('.', '/', '\\')):
+            return None
+        updates_dir = tsv_path.parent / f'{tsv_path.stem}.updates'
     update_js_path = None
 
     if empty_payload:
@@ -15751,7 +15799,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                                 src_raw = bundle.get("session", {}).get("source_raw_text") if bundle else None
                                 if src_raw and ('\n' in src_raw or '\r' in src_raw):
                                     is_single = False
-                                elif tsv_path and tsv_path.with_suffix('.txt').exists():
+                                elif not relational and tsv_path and tsv_path.with_suffix('.txt').exists():
                                     try:
                                         txt = tsv_path.with_suffix('.txt').read_text(encoding='utf-8')
                                         if '\n' in txt or '\r' in txt:
@@ -15766,7 +15814,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                     logger.debug(f"Failed to read clean translation from SQLite in write_update_js: {e}")
 
             if translated_text is None:
-                if tsv_path:
+                if not relational and tsv_path:
                     try:
                         parent = tsv_path.parent
                         source_stem_full = tsv_path.stem
@@ -15821,7 +15869,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                         stripped_src = source_text.strip()
                         if '\n' in stripped_src or '\r' in stripped_src:
                             is_single = False
-                    else:
+                    elif not relational:
                         source_txt_path = tsv_path.with_suffix('.txt')
                         if source_txt_path.exists():
                             try:
@@ -17259,6 +17307,8 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
 
     if storage_adapter.backend_name == 'sqlite' and session_zid:
         bundle = storage_adapter.load_session(session_zid)
+        if not bundle or not bundle.get('session'):
+            raise StructuredError(ErrorCode.NOT_FOUND, 'SQLite edit session not found')
         if bundle and bundle.get("session"):
             mapping_file = resolved_paths.get('anki_mapping_file') if resolved_paths else None
             mapping = load_anki_mapping(mapping_file) if mapping_file else None
@@ -17326,33 +17376,6 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
 
             updated_restored = storage_adapter.restore_session(session_zid)
             new_fingerprint = compute_content_fingerprint(updated_restored.get("data_rows", []))
-
-            # Mirror updates to TSV file if it exists on disk
-            tsv_path = None
-            if isinstance(tsv_path_or_session, Path) and tsv_path_or_session.exists():
-                tsv_path = tsv_path_or_session
-            elif isinstance(tsv_path_or_session, str) and Path(tsv_path_or_session).exists():
-                tsv_path = Path(tsv_path_or_session)
-            elif resolved_paths and 'kardenwort_workspace' in resolved_paths:
-                try:
-                    kw_config = load_kardenwort_config(resolved_paths['kardenwort_workspace'])
-                    results_dir = resolve_results_dir(resolved_paths, kw_config)
-                    lang = language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
-                    tsv_path = find_working_tsv(results_dir, str(session_zid), lang)
-                except Exception:
-                    pass
-
-            if tsv_path and tsv_path.exists():
-                try:
-                    with file_lock(tsv_path):
-                        comments, headers, data_rows = load_tsv_rows(tsv_path)
-                        projection_headers, projection_rows = reword.restored_manifest_rows(updated_restored)
-                        projection_columns = {name: index for index, name in enumerate(projection_headers)}
-                        data_rows = [[row[projection_columns[name]] if name in projection_columns else '' for name in headers]
-                                     for row in projection_rows]
-                        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-                except Exception as e:
-                    logger.warning(f"Failed updating mirror TSV during SQLite edit-save: {e}")
 
             results_dir = resolve_results_dir(resolved_paths, config) if resolved_paths and config else None
             if (zid or session_zid) and results_dir:
