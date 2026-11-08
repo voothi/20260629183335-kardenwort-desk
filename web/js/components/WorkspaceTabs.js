@@ -522,10 +522,6 @@
                     initialSeq = parsedSeq;
                 }
             }
-            try {
-                var savedSeq = Number(sessionStorage.getItem('kw_active_card_' + w.AppState.session_zid));
-                if (cards.some(function(card) { return card.seq_num === savedSeq; })) initialSeq = savedSeq;
-            } catch (err) { console.debug('[Tabs] Session storage unavailable'); }
             activeTabSeq = initialSeq;
             w._kwActiveTabSeq = activeTabSeq;
             if (!w.AppState) w.AppState = {};
@@ -1050,8 +1046,6 @@
             activeTabSeq = targetCard.seq_num;
             activeSentenceIdx = targetCard.sentence_idx;
             w._kwActiveTabSeq = activeTabSeq;
-            try { sessionStorage.setItem('kw_active_card_' + w.AppState.session_zid, String(activeTabSeq)); }
-            catch (err) { console.debug('[Tabs] Session storage unavailable'); }
 
             if (w.AppState && w.AppState.activeTokenSelections && w.AppState.activeTokenSelections.length > 0) {
                 if (activeSentenceIdx > 0) {
@@ -1068,8 +1062,8 @@
                         return sIdx !== undefined && sIdx !== null && !isNaN(sIdx) && String(sIdx) === String(activeSentenceIdx);
                     });
                 }
-                if (typeof w.saveActiveTokensToStorage === 'function') {
-                    w.saveActiveTokensToStorage();
+                if (typeof w.saveActiveTokenFocus === 'function') {
+                    w.saveActiveTokenFocus();
                 }
             }
 
@@ -1212,6 +1206,8 @@
             updateTitle(targetCard);
             if (typeof w.updateToolbarState === 'function') w.updateToolbarState();
             if (w.forceRepaint) w.forceRepaint();
+
+            if (!isImmediate && w.saveClientView) w.saveClientView();
 
             if (!isImmediate && typeof w.ensureWatchdogActive === 'function') {
                 w.ensureWatchdogActive('tab-switch');

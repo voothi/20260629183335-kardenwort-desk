@@ -1,7 +1,10 @@
 import sys
+import sqlite3
+from kardenwort_db import QueryExecutionError
 import kardenwort_reword as reword
-from kardenwort_preference_contract import parse_preference_command
-from kardenwort_preferences import commit_preference, PreferencePersistenceError
+from kardenwort_state_http import STATE_ROUTES, dispatch_state, set_language
+from kardenwort_sqlite_preferences import PreferenceConflict
+from kardenwort_state_runtime import refresh_preferences, preference_store
 import os
 import re
 import json
@@ -3082,21 +3085,27 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             logger.debug('Peer disconnected during response to %s', self.path)
 
-    def _update_ui_preference(self, body):
+    def _state_request(self, path, method):
+        body = self._read_json_body() if method == 'POST' else {}
+        if method != 'GET':
+            self._authenticate_token(body)
         try:
-            command = parse_preference_command(body)
+            if not getattr(self.server, 'ui_cfg', None):
+                self.server.ui_cfg = resolve_ui_config(self.server.config)
+            result = dispatch_state(self.server, path, method, body)
+        except PreferenceConflict as error:
+            self._send_json(409, dict(ok=False, error_code='ROW_STALE', current=error.current))
+            return
         except ValueError as error:
             raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(error)) from error
-        paths = getattr(self.server, 'resolved_paths', None) or {}
-        base_dir = paths.get('base_dir')
-        if not base_dir and getattr(self.server, 'config_path', None):
-            base_dir = Path(self.server.config_path).parent
-        try:
-            result = commit_preference(command, getattr(self.server, 'config', None),
-                getattr(self.server, 'ui_cfg', None), base_dir, persist_config_value)
-        except (OSError, PreferencePersistenceError) as error:
-            raise StructuredError(ErrorCode.CONFIGURATION_ERROR, 'Preference could not be saved') from error
+        except (sqlite3.Error, QueryExecutionError) as error:
+            raise StructuredError(ErrorCode.CONFIGURATION_ERROR, 'SQLite state is unavailable') from error
+        self._project_state_effect(path, result)
         self._send_json(200, result)
+
+    def _project_state_effect(self, path, result):
+        if path == '/api/v1/set-language':
+            spawn_ahk(['--set-language', result['language']], base_dir=self.server.resolved_paths.get('base_dir'))
 
     def _read_json_body(self) -> dict:
         content_length_str = self.headers.get('Content-Length', '0')
@@ -3227,6 +3236,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         qs = urllib.parse.parse_qs(parsed_url.query)
+        if path in STATE_ROUTES:
+            return self._state_request(path, method)
+        if path.startswith('/session') or path in ('/', '/api/v1/render', '/lookup', '/verify-language'):
+            refresh_preferences(self.server.config, self.server.resolved_paths)
+
         ctrl_mod = sys.modules.get('kardenwort_controller')
         http_mod = sys.modules.get('http_server')
         render_flow_fn = ctrl_mod.run_render_flow if (ctrl_mod and hasattr(ctrl_mod, 'run_render_flow')) else run_render_flow
@@ -3925,8 +3939,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             language = body.get('language') or body.get('lang') or qs.get('language', [None])[0] or qs.get('lang', [None])[0]
             text = body.get('text') or qs.get('text', [None])[0]
             text_mode = body.get('text_mode') or body.get('text-mode') or qs.get('text_mode', ['single'])[0]
-            theme = body.get('theme') or qs.get('theme', ['dark'])[0]
-            zoom = body.get('zoom') or qs.get('zoom', ['100'])[0]
+            theme = body.get('theme') or qs.get('theme', [self.server.config.get('ui', 'theme', fallback='dark')])[0]
+            zoom = body.get('zoom') or qs.get('zoom', [self.server.config.get('rendering', 'default_zoom', fallback='100')])[0]
             seq_num = body.get('seq_num') or body.get('seq-num') or qs.get('seq_num', [None])[0]
             split_gap = body.get('split_gap_limit') or body.get('split-gap-limit') or qs.get('split_gap_limit', [None])[0]
             tsv_path = body.get('tsv') or qs.get('tsv', [None])[0]
@@ -4263,7 +4277,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         text_mode="multi",
                         config=self.server.config,
                         resolved_paths=self.server.resolved_paths,
-                        theme=req_theme or 'dark',
+                        theme=req_theme,
                         tsv_path=tsv_path,
                     )
                 body = html.encode('utf-8')
@@ -4466,7 +4480,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         text_mode=text_mode,
                         config=self.server.config,
                         resolved_paths=self.server.resolved_paths,
-                        theme=req_theme or 'dark',
+                        theme=req_theme,
                         tsv_path=tsv_path,
                         seq_num=resolved_seq_num,
                     )
@@ -4753,62 +4767,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, res)
             return
 
-        # Language synchronization endpoint
-        if path == '/api/v1/set-language':
-            if method != 'POST':
-                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
-            body = self._read_json_body()
-            language = body.get('language') or body.get('lang')
-            if not language or not isinstance(language, str) or not language.strip():
-                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing or invalid required payload field: 'language'")
-            language = language.strip().lower()
-
-            # 1. Update in-memory config
-            if hasattr(self.server, 'config') and self.server.config:
-                if not self.server.config.has_section(SEC_SETTINGS):
-                    self.server.config.add_section(SEC_SETTINGS)
-                self.server.config.set(SEC_SETTINGS, 'default_language', language)
-
-            # 2. Persist to desk config.ini
-            base_dir = getattr(self.server, 'resolved_paths', {}).get('base_dir') if hasattr(self.server, 'resolved_paths') else None
-            persisted = persist_default_language(language, base_dir=base_dir)
-
-            # 3. Notify AutoHotkey process via IPC
-            spawn_ahk(["--set-language", language], base_dir=base_dir)
-
-            self._send_json(200, {
-                "ok": True,
-                "language": language,
-                "persisted": persisted,
-            })
-            return
-
-        # Configuration retrieval and update endpoint
-        if path == '/api/v1/config':
-            if method == 'GET':
-                ui_cfg = getattr(self.server, 'ui_cfg', None)
-                if not ui_cfg:
-                    ui_cfg = resolve_ui_config(self.server.config)
-                default_lang = self.server.config.get(SEC_SETTINGS, 'default_language', fallback='de') if hasattr(self.server, 'config') and self.server.config else 'de'
-                self._send_json(200, {
-                    "ok": True,
-                    "ui": ui_cfg,
-                    "default_language": default_lang,
-                })
-                return
-            elif method == 'POST':
-                body = self._read_json_body()
-                self._authenticate_token(body)
-                self._update_ui_preference(body)
-                return
-            else:
-                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
-
         # Atomic Language Confirmation & Session Tab Spawning
         if path == '/api/v1/confirm-language':
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
+            self._authenticate_token(body)
             session_zid = body.get('session_zid') or body.get('zid')
             action = body.get('action')
             if not session_zid:
@@ -4843,28 +4807,17 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 raw_exp = draft.get("language") or "en"
                 chosen_source_lang = raw_exp.strip().lower() if raw_exp else "en"
 
-            # Persist and sync AutoHotkey if confirming a concrete study language different from active default
-            if chosen_source_lang and chosen_source_lang != "und":
-                active_default_lang = ""
-                if hasattr(self.server, 'config') and self.server.config:
-                    if self.server.config.has_section(SEC_SETTINGS) and self.server.config.has_option(SEC_SETTINGS, 'default_language'):
-                        active_default_lang = self.server.config.get(SEC_SETTINGS, 'default_language').strip().lower()
-                    else:
-                        active_default_lang = "de"
-
-                if chosen_source_lang != active_default_lang:
-                    # 1. Update in-memory config
-                    if hasattr(self.server, 'config') and self.server.config:
-                        if not self.server.config.has_section(SEC_SETTINGS):
-                            self.server.config.add_section(SEC_SETTINGS)
-                        self.server.config.set(SEC_SETTINGS, 'default_language', chosen_source_lang)
-
-                    # 2. Persist to desk config.ini
-                    base_dir = getattr(self.server, 'resolved_paths', {}).get('base_dir') if hasattr(self.server, 'resolved_paths') else None
-                    persist_default_language(chosen_source_lang, base_dir=base_dir)
-
-                    # 3. Notify AutoHotkey process via IPC
-                    spawn_ahk(["--set-language", chosen_source_lang], base_dir=base_dir)
+            # Commit concrete language before launching a tray or session effect.
+            if chosen_source_lang and chosen_source_lang != 'und':
+                try:
+                    current = preference_store(self.server.config, self.server.resolved_paths).get('default_language')
+                    if chosen_source_lang != current:
+                        set_language(self.server, chosen_source_lang)
+                        spawn_ahk(['--set-language', chosen_source_lang], base_dir=self.server.resolved_paths.get('base_dir'))
+                except Exception:
+                    with _DRAFT_SESSIONS_LOCK:
+                        _DRAFT_SESSIONS[session_zid] = draft
+                    raise
 
             raw_tsv = draft.get("tsv_path")
             if raw_tsv and chosen_source_lang != draft.get("language"):
@@ -5774,6 +5727,7 @@ def run_controller(args=None):
     server.resolved_paths = resolved_paths
     server.goldendict = goldendict
     server.wordfill_cfg = _wordfill
+    refresh_preferences(config, resolved_paths)
     server.ui_cfg = resolve_ui_config(config)
     server.api_key = goldendict.get('server_api_key', '')
     server.seq_counter = 0

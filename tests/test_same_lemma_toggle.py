@@ -3,12 +3,16 @@ import pytest
 from pathlib import Path
 import configparser
 import kardenwort_desk
+from tests.test_preference_commands import preference_world  # noqa: F401
+from tests.sqlite_document_support import serve_document, wait_state
 
 def get_desk_page_html(tmp_path, theme="dark", zid="20261002101427", text_mode="multi", highlight_same_lemma=False):
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
     if not config.has_section("rendering"):
         config.add_section("rendering")
     config.set("rendering", "highlight_same_lemma", "true" if highlight_same_lemma else "false")
+    from kardenwort_state_runtime import preference_store
+    preference_store(config, resolved_paths).set("highlight_same_lemma", highlight_same_lemma)
 
     tsv_file = tmp_path / f"{zid}-same-lemma-test.de.tsv"
     tsv_content = (
@@ -45,6 +49,8 @@ window.fetch = async function(url, options) {
     };
 };
 </script>"""
+    # Component-only rendering retains transport assertions; persisted reload cases use real HTTP.
+    html = html.replace('"state_authority": "sqlite"', '"state_authority": "static"')
     return html.replace('<head>', '<head>' + mock_script)
 
 
@@ -846,8 +852,8 @@ def test_active_subtoken_click_does_not_highlight_earlier_duplicate_token(page, 
     assert "lemma-peer-highlight" not in (first_der.get_attribute("class") or "")
 
 
-def test_active_subtoken_persists_across_page_reload(page, tmp_path):
-    """Verifies that active subtoken selection is preserved across page reload via sessionStorage (Task 3.2)."""
+def test_active_subtoken_persists_across_page_reload(page, tmp_path, preference_world):
+    """Verifies that active subtoken selection is preserved across page reload via committed client-scoped SQLite state."""
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
     if not config.has_section("settings"):
         config.add_section("settings")
@@ -883,12 +889,13 @@ def test_active_subtoken_persists_across_page_reload(page, tmp_path):
         seq_num=1,
         wordfill_cfg={"enabled": False}
     )
-    html = inject_mock_fetch(raw_html)
+    html = raw_html
 
     html_file = tmp_path / "page.html"
     html_file.write_text(html, encoding="utf-8")
 
-    page.goto(html_file.as_uri())
+    adapter = serve_document(page, preference_world, html,
+        dict(zip(('headers', 'data_rows'), kardenwort_desk.load_tsv_rows(tsv_file)[1:])))
     page.wait_for_selector("#source-container span.word")
     page.wait_for_selector("#lemma-table tbody tr")
 
@@ -902,7 +909,9 @@ def test_active_subtoken_persists_across_page_reload(page, tmp_path):
     assert "highlight-orange-active" not in (first_der.get_attribute("class") or "")
 
     # 2. Reload page (F5)
+    page.evaluate("flushPendingSaves()")
     page.reload()
+    wait_state(page)
     page.wait_for_selector("#source-container span.word")
     page.wait_for_selector("#lemma-table tbody tr")
 
@@ -925,7 +934,9 @@ def test_active_subtoken_persists_across_page_reload(page, tmp_path):
     das_span.click()
     assert "highlight-orange-active" in (das_span.get_attribute("class") or "")
 
+    page.evaluate("flushPendingSaves()")
     page.reload()
+    wait_state(page)
     page.wait_for_selector("#source-container span.word")
     page.wait_for_selector("#lemma-table tbody tr")
 
@@ -935,8 +946,10 @@ def test_active_subtoken_persists_across_page_reload(page, tmp_path):
     assert "highlight-orange-active" not in (first_der_after2.get_attribute("class") or "")
 
 
-def test_table_row_click_clears_storage_and_prevents_reload_resurrection(page, tmp_path):
-    """Verifies that clicking a table row clears sessionStorage and prevents resurrection of previously clicked tokens on reload."""
+def test_table_row_click_clears_storage_and_prevents_reload_resurrection(page, tmp_path, preference_world):
+    """Verifies that clicking a table row clears SQLite focus and prevents resurrection of previously clicked tokens on reload."""
+    from kardenwort_state_runtime import preference_store
+    preference_store(preference_world[1].config, preference_world[1].resolved_paths).set('auto_save_on_close', False)
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
     if not config.has_section("settings"):
         config.add_section("settings")
@@ -969,12 +982,13 @@ def test_table_row_click_clears_storage_and_prevents_reload_resurrection(page, t
         seq_num=1,
         wordfill_cfg={"enabled": False}
     )
-    html = inject_mock_fetch(raw_html)
+    html = raw_html
 
     html_file = tmp_path / "page_row_clear.html"
     html_file.write_text(html, encoding="utf-8")
 
-    page.goto(html_file.as_uri())
+    adapter = serve_document(page, preference_world, html,
+        dict(zip(('headers', 'data_rows'), kardenwort_desk.load_tsv_rows(tsv_file)[1:])))
     page.wait_for_selector("#source-container span.word")
     page.wait_for_selector("#lemma-table tbody tr")
 
@@ -982,20 +996,27 @@ def test_table_row_click_clears_storage_and_prevents_reload_resurrection(page, t
     second_der.click()
     assert "highlight-orange-active" in (second_der.get_attribute("class") or "")
 
-    # Verify sessionStorage has active tokens
-    storage_val = page.evaluate(f"() => sessionStorage.getItem('kw_active_tokens_{zid}')")
-    assert storage_val is not None
+    # Verify durable SQLite focus before changing the selection scope.
+    page.evaluate("saveClientView()")
+    with adapter.db.get_connection(read_only=True) as connection:
+        storage_val = connection.execute('SELECT active_tokens FROM client_view_state WHERE session_zid=?', (zid,)).fetchone()[0]
+    assert json.loads(storage_val)
 
     # Primary LMB click on table row for Arbeit (tr index 1)
     arbeit_row = page.locator('#lemma-table tbody tr').nth(1)
     arbeit_row.click()
 
-    # Verify sessionStorage was cleared
-    storage_after_row_click = page.evaluate(f"() => sessionStorage.getItem('kw_active_tokens_{zid}')")
-    assert storage_after_row_click is None
+    # Verify the committed focus clears, without a browser-storage value owner.
+    page.evaluate("saveClientView()")
+    with adapter.db.get_connection(read_only=True) as connection:
+        storage_after_row_click = connection.execute('SELECT active_tokens FROM client_view_state WHERE session_zid=?', (zid,)).fetchone()[0]
+    assert json.loads(storage_after_row_click) == []
+    assert page.evaluate(f"sessionStorage.getItem('kw_active_tokens_{zid}')") is None
 
     # Reload page (F5)
+    page.evaluate("saveClientView()")
     page.reload()
+    wait_state(page)
     page.wait_for_selector("#source-container span.word")
     page.wait_for_selector("#lemma-table tbody tr")
 

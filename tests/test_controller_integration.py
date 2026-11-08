@@ -51,6 +51,10 @@ def running_controller(tmp_path, request):
 
         server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
 
+        from kardenwort_state_runtime import refresh_preferences
+        refresh_preferences(config, resolved_paths)
+        server.ui_cfg = kardenwort_desk.resolve_ui_config(config)
+
         server_thread = server.start()
         clients = owned_clients(request)
 

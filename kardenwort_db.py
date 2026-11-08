@@ -431,6 +431,8 @@ class KardenwortDB:
                 if sql_file.name in applied_set:
                     continue
 
+                from kardenwort_state_backup import backup_preference_migration
+                backup_preference_migration(self, sql_file.name)
                 sql_content = sql_file.read_text(encoding="utf-8")
                 mig_start = time.perf_counter()
 
@@ -1129,6 +1131,7 @@ class KardenwortDB:
                 "UPDATE sessions SET deleted_at = ? WHERE zid = ? AND deleted_at IS NULL;",
                 (now_iso, session_zid),
             )
+            conn.execute('DELETE FROM client_view_state WHERE session_zid=?', (session_zid,))
             return cursor.rowcount > 0
 
     def soft_delete_sessions_batch(
@@ -1201,7 +1204,9 @@ class KardenwortDB:
 
         with self.get_connection(zid=zid) as conn:
             cursor = conn.cursor()
+            targets = conn.execute(f'SELECT zid FROM sessions {where_clause}', params[1:]).fetchall()
             cursor.execute(sql, params)
+            conn.executemany('DELETE FROM client_view_state WHERE session_zid=?', [(row[0],) for row in targets])
             return cursor.rowcount
 
     def restore_session(self, session_zid: str, zid: Optional[str] = None) -> bool:

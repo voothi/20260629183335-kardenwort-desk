@@ -29,10 +29,13 @@ def test_http_preference_persists_only_to_owned_config(running_controller):
     config = configparser.ConfigParser(interpolation=None)
     config.read(owned, encoding='utf-8')
     other = config.get('rendering', 'highlight_same_lemma')
+    owned_before = owned.read_bytes(), owned.stat().st_mtime_ns
     status, payload = post(url, '/api/v1/config', dict(filter_selected_only=True))
     assert status == 200, payload
     config.read(owned, encoding='utf-8')
-    assert config.getboolean('rendering', 'filter_selected_only') is True
+    from kardenwort_state_runtime import preference_store
+    assert preference_store(server.config, server.resolved_paths).get('filter_selected_only') is True
+    assert (owned.read_bytes(), owned.stat().st_mtime_ns) == owned_before
     assert config.get('rendering', 'highlight_same_lemma') == other
     assert hashlib.sha256(protected.read_bytes()).hexdigest() == before
 

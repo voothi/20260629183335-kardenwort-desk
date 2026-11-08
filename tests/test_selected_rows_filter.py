@@ -8,6 +8,8 @@ def get_desk_page_html(tmp_path, theme="dark", zid="20260912232500", text_mode="
     if not config.has_section("rendering"):
         config.add_section("rendering")
     config.set("rendering", "filter_selected_only", "true" if filter_selected_only else "false")
+    from kardenwort_state_runtime import preference_store
+    preference_store(config, resolved_paths).set("filter_selected_only", filter_selected_only)
     tsv_file = tmp_path / f"{zid}-filter-test.de.tsv"
     tsv_content = (
         "# comment\n"
@@ -72,6 +74,8 @@ window.fetch = async function(url, options) {
     };
 };
 </script>"""
+    # Component-only rendering retains transport assertions; persisted reload cases use real HTTP.
+    html = html.replace('"state_authority": "sqlite"', '"state_authority": "static"')
     return html.replace('<head>', '<head>' + mock_script)
 
 
@@ -158,7 +162,7 @@ def test_selected_filter_persistence_request(page, tmp_path):
     assert config_fetches[0]["body"]["section"] == "rendering"
     assert config_fetches[0]["body"]["key"] == "filter_selected_only"
     assert config_fetches[0]["body"]["value"] == "true"
-    assert page.evaluate("() => localStorage.getItem('kw_filter_selected_only')") == "true"
+    assert page.evaluate("() => localStorage.getItem('kw_filter_selected_only')") is None
     assert "Selected rows filter enabled" in page.locator("#kw-toast-container").inner_text()
 
     # Toggle filter OFF
@@ -172,7 +176,7 @@ def test_selected_filter_persistence_request(page, tmp_path):
     assert config_fetches[1]["body"]["section"] == "rendering"
     assert config_fetches[1]["body"]["key"] == "filter_selected_only"
     assert config_fetches[1]["body"]["value"] == "false"
-    assert page.evaluate("() => localStorage.getItem('kw_filter_selected_only')") == "false"
+    assert page.evaluate("() => localStorage.getItem('kw_filter_selected_only')") is None
     assert "Selected rows filter disabled" in page.locator("#kw-toast-container").inner_text()
 
 

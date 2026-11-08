@@ -540,7 +540,7 @@ def test_playwright_action_toolbar_shortcuts_modal_and_audio(page, test_server):
     calls = []
     page.route("**/api/v1/config", lambda route: (
         calls.append(("config", route.request.post_data)),
-        route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok"}))
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "status": "ok"}))
     ))
     page.route("**/session/status*", lambda route: (
         calls.append(("status", route.request.url)),

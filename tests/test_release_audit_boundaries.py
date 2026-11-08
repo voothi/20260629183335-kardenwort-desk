@@ -17,6 +17,8 @@ from kardenwort_theme import THEME_COLOR_PROPERTIES, resolve_theme_colors, theme
 from tests.test_controller_integration import running_controller
 from tests.test_release_audit_regressions import audit_html, TRANSPORT
 from scripts.release_audit_baseline import pairwise_matrix
+from tests.test_preference_commands import preference_world  # noqa: F401
+from tests.sqlite_document_support import serve_document, wait_state
 
 
 @pytest.mark.parametrize('warm', [False, True])
@@ -125,20 +127,35 @@ def test_retext_sentence_read_failure_has_no_side_effects(running_controller, mo
 
 
 @pytest.mark.parametrize('row', pairwise_matrix()['rows'], ids=lambda row: '-'.join(row.values()))
-def test_pairwise_shell_preferences(page, tmp_path, row):
+def test_pairwise_shell_preferences(page, tmp_path, row, preference_world):
     # Native rows verify the shared HTML projection in Chromium; actual native
     # engine/bridge execution is reported separately, never claimed here.
     html = audit_html(tmp_path, theme=row['theme'], container=row['cards'] == 'container')
-    page.route('http://audit.local/**', lambda route: route.fulfill(content_type='text/html', body=html.replace('<head>', '<head>' + TRANSPORT)))
+    page.add_init_script("""window.__requests=[];
+      const originalFetch=window.fetch;
+      window.fetch=function(url,options){window.__requests.push({url:String(url)});return originalFetch(url,options);};""")
+    stored = dict(zip(('headers', 'data_rows'), desk.load_tsv_rows(tmp_path/'20261023221555-audit.de.tsv')[1:]))
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
-    page.goto('http://audit.local/')
+    serve_document(page, preference_world, html, stored)
     enabled = row['filter'] == 'on'
     page.evaluate('enabled => {setFilterSelectedOnly(enabled);setHighlightSameLemma(true)}', enabled)
+    page.evaluate('flushPendingSaves()')
     if row['transport'] == 'reload':
-        page.reload()
+        page.reload(); wait_state(page)
     elif row['transport'] in ('sse', 'overlap'):
-        page.evaluate("SSEBridge.connect('20261023221555'); __eventSource.onmessage({data: JSON.stringify({stage:'translating'})})")
+        page.wait_for_function("document.querySelector('#sse-status-indicator[data-status=connected]') !== null")
+        page.evaluate("""() => {
+            window.__matrixReceived = false;
+            const original = window.receiveUpdate;
+            window.receiveUpdate = function(payload) {
+                if (payload.stage === 'translating') window.__matrixReceived = true;
+                return original(payload);
+            };
+        }""")
+        from kardenwort_events import EventDispatcher
+        EventDispatcher.get_instance().publish('20261023221555', {'stage': 'translating'})
+        page.wait_for_function('window.__matrixReceived === true')
     if row['transport'] in ('status', 'overlap'):
         page.keyboard.press('F5')
         page.wait_for_function("__requests.some(r => r.url.includes('/session/status'))")
@@ -458,6 +475,7 @@ def test_select_switch_update_delayed_ack_reload_with_sqlite(page, tmp_path, run
     selected_column = restored['headers'].index('DeskSelected')
     assert {row[source_column]: row[selected_column] for row in restored['data_rows']} == {'Haus': '1', 'Baum': '1'}
     page.reload()
+    wait_state(page)
     assert page.evaluate('WorkspaceTabs.getActiveCard().sentence_idx') == 1
     assert page.locator('#lemma-table tr[data-row-id="0"]').get_attribute('data-selected') == '1', page.evaluate("WorkspaceTabs.getCards().map(c=>({idx:c.sentence_idx,ids:c.selected_ids,words:c.words.map(w=>({id:w.row_id,selected:w.selected}))}))")
     page.locator('.kw-tab-chip[data-tab-seq="1"]').click()

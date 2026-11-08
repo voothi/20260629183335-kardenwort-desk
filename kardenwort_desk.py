@@ -2288,6 +2288,11 @@ def resolve_ui_config(config: Optional[configparser.ConfigParser] = None) -> Dic
         ui_cfg['highlight_same_lemma'] = rend.getboolean('highlight_same_lemma', fallback=False)
         ui_cfg['filter_selected_only'] = rend.getboolean('filter_selected_only', fallback=False)
 
+    snapshot = getattr(config, '_sqlite_preferences_snapshot', None)
+    if snapshot is not None:
+        ui_cfg.update(snapshot['values'])
+        ui_cfg['state_authority'] = 'sqlite'
+        ui_cfg['preference_revisions'] = snapshot['revisions']
     return ui_cfg
 
 
@@ -9870,7 +9875,12 @@ def format_provider_skeleton_label(provider_name: str) -> str:
     return f"{provider_name.capitalize()}..."
 
 
-def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None):
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level=None, theme=None, tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None):
+    if resolved_paths.get('storage_backend') == 'sqlite':
+        from kardenwort_state_runtime import refresh_preferences
+        refresh_preferences(config, resolved_paths)
+    zoom_level = zoom_level or config.get('rendering', 'default_zoom', fallback='100')
+    theme = theme or config.get('ui', 'theme', fallback='dark')
     with _ACTIVE_ZIDS_LOCK:
         if zid in _ACTIVE_ZIDS:
             logger.warning(f"[{zid}] Concurrent render skipped — already active. Rapid duplicate hotkey fire detected.")
@@ -13626,6 +13636,7 @@ def render_declarative_web_shell(
         "components/WorkspaceTabs.js",
         "services/sse.js",
         "features/preferences.js",
+        "features/sqlite-state.js",
         "app.js",
     ):
         p_script = web_dir / "js" / script_rel
@@ -13964,6 +13975,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         "components/WorkspaceTabs.js",
         "services/sse.js",
         "features/preferences.js",
+        "features/sqlite-state.js",
         "app.js",
     ):
         p_script = web_dir / "js" / script_rel
@@ -17965,7 +17977,7 @@ def get_ahk_executable():
 
 def persist_default_language(language: str, base_dir=None) -> bool:
     """
-    Persists the default language to config.ini in kardenwort-desk.
+    Deprecated file-host helper; canonical language commands use SQLite.
     Preserves comments and formatting via regex substitution.
     """
     if not language:
@@ -17991,7 +18003,7 @@ def persist_default_language(language: str, base_dir=None) -> bool:
 
 def persist_config_value(section: str, key: str, value: Any, base_dir=None) -> bool:
     """
-    Persists a configuration section/key/value to config.ini in kardenwort-desk.
+    Deprecated file-host helper; canonical preference commands use SQLite.
     Preserves comments, formatting, and section scoping via regex patching.
     """
     if not section or not key:

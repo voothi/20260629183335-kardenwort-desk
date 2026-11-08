@@ -2563,16 +2563,7 @@
         } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
 
         var initialSameLemma = (window.__CONFIG__ && window.__CONFIG__.highlight_same_lemma) ? true : false;
-        try {
-            var lsVal = localStorage.getItem('kw_highlight_same_lemma');
-            if (lsVal !== null) initialSameLemma = (lsVal === 'true');
-        } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-
-        var initialFilterSelectedOnly = (window.__CONFIG__ && window.__CONFIG__.filter_selected_only) ? true : false;
-        try {
-            var lsFilterVal = localStorage.getItem('kw_filter_selected_only');
-            if (lsFilterVal !== null) initialFilterSelectedOnly = (lsFilterVal === 'true');
-        } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
+        var initialFilterSelectedOnly = !!(window.__CONFIG__ && window.__CONFIG__.filter_selected_only);
 
         var existingState = window.AppState || {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
         window.AppState = existingState;
@@ -5036,29 +5027,16 @@
         }
         window.isLemmaStillNeededByOtherActiveTokens = isLemmaStillNeededByOtherActiveTokens;
 
-        function saveActiveTokensToStorage() {
-            try {
-                if (typeof sessionStorage === 'undefined' || !sessionStorage) return;
-                var sZid = (typeof getSessionZid === 'function') ? getSessionZid() : (window.__CONFIG__ && window.__CONFIG__.zid ? window.__CONFIG__.zid : '');
-                if (!sZid) return;
-                var key = 'kw_active_tokens_' + sZid;
-                if (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0) {
-                    sessionStorage.setItem(key, JSON.stringify(window.AppState.activeTokenSelections));
-                } else {
-                    sessionStorage.removeItem(key);
-                }
-            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
+        function saveActiveTokenFocus() {
+            if (stateClient) stateClient.save();
         }
 
-        function restoreActiveTokensFromStorage() {
+        function restoreActiveTokenFocus() {
             try {
-                if (typeof sessionStorage === 'undefined' || !sessionStorage) return;
-                var sZid = (typeof getSessionZid === 'function') ? getSessionZid() : (window.__CONFIG__ && window.__CONFIG__.zid ? window.__CONFIG__.zid : '');
-                if (!sZid) return;
-                var key = 'kw_active_tokens_' + sZid;
-                var raw = sessionStorage.getItem(key);
+                var items = window.AppState.restoredActiveTokens || [];
+                window.AppState.restoredActiveTokens = [];
+                var raw = items.length > 0;
                 if (raw) {
-                    var items = JSON.parse(raw);
                     if (Array.isArray(items) && items.length > 0) {
                         if (!window.AppState) window.AppState = {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
                         window.AppState.activeTokenSelections = items;
@@ -5098,7 +5076,7 @@
             if (window.AppState) {
                 window.AppState.activeTokenSelections = [];
             }
-            saveActiveTokensToStorage();
+            saveActiveTokenFocus();
         }
 
         /** @param {number|string} rowId @param {string} lemma */
@@ -5116,8 +5094,8 @@
                 }
                 return true;
             });
-            if (typeof saveActiveTokensToStorage === 'function') {
-                saveActiveTokensToStorage();
+            if (typeof saveActiveTokenFocus === 'function') {
+                saveActiveTokenFocus();
             }
         }
         window.pruneActiveTokensByRowOrLemma = pruneActiveTokensByRowOrLemma;
@@ -5173,7 +5151,7 @@
                     });
                 }
             }
-            saveActiveTokensToStorage();
+            saveActiveTokenFocus();
         }
 
         /** @param {HTMLElement} span */
@@ -5190,7 +5168,7 @@
             window.AppState.activeTokenSelections = window.AppState.activeTokenSelections.filter(function(item) {
                 return !vIdxsToRemove[String(item.visual_idx)];
             });
-            saveActiveTokensToStorage();
+            saveActiveTokenFocus();
         }
 
         window.findTokenDataByVisualIdx = findTokenDataByVisualIdx;
@@ -5198,8 +5176,8 @@
         window.clearTokenSelections = clearTokenSelections;
         window.addTokenToActiveSelections = addTokenToActiveSelections;
         window.removeTokenFromActiveSelections = removeTokenFromActiveSelections;
-        window.saveActiveTokensToStorage = saveActiveTokensToStorage;
-        window.restoreActiveTokensFromStorage = restoreActiveTokensFromStorage;
+        window.saveActiveTokenFocus = saveActiveTokenFocus;
+        window.restoreActiveTokenFocus = restoreActiveTokenFocus;
 
         /** @param {HTMLElement} span */
         function getRawRowTranslations(span) {
@@ -6341,8 +6319,8 @@
             }
             if (e.button === 0) {
                 if (window.AppState) window.AppState.activeTokenSelections = [];
-                if (typeof saveActiveTokensToStorage === 'function') {
-                    saveActiveTokensToStorage();
+                if (typeof saveActiveTokenFocus === 'function') {
+                    saveActiveTokenFocus();
                 }
             }
             var rowIdStr = String(row.getAttribute('data-row-id'));
@@ -6628,7 +6606,7 @@
         selectedRowIdsMap = {};
         var sharedState = window.AppStore.getState();
         sharedState.selectedLemmas = sharedState.selectedLemmas || {};
-        if (typeof restoreActiveTokensFromStorage === 'function') restoreActiveTokensFromStorage();
+        if (typeof restoreActiveTokenFocus === 'function') restoreActiveTokenFocus();
         var lt = document.getElementById('lemma-table');
         tableRows = [];
         if (lt) {
@@ -7095,8 +7073,8 @@
                 window.AppState.selectedLemmas = {};
                 window.AppState.activeTokenSelections = [];
             }
-            if (typeof saveActiveTokensToStorage === 'function') {
-                saveActiveTokensToStorage();
+            if (typeof saveActiveTokenFocus === 'function') {
+                saveActiveTokenFocus();
             }
             if (window.clearMVPBookmarks) window.clearMVPBookmarks();
             syncSelectionsToCardsAndState();
@@ -9389,7 +9367,7 @@
             }
             if (!getSessionLang()) return Promise.reject(new Error('Session language missing'));
             if (window.commitActiveEdit) window.commitActiveEdit();
-            return persistPending(false).then(function() {
+            return preferenceCommands.flush().then(function() { return stateClient.flush(); }).then(function() { return persistPending(false); }).then(function() {
                 if (window.isDirty()) return window.flushPendingSaves();
             });
         };
@@ -9400,7 +9378,9 @@
                 return Promise.resolve(false);
             }
             if (window.commitActiveEdit) window.commitActiveEdit();
-            return persistPending(false).then(function() {
+            return preferenceCommands.flush().then(function() { return stateClient.flush(); }).then(function() {
+                return persistPending(false);
+            }).then(function() {
                 if (!quiet) window.showToast('Edits saved successfully', 'success');
                 return true;
             }).catch(function(err) {
@@ -10473,6 +10453,28 @@
         };
 
         /** @param {boolean} active */
+        function captureClientView() {
+            return {active_card: window.WorkspaceTabs.getActiveTabSeq(),
+                active_tokens: JSON.parse(JSON.stringify(window.AppState.activeTokenSelections || []))};
+        }
+        function projectCommittedPreference(key, value) {
+            window.__CONFIG__[key] = value;
+            var projections = {highlight_same_lemma: setHighlightSameLemma, filter_selected_only: setFilterSelectedOnly};
+            if (projections[key]) projections[key](value, false);
+        }
+        function restoreClientView(view) {
+            var cards = window.WorkspaceTabs.getCards();
+            var available = cards.some(function(card) { return card.seq_num === view.active_card; });
+            if (view.revision > 0) window.WorkspaceTabs.switchToTab(available ? view.active_card : 1, true);
+            var restored = window.SqliteState.restoreOccurrences(view.active_tokens, tokenMap);
+            window.AppState.restoredActiveTokens = restored;
+            restoreActiveTokenFocus();
+            syncSelectionsToCardsAndState(); updateRowStyles(); updateBidirectionalHighlights();
+            if (view.cleared || !available || restored.length !== view.active_tokens.length) {
+                window.showToast('Unavailable view focus was cleared', 'warning');
+                window.saveClientView();
+            }
+        }
         var preferenceButtons = {
             highlight_same_lemma: 'kw-btn-same-lemma', filter_selected_only: 'kw-btn-filter-selected'
         };
@@ -10488,28 +10490,31 @@
         }
         function projectPreferenceStatus(key, phase, value, error) {
             projectPreferenceFeedback(key, phase);
-            if (phase === 'saved' || phase === 'local') {
-                try { localStorage.setItem('kw_' + key, String(value)); }
-                catch (storageError) { console.error('[Preferences] Local restoration unavailable', storageError); }
-            }
             if (phase === 'failed') window.showToast('Preference not saved: ' + error.message, 'error');
         }
-        function sendPreference(key, value) {
-            return fetch(resolveBackendUrl('/api/v1/config'), {
-                method: 'POST',
+        var stateClient;
+        function stateRequest(path, body, method) {
+            return fetch(resolveBackendUrl(path), {method: method || 'POST',
                 headers: {'Content-Type': 'application/json', 'X-API-Token': getApiToken()},
-                body: JSON.stringify({section: 'rendering', key: key, value: String(value)})
-            }).then(function(response) {
+                body: JSON.stringify(body)}).then(function(response) {
                 return response.json().then(function(payload) {
                     var data = payload.data || payload;
-                    if (!response.ok || data.ok !== true) throw new Error('Backend did not acknowledge the preference');
+                    if (!response.ok || data.ok !== true) {
+                        var error = new Error(data.message || 'SQLite state was not acknowledged');
+                        error.current = data.current;
+                        throw error;
+                    }
+                    return data;
                 });
             });
+        }
+        function sendPreference(key, value, generation) {
+            return stateClient.sendPreference(key, value, generation);
         }
         var preferenceCommands = window.PreferenceCommands.create(sendPreference, projectPreferenceStatus);
         function persistPreference(key, value) {
             if (isServerDisabled()) {
-                projectPreferenceStatus(key, 'local', value);
+                projectPreferenceStatus(key, 'failed', value, new Error('Backend is unavailable'));
                 return;
             }
             return preferenceCommands.submit(key, value);
@@ -10522,7 +10527,7 @@
             else removeClass(element, className);
         }
 
-        function setHighlightSameLemma(active) {
+        function setHighlightSameLemma(active, persist) {
             if (window.AppStore) window.AppStore.dispatch({type: 'TOGGLE_HIGHLIGHT_SAME_LEMMA', payload: !!active});
             if (window.AppState) {
                 window.AppState.highlightSameLemma = !!active;
@@ -10534,7 +10539,7 @@
             if (typeof updateBidirectionalHighlights === 'function') {
                 updateBidirectionalHighlights();
             }
-            persistPreference('highlight_same_lemma', !!active);
+            if (persist !== false) persistPreference('highlight_same_lemma', !!active);
         }
         window.setHighlightSameLemma = setHighlightSameLemma;
 
@@ -10564,7 +10569,7 @@
         }
 
         /** @param {boolean} active */
-        function setFilterSelectedOnly(active) {
+        function setFilterSelectedOnly(active, persist) {
             if (!active) document.documentElement.style.minHeight = '';
             if (window.AppStore) window.AppStore.dispatch({type: 'TOGGLE_FILTER_SELECTED', payload: !!active});
             if (window.AppState) {
@@ -10578,7 +10583,7 @@
             if (typeof updateEmptySelectionState === 'function') {
                 updateEmptySelectionState();
             }
-            persistPreference('filter_selected_only', !!active);
+            if (persist !== false) persistPreference('filter_selected_only', !!active);
         }
         window.setFilterSelectedOnly = setFilterSelectedOnly;
 
@@ -10800,6 +10805,13 @@
         if (window.rebindMVPBookmarks) {
             window.rebindMVPBookmarks();
         }
+        stateClient = window.SqliteState.create({ui: window.__CONFIG__ || {}, zid: getSessionZid(), send: stateRequest,
+            current: preferenceCommands.current, unresolved: preferenceCommands.unresolved,
+            failure: function(error) { window.showToast('View state not saved: '+error.message, 'error'); },
+            project: projectCommittedPreference, capture: captureClientView, restore: restoreClientView});
+        window.receivePreferenceSnapshot = stateClient.receive;
+        window.saveClientView = stateClient.save;
+        window.__stateReady = stateClient.start();
         resumeMountedStream();
     }
 

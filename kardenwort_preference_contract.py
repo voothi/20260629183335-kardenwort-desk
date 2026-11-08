@@ -1,8 +1,8 @@
 """Pure input contract for the existing rendering-preference commands."""
 from dataclasses import dataclass
+import re
 
 
-WRITABLE_KEYS = frozenset({'highlight_same_lemma', 'filter_selected_only'})
 BOOLEAN_VALUES = {'true': True, '1': True, 'yes': True, 'on': True,
                   'false': False, '0': False, 'no': False, 'off': False}
 
@@ -11,11 +11,11 @@ BOOLEAN_VALUES = {'true': True, '1': True, 'yes': True, 'on': True,
 class PreferenceCommand:
     section: str
     key: str
-    selected: bool
+    selected: object
 
     @property
     def value(self):
-        return 'true' if self.selected else 'false'
+        return str(self.selected).lower() if isinstance(self.selected, bool) else str(self.selected)
 
 
 def boolean_value(value):
@@ -29,11 +29,63 @@ def boolean_value(value):
     return BOOLEAN_VALUES[normalized]
 
 
+PREFERENCES = {
+    'highlight_same_lemma': ('rendering', False, 'bool'),
+    'filter_selected_only': ('rendering', False, 'bool'),
+    'auto_save_on_edit': ('ui', False, 'bool'),
+    'auto_save_on_close': ('ui', True, 'bool'),
+    'auto_inject_updates': ('rendering', True, 'bool'),
+    'theme': ('ui', 'dark', 'theme'),
+    'default_zoom': ('rendering', 100, 'zoom'),
+    'default_language': ('settings', 'de', 'language'),
+}
+
+
+def language_value(value):
+    if not isinstance(value, str) or not re.fullmatch(r'[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*', value):
+        raise ValueError('Invalid concrete study language')
+    if value.lower() == 'und':
+        raise ValueError('Automatic language detection is not an active language')
+    return value.lower()
+
+
+def zoom_value(value):
+    if isinstance(value, bool) or not str(value).isdigit():
+        raise ValueError('Zoom must be a positive integer')
+    result = int(value)
+    if not 10 <= result <= 500:
+        raise ValueError('Zoom must be between 10 and 500 percent')
+    return result
+
+
+def theme_value(value):
+    if value not in ('dark', 'light', 'white', 'compact'):
+        raise ValueError('Invalid theme')
+    return value
+
+
+def preference_value(key, value):
+    if key not in PREFERENCES:
+        raise ValueError('Preference key is not permitted')
+    normalizers = {'bool': boolean_value, 'language': language_value, 'zoom': zoom_value, 'theme': theme_value}
+    return normalizers[PREFERENCES[key][2]](value)
+
+
+def configured_preferences(config, keys=None):
+    result = {}
+    for key in PREFERENCES if keys is None else keys:
+        section, default, kind = PREFERENCES[key]
+        raw = config.get(section, key) if config.has_option(section, key) else default
+        result[key] = preference_value(key, raw)
+    return result
+
+
+
 def command_key(body):
     key = body.get('key')
     if key:
         return key
-    aliases = WRITABLE_KEYS.intersection(body)
+    aliases = set(PREFERENCES).intersection(body)
     if len(aliases) != 1:
         raise ValueError('Exactly one preference key is required')
     return next(iter(aliases))
@@ -46,7 +98,7 @@ def parse_preference_command(body):
     if not isinstance(section, str) or not isinstance(key, str):
         raise ValueError('Preference section and key must be strings')
     section, key = section.strip().lower(), key.strip().lower()
-    if section != 'rendering' or key not in WRITABLE_KEYS:
+    if key not in PREFERENCES or section != PREFERENCES[key][0]:
         raise ValueError('Preference key is not permitted')
     value = body.get('value') if body.get('key') else body[key]
-    return PreferenceCommand(section, key, boolean_value(value))
+    return PreferenceCommand(section, key, preference_value(key, value))

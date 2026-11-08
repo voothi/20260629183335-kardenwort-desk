@@ -20,7 +20,7 @@ def imports(tree):
 
 def test_preference_core_is_pure_and_shell_has_no_reverse_dependencies():
     core = ast.parse((ROOT/'kardenwort_preference_contract.py').read_text())
-    assert imports(core) == {'dataclasses'}
+    assert imports(core) == {'dataclasses', 're'}
     calls = {node.func.id for node in ast.walk(core) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
     assert not calls.intersection({'open', 'exec', 'eval', '__import__', 'input', 'print'})
     shell = ast.parse((ROOT/'kardenwort_preferences.py').read_text())
@@ -30,12 +30,14 @@ def test_preference_core_is_pure_and_shell_has_no_reverse_dependencies():
 
 
 def test_preference_functions_stay_within_complexity_ceiling():
-    for name in ('kardenwort_preference_contract.py', 'kardenwort_preferences.py'):
+    for name in ('kardenwort_preference_contract.py', 'kardenwort_preferences.py', 'kardenwort_state_contract.py',
+                 'kardenwort_state_backup.py', 'kardenwort_state_runtime.py', 'kardenwort_state_http.py',
+                 'kardenwort_client_views.py', 'kardenwort_sqlite_preferences.py'):
         tree = ast.parse((ROOT/name).read_text())
         measured = {node.name: complexity(node) for node in functions(tree)}
         assert max(measured.values()) <= 7, measured
     controller = ast.parse((ROOT/'kardenwort_controller.py').read_text())
-    handler = next(node for node in functions(controller) if node.name == '_update_ui_preference')
+    handler = next(node for node in functions(controller) if node.name == '_state_request')
     assert complexity(handler) <= 7
 
 
@@ -46,3 +48,20 @@ def test_preference_client_has_only_explicit_effect_ports():
     shell = (ROOT/'kardenwort_desk.py').read_text()
     assert shell.count('"features/preferences.js"') == 2
     assert '/js/features/preferences.js' in (ROOT/'web/index.html').read_text()
+
+
+def test_sqlite_state_core_is_pure_and_slice_dependencies_are_acyclic():
+    core = ast.parse((ROOT/'kardenwort_state_contract.py').read_text())
+    assert imports(core) == {'re'}
+    names = {'kardenwort_state_contract', 'kardenwort_state_backup', 'kardenwort_state_runtime',
+             'kardenwort_state_http', 'kardenwort_client_views', 'kardenwort_sqlite_preferences',
+             'kardenwort_preference_contract', 'kardenwort_db', 'kardenwort_events'}
+    graph = {name: imports(ast.parse((ROOT/(name+'.py')).read_text())) & names for name in names}
+    def visit(name, ancestors):
+        assert name not in ancestors, (name, ancestors)
+        for dependency in graph[name]:
+            visit(dependency, ancestors | {name})
+    for name in names:
+        visit(name, set())
+    for name in names-{'kardenwort_db', 'kardenwort_events'}:
+        assert not imports(ast.parse((ROOT/(name+'.py')).read_text())).intersection({'kardenwort_desk', 'kardenwort_controller'})

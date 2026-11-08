@@ -110,14 +110,6 @@
                 state.data_rows = Array.isArray(p.data_rows) ? p.data_rows : state.data_rows;
                 state.sentence_cards = Array.isArray(p.sentence_cards) ? p.sentence_cards : state.sentence_cards;
                 var cfg = Object.assign({}, state.config, p.ui_config || p.config || {});
-                if (firstInitialization) {
-                    ['highlight_same_lemma', 'filter_selected_only'].forEach(function(key) {
-                        try {
-                            var saved = localStorage.getItem('kw_' + key);
-                            if (saved !== null) cfg[key] = saved === 'true';
-                        } catch (err) { /* Storage is unavailable in some offline hosts. */ }
-                    });
-                }
                 state.config = cfg;
                 if (firstInitialization && cfg.highlight_same_lemma !== undefined) {
                     state.highlightSameLemma = Boolean(cfg.highlight_same_lemma);

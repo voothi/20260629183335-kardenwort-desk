@@ -41,21 +41,27 @@ def preference_world(tmp_path):
         yield url, server, path
 
 
-@pytest.mark.parametrize('failure', ['missing', 'directory'])
-def test_failed_preference_write_never_acknowledges_or_publishes(preference_world, failure):
+def test_failed_preference_write_never_acknowledges_or_publishes(preference_world):
+    # Phase 3: SQLite replaces the preference-file owner; a real write lock fails commit.
+    import sqlite3
+    from kardenwort_state_runtime import preference_store
     url, server, path = preference_world
-    path.unlink()
-    if failure == 'directory':
-        path.mkdir()
-    status, data = command(url, {'filter_selected_only': True})
-    assert status == 500, data
-    assert data['error_code'] == 'CONFIGURATION_ERROR'
-    assert server.config.getboolean('rendering', 'filter_selected_only') is False
-    assert server.ui_cfg['filter_selected_only'] is False
-    with urlopen(url+'/api/v1/config', timeout=10) as response:
-        current = json.load(response)
-    assert current.get('data', current)['ui']['filter_selected_only'] is False
-    assert path.is_dir() if failure == 'directory' else not path.exists()
+    store = preference_store(server.config, server.resolved_paths)
+    store.db.busy_timeout_ms = 10
+    blocker = sqlite3.connect(store.db.db_path, isolation_level=None)
+    try:
+        blocker.execute('BEGIN IMMEDIATE')
+        status, data = command(url, {'filter_selected_only': True})
+        assert status == 500, data
+        assert data['error_code'] == 'CONFIGURATION_ERROR'
+        assert server.config.getboolean('rendering', 'filter_selected_only') is False
+        assert server.ui_cfg['filter_selected_only'] is False
+        with urlopen(url+'/api/v1/config', timeout=10) as response:
+            current = json.load(response)
+        assert current.get('data', current)['ui']['filter_selected_only'] is False
+        assert path.read_bytes() == ORIGINAL
+    finally:
+        blocker.rollback(); blocker.close()
 
 
 @pytest.mark.parametrize('value', [None, '', 'garbage', 2, -1, [], {}, 1.0])
@@ -74,7 +80,9 @@ def test_typed_boolean_and_alias_commit_before_success(preference_world, value):
     status, data = command(url, dict(section='Rendering', key='FILTER_SELECTED_ONLY', value=value))
     assert status == 200, data
     assert data['value'] == 'true'
-    assert path.read_bytes() == ORIGINAL.replace(b'filter_selected_only = false', b'filter_selected_only = true')
+    assert path.read_bytes() == ORIGINAL
+    from kardenwort_state_runtime import preference_store
+    assert preference_store(server.config, server.resolved_paths).get('filter_selected_only') is True
     assert server.config.getboolean('rendering', 'filter_selected_only') is True
     assert server.ui_cfg['filter_selected_only'] is True
     status, data = command(url, {'filter_selected_only': False})
@@ -88,9 +96,10 @@ def test_concurrent_independent_preferences_preserve_both_commits(preference_wor
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(lambda key: command(url, {key: True}), keys))
     assert all(status == 200 for status, data in results), results
-    stored = configparser.ConfigParser()
-    stored.read(path, encoding='utf-8')
-    assert all(stored.getboolean('rendering', key) for key in set(keys))
+    from kardenwort_state_runtime import preference_store
+    stored = preference_store(server.config, server.resolved_paths)
+    assert all(stored.get(key) for key in set(keys))
+    assert path.read_bytes() == ORIGINAL
     assert all(server.config.getboolean('rendering', key) for key in set(keys))
     assert b'; retain this comment\r\n' in path.read_bytes()
     assert b'[unrelated]\r\nvalue = untouched\r\n' in path.read_bytes()
@@ -120,15 +129,16 @@ def test_language_and_preference_writes_share_serialized_owner(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Windows read-only destination replacement contract')
-def test_readonly_destination_rejects_commit_and_cleans_temporary_file(preference_world):
+def test_readonly_static_configuration_does_not_block_sqlite_commit(preference_world):
     url, server, path = preference_world
     path.chmod(stat.S_IREAD)
     try:
         status, data = command(url, {'filter_selected_only': True})
-        assert status == 500, data
+        assert status == 200, data
+        assert data['committed_value'] is True
         assert path.read_bytes() == ORIGINAL
-        assert server.config.getboolean('rendering', 'filter_selected_only') is False
-        assert server.ui_cfg['filter_selected_only'] is False
+        assert server.config.getboolean('rendering', 'filter_selected_only') is True
+        assert server.ui_cfg['filter_selected_only'] is True
         assert list(path.parent.glob('.config-*.tmp')) == []
     finally:
         path.chmod(stat.S_IWRITE)

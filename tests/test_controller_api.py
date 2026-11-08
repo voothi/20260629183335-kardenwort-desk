@@ -38,7 +38,7 @@ def test_spawn_tabs_endpoint(running_controller, monkeypatch):
     req = urllib.request.Request(
         f"{server_url}/api/v1/spawn-tabs",
         data=req_data,
-        headers={"Content-Type": "application/json"}
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
     )
 
     with urllib.request.urlopen(req, timeout=5.0) as resp:
@@ -180,7 +180,7 @@ def test_set_language_endpoint(running_controller, monkeypatch, tmp_path):
     req = urllib.request.Request(
         f"{server_url}/api/v1/set-language",
         data=req_data,
-        headers={"Content-Type": "application/json"}
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
     )
 
     with urllib.request.urlopen(req, timeout=5.0) as resp:
@@ -210,7 +210,7 @@ def test_set_language_missing_field(running_controller):
     req = urllib.request.Request(
         f"{server_url}/api/v1/set-language",
         data=req_data,
-        headers={"Content-Type": "application/json"}
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
     )
 
     with pytest.raises(urllib.error.HTTPError) as exc_info:
@@ -285,7 +285,7 @@ def test_confirm_language_cancel(running_controller):
     req = urllib.request.Request(
         f"{server_url}/api/v1/confirm-language",
         data=req_data,
-        headers={"Content-Type": "application/json"}
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
     )
     with urllib.request.urlopen(req, timeout=5.0) as resp:
         assert resp.status == 200
@@ -353,7 +353,7 @@ def test_confirm_language_switch_and_reverse_tab_spawning(running_controller, mo
     req = urllib.request.Request(
         f"{server_url}/api/v1/confirm-language",
         data=req_data,
-        headers={"Content-Type": "application/json"}
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
     )
     with urllib.request.urlopen(req, timeout=5.0) as resp:
         assert resp.status == 200
@@ -426,7 +426,7 @@ def test_confirm_language_process_action(running_controller, monkeypatch):
     req = urllib.request.Request(
         f"{server_url}/api/v1/confirm-language",
         data=req_data,
-        headers={"Content-Type": "application/json"}
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
     )
     with urllib.request.urlopen(req, timeout=5.0) as resp:
         assert resp.status == 200
@@ -468,7 +468,7 @@ def test_confirm_language_process_action(running_controller, monkeypatch):
     req_de = urllib.request.Request(
         f"{server_url}/api/v1/confirm-language",
         data=req_data_de,
-        headers={"Content-Type": "application/json"}
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
     )
     with urllib.request.urlopen(req_de, timeout=5.0) as resp:
         assert resp.status == 200
@@ -493,14 +493,11 @@ def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypat
     server_url, server = running_controller
 
     spawn_calls = []
-    persist_calls = []
+    from kardenwort_state_runtime import preference_store
+    store = preference_store(server.config, server.resolved_paths)
     monkeypatch.setattr(
         "kardenwort_controller.spawn_ahk",
         lambda args, base_dir=None: spawn_calls.append((args, base_dir)) or True,
-    )
-    monkeypatch.setattr(
-        "kardenwort_controller.persist_default_language",
-        lambda language, base_dir=None: persist_calls.append((language, base_dir)) or True,
     )
     monkeypatch.setattr(
         "kardenwort_controller.run_render_flow",
@@ -510,7 +507,8 @@ def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypat
     monkeypatch.setattr(webbrowser, "open_new_tab", lambda url: None)
 
     # 1. Confirming a different study language (en -> de) persists config and signals AutoHotkey
-    server.config.set("settings", "default_language", "en")
+    store.set("default_language", "en")
+    revision = store.snapshot()["revisions"]["default_language"]
     session_zid_diff = "20261008143001"
     with _DRAFT_SESSIONS_LOCK:
         _DRAFT_SESSIONS[session_zid_diff] = {
@@ -527,7 +525,7 @@ def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypat
     req_diff = urllib.request.Request(
         f"{server_url}/api/v1/confirm-language",
         data=json.dumps(req_body_diff).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key},
     )
     with urllib.request.urlopen(req_diff, timeout=5.0) as resp:
         assert resp.status == 200
@@ -536,13 +534,12 @@ def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypat
         assert data.get("language") == "de"
 
     assert server.config.get("settings", "default_language") == "de"
-    assert len(persist_calls) == 1
-    assert persist_calls[0][0] == "de"
+    assert store.get("default_language") == "de"
+    assert store.snapshot()["revisions"]["default_language"] == revision+1
     assert len(spawn_calls) == 1
     assert spawn_calls[0][0] == ["--set-language", "de"]
 
     # 2. Confirming 'und' bypasses persistence and AutoHotkey signaling
-    persist_calls.clear()
     spawn_calls.clear()
     session_zid_und = "20261008143002"
     with _DRAFT_SESSIONS_LOCK:
@@ -560,7 +557,7 @@ def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypat
     req_und = urllib.request.Request(
         f"{server_url}/api/v1/confirm-language",
         data=json.dumps(req_body_und).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key},
     )
     with urllib.request.urlopen(req_und, timeout=5.0) as resp:
         assert resp.status == 200
@@ -570,11 +567,10 @@ def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypat
 
     # Settings remain 'de', no persist or spawn_ahk occurred
     assert server.config.get("settings", "default_language") == "de"
-    assert len(persist_calls) == 0
+    assert store.snapshot()["revisions"]["default_language"] == revision+1
     assert len(spawn_calls) == 0
 
     # 3. Confirming the already-active language avoids redundant writes and process invocations
-    persist_calls.clear()
     spawn_calls.clear()
     session_zid_same = "20261008143003"
     with _DRAFT_SESSIONS_LOCK:
@@ -592,7 +588,7 @@ def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypat
     req_same = urllib.request.Request(
         f"{server_url}/api/v1/confirm-language",
         data=json.dumps(req_body_same).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key},
     )
     with urllib.request.urlopen(req_same, timeout=5.0) as resp:
         assert resp.status == 200
@@ -602,7 +598,7 @@ def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypat
 
     # Redundant write and spawn must be skipped
     assert server.config.get("settings", "default_language") == "de"
-    assert len(persist_calls) == 0
+    assert store.snapshot()["revisions"]["default_language"] == revision+1
     assert len(spawn_calls) == 0
 
 
@@ -616,7 +612,7 @@ def test_confirm_language_validation_errors(running_controller):
     req = urllib.request.Request(
         f"{server_url}/api/v1/confirm-language",
         data=json.dumps({"action": "switch"}).encode("utf-8"),
-        headers={"Content-Type": "application/json"}
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
     )
     with pytest.raises(urllib.error.HTTPError) as exc_info:
         urllib.request.urlopen(req, timeout=5.0)
@@ -626,7 +622,7 @@ def test_confirm_language_validation_errors(running_controller):
     req = urllib.request.Request(
         f"{server_url}/api/v1/confirm-language",
         data=json.dumps({"session_zid": "123", "action": "invalid_action"}).encode("utf-8"),
-        headers={"Content-Type": "application/json"}
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
     )
     with pytest.raises(urllib.error.HTTPError) as exc_info:
         urllib.request.urlopen(req, timeout=5.0)
@@ -637,7 +633,7 @@ def test_confirm_language_validation_errors(running_controller):
     req = urllib.request.Request(
         f"{server_url}/api/v1/confirm-language",
         data=json.dumps({"session_zid": non_existent_zid, "action": "switch"}).encode("utf-8"),
-        headers={"Content-Type": "application/json"}
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
     )
     with pytest.raises(urllib.error.HTTPError) as exc_info:
         urllib.request.urlopen(req, timeout=5.0)

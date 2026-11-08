@@ -311,6 +311,10 @@
                     }
 
                     // The canonical update command applies each event once.
+                    if (data.type === 'preferences_updated') {
+                        if (w.receivePreferenceSnapshot) w.receivePreferenceSnapshot(data.preferences);
+                        return;
+                    }
                     if (typeof w.noteStreamMutation === 'function') w.noteStreamMutation();
                     if (typeof w.receiveUpdate === 'function') {
                         w.receiveUpdate(data);

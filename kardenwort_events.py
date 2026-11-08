@@ -115,6 +115,12 @@ class EventDispatcher:
         with self._lock:
             return bool(self._subscribers.get(session_zid))
 
+    def publish_global(self, event_data):
+        with self._lock:
+            sessions = list(self._subscribers)
+        for session in sessions:
+            self.publish(session, event_data)
+
     def publish(self, session_zid: str, event_data: Dict[str, Any]):
         payload = dict(event_data)
         if "timestamp" not in payload:
