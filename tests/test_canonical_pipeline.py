@@ -39,7 +39,8 @@ def test_retry_exact_duplicate_token_identity_and_cold_restore(world, target):
 
 
 @pytest.mark.parametrize('payload', [dict(token_orders=[0]), dict(row_ids=False),
-    dict(target_coordinates=[dict(sentence_idx=99, token_order=0)])])
+    dict(target_coordinates=[dict(sentence_idx=99, token_order=0)]),
+    dict(target_coordinates=[dict(session_zid='foreign', sentence_idx=1, token_order=0)])])
 def test_retry_rejects_ambiguous_or_malformed_selection_before_provider(world, payload):
     before = world.snapshot()
     status, result = post(world, '/session/retry', dict(session_zid=ZID, **payload))
@@ -108,4 +109,74 @@ def test_provider_policy_state_survives_restart_without_json_files(world):
         assert not desk.is_provider_cooled_down('google', config=world.config, resolved_paths=world.paths, task_type='text')
         assert desk.get_session_active_providers(ZID, config=world.config, resolved_paths=world.paths)['active_lemma_provider'] == 'google'
     assert not [path for path in writes if path.endswith('.json')]
+    assert prohibited(writes) == []
+
+
+def test_queue_sqlite_profile_without_duplicated_backend_flag_never_falls_back_to_files(world, monkeypatch):
+    world.paths.pop('storage_backend')
+    monkeypatch.setattr(controller, 'query_intellifiller_server', lambda **kwargs: None)
+    with control_writes() as writes:
+        with pytest.raises(desk.StructuredError, match='structured request failed'):
+            world.arbiter.enrichment_queue._execute_enrich_lemma('Haus', 'de', 'fixture', ZID)
+    assert prohibited(writes) == []
+
+
+def test_project_reader_uses_relational_materials_without_mirror_tsv(world):
+    from tests.controller_test_support import token_service
+    project = world.adapter.db.create_project(title='Book', slug='book')
+    world.adapter.db.link_session_to_project(project, ZID)
+    original = world.snapshot()
+    sessions_before = {row['zid'] for row in world.adapter.db.list_sessions_with_counts()}
+    with token_service() as tokenizer:
+        world.config.set('services', 'spacy_server_url', f'http://127.0.0.1:{tokenizer.server_port}')
+        connection = HTTPConnection('127.0.0.1', world.port, timeout=10)
+        try:
+            with control_writes() as writes:
+                connection.request('GET', f'/?project_id={project}&language=de', headers={'X-API-Token': TOKEN})
+                response = connection.getresponse()
+                body = response.read().decode('utf-8')
+            assert response.status == 200, body
+            assert 'Book' in body and 'Haus' in body and 'Baum' in body
+            assert prohibited(writes) == []
+        finally:
+            connection.close()
+    assert world.snapshot() == original
+    cold = desk.SqliteStorageAdapter(world.config, world.paths)
+    created = {row['zid'] for row in cold.db.list_sessions_with_counts()} - sessions_before
+    assert len(created) == 1
+    assert {word['lemma'] for word in cold.db.get_words_by_session(created.pop())} >= {'Haus', 'Baum'}
+
+
+@pytest.mark.parametrize('action', ['save', 'reword', 'retry'])
+def test_committed_delivery_failure_exposes_read_recovery_without_duplicate_mutation(world, monkeypatch, action):
+    def broken_delivery(*args, **kwargs):
+        raise ConnectionError('owned delivery interruption')
+
+    monkeypatch.setattr(world.arbiter, 'emit_event', broken_delivery)
+    payload = dict(session_zid=ZID)
+    if action == 'save':
+        payload['deltas'] = [dict(row_id=0, sentence_idx=1, token_order=0,
+                                  column='WordDestination', value='manual-committed')]
+        expected = 'manual-committed'
+    else:
+        payload.update(row_ids=[0], target_coordinates=[dict(sentence_idx=1, token_order=0)], sentence_idx=1)
+        expected = 'fresh-Haus'
+    with control_writes() as writes:
+        status, result = post(world, '/session/' + action, payload)
+    assert status >= 400, result
+    details = result['details']
+    assert details['committed'] is True
+    assert details['session_zid'] == ZID and details['fingerprint']
+    assert world.values() == {(1, 0): expected, (2, 0): 'tree'}
+    calls = list(world.provider.calls)
+    connection = HTTPConnection('127.0.0.1', world.port, timeout=10)
+    try:
+        connection.request('GET', details['recovery_url'], headers={'X-API-Token': TOKEN})
+        response = connection.getresponse()
+        recovered = json.load(response)
+        assert response.status == 200, recovered
+    finally:
+        connection.close()
+    assert world.provider.calls == calls
+    assert world.values() == {(1, 0): expected, (2, 0): 'tree'}
     assert prohibited(writes) == []

@@ -235,8 +235,10 @@ def test_sqlite_enrich_session_intellifiller_and_export_fidelity(enrichment_env)
     db.save_session_bundle(session, sentences, words)
 
     # Mock run_headless_intellifiller to populate enriched fields in the ephemeral TSV
-    def fake_headless_ifiller(tsv_path, *args, **kwargs):
-        comments, headers, data_rows = load_tsv_rows(tsv_path)
+    def fake_headless_ifiller(rows, **kwargs):
+        batch = rows
+        headers = list(batch[0])
+        data_rows = [[row.get(name, '') for name in headers] for row in batch]
         if "WordSourceSynonymAI" not in headers:
             headers.append("WordSourceSynonymAI")
             for r in data_rows:
@@ -250,10 +252,12 @@ def test_sqlite_enrich_session_intellifiller_and_export_fidelity(enrichment_env)
         data_rows[0][morph_idx] = "Noun|Masc|Sing"
         data_rows[0][ipa_idx] = "/hʊnt/"
         data_rows[0][syn_idx] = "Köter, Vierbeiner"
-        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-        return True
 
-    with patch("kardenwort_desk.run_headless_intellifiller", side_effect=fake_headless_ifiller):
+        return dict(status='success', enriched_rows=[dict(zip(headers, row)) for row in data_rows])
+
+
+    with patch("kardenwort_desk.query_intellifiller_server", side_effect=fake_headless_ifiller):
+        adapter.config.read_dict({'services': {'intellifiller_server_url': 'http://fixture-provider.invalid'}})
         success = adapter.enrich_session_intellifiller(
             session_zid=session_zid,
             prompt_name="morphology_and_ipa",
@@ -362,6 +366,10 @@ def test_performance_tracing_records_local_ollama_provider(enrichment_env):
     resolved_paths = dict(enrichment_env["resolved_paths"])
     results_dir = enrichment_env["results_dir"]
 
+    # This contract exercises the declared deprecated file/CLI diagnostic edge.
+    config.set('storage', 'backend', 'tsv')
+    resolved_paths['storage_backend'] = 'tsv'
+
     # Configure local Ollama in intellifiller section
     if not config.has_section("intellifiller"):
         config.add_section("intellifiller")
@@ -444,8 +452,10 @@ def test_sqlite_enrich_session_intellifiller_overrides_pos_and_gender(enrichment
     db.save_session_bundle(session, sentences, words)
 
     # 2. Mock headless intellifiller returning LLM JSON mapped values
-    def fake_ifiller_override(tsv_path, *args, **kwargs):
-        comments, headers, data_rows = load_tsv_rows(tsv_path)
+    def fake_ifiller_override(rows, **kwargs):
+        batch = rows
+        headers = list(batch[0])
+        data_rows = [[row.get(name, '') for name in headers] for row in batch]
         for h in ["WordSourcePOS", "WordSourceGender", "WordDestination"]:
             if h not in headers:
                 headers.append(h)
@@ -466,10 +476,11 @@ def test_sqlite_enrich_session_intellifiller_overrides_pos_and_gender(enrichment
             data_rows[1][gen_idx] = ""
             data_rows[1][dest_idx] = "вставать"
 
-        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-        return True
+        return dict(status='success', enriched_rows=[dict(zip(headers, row)) for row in data_rows])
 
-    with patch("kardenwort_desk._run_headless_intellifiller_impl", side_effect=fake_ifiller_override):
+
+    with patch("kardenwort_desk.query_intellifiller_server", side_effect=fake_ifiller_override):
+        adapter.config.read_dict({'services': {'intellifiller_server_url': 'http://fixture-provider.invalid'}})
         success = adapter.enrich_session_intellifiller(
             session_zid=session_zid,
             prompt_name="German Vocabulary Analysis and Translation (JSON)",

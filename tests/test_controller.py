@@ -1,4 +1,5 @@
 import sys
+from datetime import datetime, timezone
 import os
 import csv
 import json
@@ -603,20 +604,13 @@ def test_controller_session_reword_frequency_sorted_parity(running_controller, t
     try:
         # 3. Track intellifiller invocations
         dispatched_selected_rows = []
-        def fake_headless_ifiller(tsv_path, *args, **kwargs):
-            selected_rows = kwargs.get("selected_rows")
-            dispatched_selected_rows.append(list(selected_rows or []))
-            _, h, r = kardenwort_desk.load_tsv_rows(tsv_path)
-            dest_col = h.index("WordDestination")
-            for s_idx in (selected_rows or []):
-                if s_idx < len(r):
-                    r[s_idx][dest_col] = f"reworded_{r[s_idx][1]}"
-            kardenwort_desk.save_tsv_rows_safely(tsv_path, ["# test"], h, r)
-            return True
+        def structured_provider(rows, **kwargs):
+            dispatched_selected_rows.append([row['row_id'] for row in rows])
+            return dict(status='success', enriched_rows=[dict(row_id=row['row_id'],
+                WordDestination=f"reworded_{row['WordSource']}") for row in rows])
 
-        monkeypatch.setattr(kardenwort_desk, "run_headless_intellifiller", fake_headless_ifiller)
-        import kardenwort_controller
-        monkeypatch.setattr(kardenwort_controller, "run_headless_intellifiller", fake_headless_ifiller)
+        server.config.set('services', 'intellifiller_server_url', 'http://fixture-provider.invalid')
+        monkeypatch.setattr(kardenwort_desk, 'query_intellifiller_server', structured_provider)
 
         # In frequency-sorted order: row 0 is 'apple', row 1 is 'zebra'
         # Selecting row 0 targets 'apple'
@@ -1142,6 +1136,7 @@ def test_controller_session_status_worker_lock_held_reports_busy(running_control
     )
     sentinel_lock_path = (results_dir / f"{storage_zid}.worker.lock") if results_dir else Path(f"{storage_zid}.worker.lock")
     try:
+        storage_adapter.db.set_worker_status(storage_zid, 'running', started_at=datetime.now(timezone.utc).isoformat())
         with storage_adapter.file_lock(sentinel_lock_path):
             req_storage = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}", headers={"X-API-Token": "test-controller-api-key"})
             with urllib.request.urlopen(req_storage, timeout=5.0) as resp:
@@ -1152,7 +1147,8 @@ def test_controller_session_status_worker_lock_held_reports_busy(running_control
                 assert data.get("is_finished") is False
                 assert data.get("stage") == "translating"
 
-        # Once lock is released, is_finished should be True
+        storage_adapter.db.set_worker_status(storage_zid, 'finished', finished_at=datetime.now(timezone.utc).isoformat())
+        # Once the persisted worker finishes, is_finished should be True
         req_storage2 = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}", headers={"X-API-Token": "test-controller-api-key"})
         with urllib.request.urlopen(req_storage2, timeout=5.0) as resp2:
             assert resp2.status == 200
@@ -1736,8 +1732,16 @@ def test_controller_session_reword_multi_sentence_container_no_shift(running_con
         kardenwort_desk.save_tsv_rows_safely(tsv_path, c, h, rows)
         return True
 
-    monkeypatch.setattr(kardenwort_controller, "run_headless_intellifiller", mock_headless)
-    monkeypatch.setattr(kardenwort_desk, "run_headless_intellifiller", mock_headless)
+    def structured_provider(rows, **kwargs):
+        return dict(status='success', enriched_rows=[dict(row_id=row['row_id'],
+            WordDestination=f"reworded_{row['WordSource']}") for row in rows])
+
+    if is_sqlite:
+        server.config.set('services', 'intellifiller_server_url', 'http://fixture-provider.invalid')
+        monkeypatch.setattr(kardenwort_desk, 'query_intellifiller_server', structured_provider)
+    else:
+        monkeypatch.setattr(kardenwort_controller, "run_headless_intellifiller", mock_headless)
+        monkeypatch.setattr(kardenwort_desk, "run_headless_intellifiller", mock_headless)
 
     try:
         # Reword Sentence 1 words: Row 0 (Transporter) and Row 1 (Automobil)
@@ -1869,6 +1873,7 @@ de_prompt=test
 
     monkeypatch.setattr(kardenwort_controller, "run_headless_intellifiller", fake_headless)
     monkeypatch.setattr(kardenwort_desk, "run_headless_intellifiller", fake_headless)
+
 
     res = arbiter.reword_session(
         session_zid=sess_zid,
@@ -2596,29 +2601,15 @@ de_lemma_index={idx_file.as_posix()}
     call_count = 0
     translations = ["работать", "трудиться", "вкалывать"]
 
-    def fake_headless(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
+    def structured_provider(rows, **kwargs):
         nonlocal call_count
-        c, h, rows = kardenwort_desk.load_tsv_rows(tsv_path)
-        t_ord_col = h.index("TokenOrder")
-        lemma_col = h.index("WordSource")
-        dest_col = h.index("WordDestination")
-
-        sel_set = {int(r) for r in selected_rows if str(r).isdigit()} if selected_rows is not None else None
-        trans = translations[min(call_count, len(translations) - 1)]
+        trans = translations[min(call_count, len(translations)-1)]
         call_count += 1
+        return dict(status='success', enriched_rows=[dict(row_id=row['row_id'],
+            WordSource='arbeiten', WordDestination=trans) for row in rows])
 
-        for i, row in enumerate(rows):
-            if sel_set is not None and i not in sel_set:
-                continue
-            if row[t_ord_col] == "0":
-                row[lemma_col] = "arbeiten"
-                row[dest_col] = trans
-
-        kardenwort_desk.save_tsv_rows_safely(tsv_path, c, h, rows)
-        return True
-
-    monkeypatch.setattr(kardenwort_controller, "run_headless_intellifiller", fake_headless)
-    monkeypatch.setattr(kardenwort_desk, "run_headless_intellifiller", fake_headless)
+    config.read_dict({'services': {'intellifiller_server_url': 'http://fixture-provider.invalid'}})
+    monkeypatch.setattr(kardenwort_desk, 'query_intellifiller_server', structured_provider)
 
     # Click 1: Re-word on row 0 (TokenOrder 0: "Arbeit" -> "arbeiten", rank 1 -> rank 3)
     res1 = arbiter.reword_session(

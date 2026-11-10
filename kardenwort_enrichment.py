@@ -30,8 +30,10 @@ def request_batch(rows, prompt, language, config, query, zid=None, trace_id=None
 def checked_fields(item, original, fields):
     if not fields:
         raise reword.InvalidRewordTarget('IntelliFiller returned no produced fields')
+    if item.get('status') in ('error', 'failed'):
+        raise reword.InvalidRewordTarget('IntelliFiller returned a failed row')
     result = {name: checked_value(name, item[name]) for name in fields}
-    for name in ('TokenOrder', 'token_order', 'SentenceSourceIndex', 'sentence_index', 'WordSource'):
+    for name in ('TokenOrder', 'token_order', 'SentenceSourceIndex', 'sentence_index'):
         if name in result and result[name] != str(original.get(name, '')):
             raise reword.InvalidRewordTarget('IntelliFiller changed occurrence identity')
     return result
@@ -41,11 +43,16 @@ def checked_value(name, value):
     if value is not None and not isinstance(value, str):
         raise reword.InvalidRewordTarget('IntelliFiller field must be text or null')
     value = '' if value is None else value
-    if name.lower().replace('_', '') == 'worddestination' and not value.strip():
-        raise reword.InvalidRewordTarget('IntelliFiller returned an empty translation')
+    if name.lower().replace('_', '') == 'worddestination' and invalid_translation(value):
+        raise reword.InvalidRewordTarget('IntelliFiller returned an empty or failed translation')
     if name in ('gender', 'WordSourceGender'):
         return normalized_gender(value)
     return value
+
+
+def invalid_translation(value):
+    value = value.strip()
+    return not value or value == '[FAILED]' or value.startswith('[Error')
 
 
 def normalized_gender(value):

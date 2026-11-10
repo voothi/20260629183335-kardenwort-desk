@@ -1,4 +1,5 @@
 import sys
+from contextlib import contextmanager
 import sqlite3
 from kardenwort_db import QueryExecutionError
 import kardenwort_reword as reword
@@ -69,6 +70,7 @@ from kardenwort_desk import (
     extract_zid,
     generate_slug,
     get_storage_adapter,
+    storage_backend_setting,
     parse_tsv_to_bundle,
     render_lookup_html,
     render_verify_language_html,
@@ -107,6 +109,17 @@ from kardenwort_desk import (
 )
 
 logger = logging.getLogger("kardenwort.desk.controller")
+
+
+@contextmanager
+def committed_delivery(session_zid, fingerprint):
+    try:
+        yield
+    except Exception as exc:
+        raise StructuredError(ErrorCode.DESK_FAILED, 'Committed state could not be synchronized', details={
+            'committed': True, 'session_zid': session_zid, 'fingerprint': fingerprint,
+            'recovery_url': f'/session/status?zid={session_zid}&committed=1',
+        }) from exc
 
 
 def format_storage_update_rows(adapter, zid, rows, headers, roles, provenances):
@@ -1009,7 +1022,7 @@ class EnrichmentQueue:
                     del self._inflight_lemmas[key]
 
     def _execute_enrich_lemma(self, lemma, language='de', prompt_name='', zid=None, trace_id=None):
-        if self.resolved_paths.get('storage_backend') != 'sqlite':
+        if storage_backend_setting(self.config, self.resolved_paths) != 'sqlite':
             return self._execute_legacy_enrich_lemma(lemma, language, prompt_name, zid, trace_id)
         from kardenwort_enrichment import request_batch
         prompt = prompt_name or self.config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
@@ -1992,15 +2005,16 @@ class SessionArbiter:
             words = adapter.db.get_words_by_session(session_zid)
             selection = {word['lemma'].strip().lower(): bool(word['selected']) for word in words}
         # Broadcast state mutation event to all connected SSE clients
-        self.emit_event(session_zid, {
-            "type": "update",
-            "stage": "saved",
-            "status": "success",
-            "fingerprint": res["fingerprint"],
-            "deltas": deltas,
-            "shared_selection": selection,
-            "zid": res["zid"]
-        })
+        with committed_delivery(session_zid, res['fingerprint']):
+            self.emit_event(session_zid, {
+                "type": "update",
+                "stage": "saved",
+                "status": "success",
+                "fingerprint": res["fingerprint"],
+                "deltas": deltas,
+                "shared_selection": selection,
+                "zid": res["zid"]
+            })
 
         return res
 
@@ -2165,7 +2179,7 @@ class SessionArbiter:
             safe_write_update_js(result['tsv_path'], rows, result['headers'], result['role_fields'], stage='finished', status='success', source_text='', translated_text=result['translated_text'], sentences=sentences, zid=result['session_zid'], config=self.config)
             self.emit_event(result['session_zid'], dict(payload, type='update', stage='translated_text'))
         except Exception as exc:
-            raise StructuredError(ErrorCode.DESK_FAILED, 'Re-text committed; update delivery failed', details={'committed': True}) from exc
+            raise StructuredError(ErrorCode.DESK_FAILED, 'Re-text committed; update delivery failed', details={'committed': True, 'session_zid': result['session_zid'], 'fingerprint': result['fingerprint'], 'recovery_url': f"/session/status?zid={result['session_zid']}&committed=1"}) from exc
         return payload
 
     def propagate_enrichment_to_siblings(
@@ -2291,6 +2305,10 @@ class SessionArbiter:
         visual_indices: Optional[List[Any]] = None,
         sentence_idx: Optional[int] = None,
     ) -> Dict[str, Any]:
+        try:
+            reword.validate_session_targets(session_zid, target_coordinates)
+        except ValueError as exc:
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
         req_zid = zid or generate_unique_zid()
         if sentence_idx is not None:
             try:
@@ -2544,40 +2562,41 @@ class SessionArbiter:
                 self.sessions[session_zid]['headers'] = headers
 
         row_occurrences = reword_query_occurrences(storage_adapter, session_zid)
-        safe_write_update_js(
-            tsv_path,
-            data_rows,
-            headers,
-            role_fields,
-            stage="finished",
-            status="success",
-            zid=session_zid,
-            config=self.config,
-            class_cols=class_cols if class_cols else None,
-            row_provenances=existing_row_provs,
-            row_occurrences=row_occurrences,
-            occurrence_provenances=occurrence_provenances,
-        )
+        with committed_delivery(session_zid, new_fp):
+            safe_write_update_js(
+                tsv_path,
+                data_rows,
+                headers,
+                role_fields,
+                stage="finished",
+                status="success",
+                zid=session_zid,
+                config=self.config,
+                class_cols=class_cols if class_cols else None,
+                row_provenances=existing_row_provs,
+                row_occurrences=row_occurrences,
+                occurrence_provenances=occurrence_provenances,
+            )
 
-        structured_rows = format_update_rows_dict(
-            data_rows,
-            headers,
-            role_fields,
-            class_cols=class_cols if class_cols else None,
-            row_provenances=existing_row_provs,
-            row_occurrences=row_occurrences,
-            occurrence_provenances=occurrence_provenances,
-        )
+            structured_rows = format_update_rows_dict(
+                data_rows,
+                headers,
+                role_fields,
+                class_cols=class_cols if class_cols else None,
+                row_provenances=existing_row_provs,
+                row_occurrences=row_occurrences,
+                occurrence_provenances=occurrence_provenances,
+            )
 
-        self.emit_event(session_zid, {
-            "type": "update",
-            "stage": "enrichment",
-            "status": "success",
-            "fingerprint": new_fp,
-            "rows": structured_rows,
-            "row_provenances": existing_row_provs,
-            "rowProvenances": existing_row_provs,
-        })
+            self.emit_event(session_zid, {
+                "type": "update",
+                "stage": "enrichment",
+                "status": "success",
+                "fingerprint": new_fp,
+                "rows": structured_rows,
+                "row_provenances": existing_row_provs,
+                "rowProvenances": existing_row_provs,
+            })
 
         return {
             "status": "success",
@@ -2725,6 +2744,10 @@ class SessionArbiter:
         token_orders: Optional[List[Any]] = None,
         target_coordinates=None,
     ) -> Dict[str, Any]:
+        try:
+            reword.validate_session_targets(session_zid, target_coordinates)
+        except ValueError as exc:
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
         req_zid = zid or generate_unique_zid()
         eff_trace_id = trace_id or f"{session_zid}:retry"
         lang = language or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
@@ -2785,6 +2808,7 @@ class SessionArbiter:
             selection = resolve_reword_request(data_rows, headers, role_fields, source, self.config,
                 targets=target_coordinates, selected_rows=selected, token_orders=token_orders)
             target_indices = list(selection.rows)
+            selected_keys = dict(zip(selection.rows, selection.keys))
         else:
             target_indices = []
             if token_orders is not None and len(token_orders) > 0:
@@ -2862,7 +2886,7 @@ class SessionArbiter:
                             row[col_word_dest] = t_val
                             t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
                             if is_sqlite:
-                                updates.append(dict(sentence_index=selection.keys[selection.rows.index(row_idx)][0],
+                                updates.append(dict(sentence_index=selected_keys[row_idx][0],
                                     token_order=t_ord, updates=dict(word_destination=t_val, word_provenance=fast_prov)))
 
             if is_sqlite:
@@ -2988,7 +3012,8 @@ class SessionArbiter:
         if effective_text_prov:
             event_payload["text_provenance"] = effective_text_prov
             event_payload["textProvenance"] = effective_text_prov
-        self.emit_event(session_zid, event_payload)
+        with committed_delivery(session_zid, new_fp):
+            self.emit_event(session_zid, event_payload)
 
         res_payload = {
             "status": "success",
@@ -3838,6 +3863,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
+            if is_sqlite:
+                lifecycle = storage_adapter.db.get_worker_status(zid)
+                is_busy = lifecycle['worker_status'] in ('queued', 'running')
+
             # Semantic completion check: if untranslated lemmas remain and session is recent or locked.
             # Use 1800s (30 min) recency window - Argos can take many minutes for large texts.
             is_recent = False
@@ -4298,11 +4327,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         data_rows=data_rows,
                         sentences=synthesized.get("sentences"),
                     )
-                    results_dir = Path(self.server.resolved_paths.get('kardenwort_workspace', '.')) / "results"
-                    results_dir.mkdir(parents=True, exist_ok=True)
-                    slug_suffix = f"-{slug}" if slug else ""
-                    tsv_path = results_dir / f"{synth_zid}{slug_suffix}.{sess_lang}.tsv"
-                    save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                    if adapter.backend_name == 'sqlite':
+                        tsv_path = str(synth_zid)
+                    else:
+                        results_dir = Path(self.server.resolved_paths.get('kardenwort_workspace', '.')) / "results"
+                        results_dir.mkdir(parents=True, exist_ok=True)
+                        slug_suffix = f"-{slug}" if slug else ""
+                        tsv_path = results_dir / f"{synth_zid}{slug_suffix}.{sess_lang}.tsv"
+                        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                     html = render_flow_fn(
                         text=source_text,
                         language=sess_lang,

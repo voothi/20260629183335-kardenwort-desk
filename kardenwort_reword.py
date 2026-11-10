@@ -44,6 +44,12 @@ def descriptors(value):
     return value
 
 
+def validate_session_targets(session_zid, targets):
+    for target in descriptors(targets):
+        if 'session_zid' in target and target['session_zid'] != session_zid:
+            raise InvalidRewordTarget('Occurrence belongs to a different session')
+
+
 def descriptor_kind(item):
     if 'token_order' in item:
         index_value(item.get('sentence_idx'), 1)

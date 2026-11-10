@@ -80,7 +80,7 @@ class TestPerformanceTracing(unittest.TestCase):
             zid = "debounce_zid"
 
             def run_flow():
-                return run_render_flow("text", "de", zid, "single", None, {})
+                return run_render_flow("text", "de", zid, "single", configparser.ConfigParser(), {})
 
             first = Worker(run_flow)
             try:
@@ -141,3 +141,17 @@ class TestPerformanceTracing(unittest.TestCase):
                 self.assertEqual(len(lines), 1)
                 entry = json.loads(lines[0])
                 self.assertEqual(entry["phase"], "mül_phase")
+
+
+def test_sqlite_trace_uses_existing_logger_without_control_files(tmp_path, caplog):
+    config = configparser.ConfigParser()
+    config.read_dict({'storage': {'backend': 'sqlite'}, 'profiling': {'enable_performance_tracing': 'true'}})
+    with caplog.at_level('INFO', logger='kardenwort.desk.performance'):
+        with TraceTimer('canonical-phase', 'owned-zid', config, {'results_dir': tmp_path}):
+            pass
+    records = [json.loads(record.message) for record in caplog.records
+               if record.name == 'kardenwort.desk.performance']
+    assert len(records) == 1
+    assert records[0]['phase'] == 'canonical-phase' and records[0]['zid'] == 'owned-zid'
+    assert records[0]['status'] == 'success' and records[0]['duration'] >= 0
+    assert list(tmp_path.iterdir()) == []

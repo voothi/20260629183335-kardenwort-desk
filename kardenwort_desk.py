@@ -898,21 +898,20 @@ def tokenize_text_with_fallback(
     # Fallback to CLI subprocess
     python_exe = resolved_paths.get('kardenwort_python', sys.executable)
     kardenwort_ws = resolved_paths.get('kardenwort_workspace', Path('.'))
-    kardenwort_script = Path(kardenwort_ws) / "src" / "kardenwort" / "core" / "kardenwort.py"
 
     cmd = [
         str(python_exe),
-        str(kardenwort_script),
+        "-m", "kardenwort.core.kardenwort",
         "--language", language,
-        "--text", text,
         "--structured-output"
     ]
     if spacy_url:
         cmd.extend(["--spacy-server-url", spacy_url])
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONPATH"] = str(Path(kardenwort_ws) / "src")
     try:
-        proc = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8', timeout=15, env=env)
+        proc = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8', timeout=15, env=env, input=text)
         tokens = []
         for line in proc.stdout.splitlines():
             line = line.strip()
@@ -1740,6 +1739,20 @@ class TraceTimer(contextlib.ContextDecorator):
             if not _HAS_BOOTED:
                 _HAS_BOOTED = True
 
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "zid": self.zid,
+            "phase": self.phase,
+            "duration": duration,
+            "cold_start": cold_start,
+            "status": "error" if exc and exc[0] is not None else "success"
+        }
+        if self.extra:
+            entry["extra"] = self.extra
+        if storage_backend_setting(self.config, self.resolved_paths) == 'sqlite':
+            logging.getLogger('kardenwort.desk.performance').info(json.dumps(entry))
+            return False
+
         try:
             try:
                 _kw_workspace = self.resolved_paths.get('kardenwort_workspace') if isinstance(self.resolved_paths, dict) else None
@@ -1762,16 +1775,6 @@ class TraceTimer(contextlib.ContextDecorator):
                     except Exception:
                         pass
 
-                entry = {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "zid": self.zid,
-                    "phase": self.phase,
-                    "duration": duration,
-                    "cold_start": cold_start,
-                    "status": "error" if exc and exc[0] is not None else "success"
-                }
-                if self.extra:
-                    entry["extra"] = self.extra
                 with open(log_file, 'a', encoding='utf-8') as f:
                     f.write(json.dumps(entry) + '\n')
         except Exception:
@@ -4404,7 +4407,7 @@ class SqliteStorageAdapter(StorageAdapter):
         tsv_path: Path,
         **kwargs,
     ) -> Tuple[List[str], List[str], List[List[str]]]:
-        if isinstance(tsv_path, str) and re.fullmatch(r'[0-9]{14}', tsv_path):
+        if isinstance(tsv_path, str) and re.fullmatch(r'[A-Za-z0-9_-]+', tsv_path):
             restored = self.restore_session(tsv_path)
             return restored.get('comments', []), *reword.restored_manifest_rows(restored)
         if tsv_path:
@@ -4739,7 +4742,11 @@ class SqliteStorageAdapter(StorageAdapter):
         self, session_zid: str, prompt_name: str, selected_rows=None, reprocess=False,
         zid=None, trace_id=None, token_orders=None, target_coordinates=None, visual_indices=None,
     ) -> bool:
-        """Enrich exact occurrences in scratch storage, then commit one validated batch."""
+        """Enrich exact occurrences in memory, then commit one validated batch."""
+        try:
+            reword.validate_session_targets(session_zid, target_coordinates)
+        except ValueError as exc:
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
         restored = self.restore_session(session_zid)
         headers, rows = reword.restored_manifest_rows(restored)
         mapping = load_anki_mapping(self.resolved_paths.get('anki_mapping_file'))
@@ -5885,7 +5892,7 @@ _DEFAULT_TSV_ADAPTER = TsvStorageAdapter()
 
 def storage_backend_setting(config, resolved_paths):
     if resolved_paths and "storage_backend" in resolved_paths:
-        return resolved_paths["storage_backend"]
+        return str(resolved_paths["storage_backend"] or "tsv").strip().lower()
     if config and hasattr(config, "get"):
         return config.get(SEC_STORAGE, "backend", fallback="tsv").strip().lower()
     return "tsv"
@@ -6507,10 +6514,7 @@ _cooldown_lock = threading.Lock()
 _COOLDOWN_FILE_NAME = "provider_cooldowns.json"
 
 def sqlite_provider_database(config=None, resolved_paths=None):
-    backend = (resolved_paths or {}).get('storage_backend')
-    if backend is None and config is not None:
-        backend = config.get(SEC_STORAGE, 'backend', fallback='tsv')
-    if backend == 'sqlite':
+    if storage_backend_setting(config, resolved_paths) == 'sqlite':
         return get_storage_adapter(config, resolved_paths).db
     return None
 
@@ -8982,6 +8986,7 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
             ]
 
             if is_sqlite:
+                cmd[1:2] = ['-m', 'kardenwort.core.kardenwort']
                 for option in ('--output-file', '--text1-file'):
                     index = cmd.index(option)
                     del cmd[index:index + 2]
@@ -9062,6 +9067,9 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
             kardenwort_timeout = config.getint(SEC_TIMEOUTS, 'kardenwort_timeout', fallback=120)
             env = os.environ.copy()
             env["PYTHONIOENCODING"] = "utf-8"
+            if is_sqlite:
+                env['PYTHONPATH'] = str(kardenwort_workspace / 'src')
+
 
             logger.info(f"Running kardenwort.py: {' '.join(cmd)}")
             try:
@@ -9072,9 +9080,13 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
                     comments, headers = [], fields
                     data_rows = extraction_rows(result.stdout, headers)
             except subprocess.TimeoutExpired as e:
+                if is_sqlite:
+                    raise StructuredError(ErrorCode.TIMEOUT, "Structured extraction timed out") from e
                 print_structured_error("TIMEOUT", f"kardenwort.py timed out after {kardenwort_timeout} seconds")
                 sys.exit(1)
             except subprocess.CalledProcessError as e:
+                if is_sqlite:
+                    raise StructuredError(ErrorCode.KARDENWORT_FAILED, "Structured extraction failed") from e
                 print_structured_error("KARDENWORT_FAILED", f"kardenwort.py failed with exit code {e.returncode}", {"stderr": e.stderr})
                 sys.exit(1)
 
@@ -15721,9 +15733,9 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     import time
     global _update_seq_counter
 
-    relational = isinstance(tsv_path, str) and re.fullmatch(r'[0-9]{14}', tsv_path) is not None
+    relational = isinstance(tsv_path, str) and re.fullmatch(r'[A-Za-z0-9_-]+', tsv_path) is not None
     if zid is None and tsv_path:
-        zid = extract_zid(tsv_path)
+        zid = tsv_path if relational else extract_zid(tsv_path)
     if not tsv_path:
         return None
     from kardenwort_delivery import delivery_sinks

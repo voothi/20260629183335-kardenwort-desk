@@ -71,24 +71,13 @@ editable_columns = WordDestination,WordSource,WordSourceInflectedForm,WordSource
         "storage_fallback_to_tsv": False,
     }
 
-    config = MagicMock()
-    config.get.side_effect = lambda sec, opt, fallback=None: {
-        ("storage", "backend"): "sqlite",
-        ("storage", "sqlite_db_path"): str(db_path),
-        ("settings", "results_dir"): str(results_dir),
-        ("settings", "default_language"): "en",
-        ("settings", "default_target_language"): "ru",
-        ("settings", "anki_mapping_file"): str(anki_mapping),
-    }.get((sec, opt), fallback)
-    config.getboolean.side_effect = lambda sec, opt, fallback=False: {
-        ("storage", "fallback_to_tsv"): False,
-    }.get((sec, opt), fallback)
-    config.getint.side_effect = lambda sec, opt, fallback=0: fallback
-    config.has_option.side_effect = lambda sec, opt: (sec, opt) in [
-        ("storage", "backend"),
-        ("storage", "sqlite_db_path"),
-        ("settings", "results_dir"),
-    ]
+    import configparser
+    config = configparser.ConfigParser()
+    config.read_dict({
+        'storage': {'backend': 'sqlite', 'sqlite_db_path': str(db_path), 'fallback_to_tsv': 'false'},
+        'settings': {'results_dir': str(results_dir), 'default_language': 'en',
+                     'default_target_language': 'ru', 'anki_mapping_file': str(anki_mapping)},
+    })
 
     return {
         "tmp_path": tmp_path,
@@ -460,12 +449,7 @@ class TestCliLifecycleCommands:
         idx_file.write_text("apple\nzebra\n", encoding="utf-8")
 
         # Configure config to return en_lemma_index
-        orig_side_effect = temp_env["config"].get.side_effect
-        def custom_config_get(sec, opt, fallback=None):
-            if (sec, opt) == ("languages", "en_lemma_index"):
-                return str(idx_file)
-            return orig_side_effect(sec, opt, fallback=fallback)
-        temp_env["config"].get.side_effect = custom_config_get
+        temp_env['config'].read_dict({'languages': {'en_lemma_index': str(idx_file)}})
 
         # 2. Seed session with zebra as token 0, apple as token 1
         headers = [
@@ -492,17 +476,21 @@ class TestCliLifecycleCommands:
         # 3. Mock run_headless_intellifiller
         # In frequency sorted order: row 0 is 'apple', row 1 is 'zebra'
         # When caller selects row 0 (apple), intellifiller enriches row 0
-        def fake_headless_ifiller(tsv_path, *args, **kwargs):
-            comments, headers, data_rows = desk.load_tsv_rows(tsv_path)
+        def fake_headless_ifiller(rows, **kwargs):
+            batch = rows
+            headers = list(batch[0])
+            data_rows = [[row.get(name, '') for name in headers] for row in batch]
             assert data_rows[0][headers.index("WordSource")] == "apple"
-            assert data_rows[1][headers.index("WordSource")] == "zebra"
+            assert len(data_rows) == 1
 
             dest_idx = headers.index("WordDestination")
             data_rows[0][dest_idx] = "яблоко"
-            desk.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-            return True
 
-        with patch("kardenwort_desk.run_headless_intellifiller", side_effect=fake_headless_ifiller):
+            return dict(status='success', enriched_rows=[dict(zip(headers, row)) for row in data_rows])
+
+
+        with patch("kardenwort_desk.query_intellifiller_server", side_effect=fake_headless_ifiller):
+            adapter.config.read_dict({'services': {'intellifiller_server_url': 'http://fixture-provider.invalid'}})
             success = adapter.enrich_session_intellifiller(
                 session_zid=session_zid,
                 prompt_name="morphology_and_ipa",

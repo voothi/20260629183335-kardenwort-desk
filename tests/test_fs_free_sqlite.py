@@ -20,7 +20,54 @@ from kardenwort_desk import (
     prepare_lookup_tsv,
     run_lookup_flow,
 )
-from tests.test_lookup import setup_test_env
+from tests.test_lookup import setup_test_env as base_setup_test_env
+
+
+@pytest.fixture
+def owned_runtime():
+    from contextlib import ExitStack
+    import time
+    import threading
+    from tests.browser_test_server import create_browser_test_server
+    from tests.controller_test_support import translation_service, DeterministicTranslationHandler
+    from kardenwort_controller import ControllerRequestHandler, SessionArbiter, ProcessSupervisor
+    with ExitStack() as lifetime:
+        translator = lifetime.enter_context(translation_service(DeterministicTranslationHandler))
+        def start(config, paths):
+            server = create_browser_test_server(ControllerRequestHandler)
+            config.read_dict({'server': {'port': str(server.server_port),
+                'controller_port': str(server.server_port), 'api_key': 'owned-fs-runtime'},
+                'services': {'translation_server_url': f'http://127.0.0.1:{translator.server_port}'}})
+            server.config, server.resolved_paths, server.goldendict = config, paths, {}
+            server.api_key = 'owned-fs-runtime'
+            server.seq_counter, server.seq_lock, server.start_time = 0, threading.Lock(), time.time()
+            server.arbiter = SessionArbiter(config, paths, wordfill_cfg={'enabled': False})
+            server.supervisor = ProcessSupervisor(config, paths, enabled=False)
+            lifetime.callback(desk.unregister_failover_callback, server.arbiter._on_global_failover)
+            lifetime.callback(server.arbiter.enrichment_queue.shutdown, wait=True)
+            lifetime.callback(server.server_close)
+            server.start()
+            return server
+        yield start
+
+
+def setup_test_env(tmp_path):
+    value = base_setup_test_env(tmp_path)
+    mapping_path = Path(value[1]['anki_mapping_file'])
+    mapping = configparser.ConfigParser(allow_no_value=True)
+    mapping.optionxform = str
+    fields = ('WordSource', 'WordDestination', 'WordSourceMorphologyAI', 'WordSourceIPA',
+              'TokenOrder', 'Quotation', 'WordSource2', 'WordSourceInflectedForm',
+              'WordSourceInflectedForm2', 'SentenceSourceIndex', 'SentenceSource',
+              'SentenceDestination', 'SentenceDestination2', 'DeskSelected', 'LeitnerBox')
+    mapping.read_dict({'fields': {name: '' for name in fields}, 'desk_columns': {
+        'WordSource': 'lemma', 'WordDestination': 'word_translation', 'WordSourceIPA': 'ipa',
+        'WordSourceMorphologyAI': 'morphology', 'SentenceSourceIndex': 'sentence_index',
+        'SentenceSource': 'sentence', 'SentenceDestination': 'sentence_destination', 'DeskSelected': 'selected'},
+        'fields_mapping.word': {'lemma': 'WordSource', 'sentence_index': 'SentenceSourceIndex'}})
+    with mapping_path.open('w', encoding='utf-8') as stream:
+        mapping.write(stream)
+    return value
 
 
 def test_fs_free_single_lookup_zero_disk_writes(monkeypatch, tmp_path):
@@ -43,9 +90,6 @@ def test_fs_free_single_lookup_zero_disk_writes(monkeypatch, tmp_path):
 
     def mock_run(*args, **kwargs):
         cmd = args[0]
-        out_idx = cmd.index("--output-file") + 1
-        out_file = Path(cmd[out_idx])
-        out_file.parent.mkdir(parents=True, exist_ok=True)
         headers = [
             "WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI",
             "SentenceSourceIndex", "SentenceSourceContextLeft", "SentenceSource", "SentenceSourceContextRight",
@@ -54,11 +98,12 @@ def test_fs_free_single_lookup_zero_disk_writes(monkeypatch, tmp_path):
         rows = [
             ["apple", "", "ˈæp.əl", "NOUN", "1", "", "I eat an apple.", ""],
         ]
-        with open(out_file, "w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f, delimiter="\t", lineterminator="\n")
-            writer.writerow(headers)
-            for row in rows:
-                writer.writerow(row)
+        requested = json.loads(cmd[cmd.index('--anki-csv-header') + 1])
+        records = [dict(zip(headers, row)) for row in rows]
+        for index, record in enumerate(records):
+            record['TokenOrder'] = str(index)
+        output = [json.dumps({name: record.get(name, '') for name in requested}) for record in records]
+        return subprocess.CompletedProcess(cmd, 0, '\n'.join(output), '')
 
     monkeypatch.setattr(subprocess, "run", mock_run)
     monkeypatch.setattr(desk, "translate_source_text", lambda *a, **kw: {0: "Я ем яблоко."})
@@ -102,7 +147,7 @@ def test_fs_free_single_lookup_zero_disk_writes(monkeypatch, tmp_path):
         assert words[0]["word_destination"] == "apple_ru"
 
 
-def test_fs_free_multi_window_sentences_mode_zero_disk_writes(monkeypatch, tmp_path):
+def test_fs_free_multi_window_sentences_mode_zero_disk_writes(monkeypatch, tmp_path, owned_runtime):
     """
     Verifies that multi-window / sentences mode decomposition creates child sessions
     directly in SQLite without writing intermediate .txt, .tsv, or .cut_done marker files.
@@ -138,9 +183,6 @@ def test_fs_free_multi_window_sentences_mode_zero_disk_writes(monkeypatch, tmp_p
 
     def mock_run(*args, **kwargs):
         cmd = args[0]
-        out_idx = cmd.index("--output-file") + 1
-        out_file = Path(cmd[out_idx])
-        out_file.parent.mkdir(parents=True, exist_ok=True)
         headers = [
             "WordSource", "WordDestination", "SentenceSourceIndex", "SentenceSource",
         ]
@@ -148,16 +190,18 @@ def test_fs_free_multi_window_sentences_mode_zero_disk_writes(monkeypatch, tmp_p
             ["first", "", "1", "First sentence."],
             ["second", "", "2", "Second sentence."],
         ]
-        with open(out_file, "w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f, delimiter="\t", lineterminator="\n")
-            writer.writerow(headers)
-            for row in rows:
-                writer.writerow(row)
+        requested = json.loads(cmd[cmd.index('--anki-csv-header') + 1])
+        records = [dict(zip(headers, row)) for row in rows]
+        for index, record in enumerate(records):
+            record['TokenOrder'] = str(index)
+        output = [json.dumps({name: record.get(name, '') for name in requested}) for record in records]
+        return subprocess.CompletedProcess(cmd, 0, '\n'.join(output), '')
 
     monkeypatch.setattr(subprocess, "run", mock_run)
     monkeypatch.setattr(desk, "translate_source_text", lambda *a, **kw: {0: "Первое предложение.", 1: "Второе предложение."})
     monkeypatch.setattr(desk, "translate_lemmas_fast_path", lambda lemmas, *a, **kw: {l: f"{l}_ru" for l in lemmas})
 
+    owned_runtime(config, resolved_paths)
     test_zid = "20260822123000"
     res = desk.run_render_flow(
         text="First sentence. Second sentence.",
@@ -264,7 +308,7 @@ SentenceDestination = sentence_destination
         assert words[0]["word_destination"] == "fox_ru"
 
 
-def test_fs_free_repeat_lookup_fast_cache_hit_zero_disk_writes(monkeypatch, tmp_path):
+def test_fs_free_repeat_lookup_fast_cache_hit_zero_disk_writes(monkeypatch, tmp_path, owned_runtime):
     """
     Verifies that launching the same text a second time hits the SQLite cache,
     bypasses spaCy tokenization subprocess, and produces 0 persistent TSV files in results/.
@@ -299,9 +343,6 @@ def test_fs_free_repeat_lookup_fast_cache_hit_zero_disk_writes(monkeypatch, tmp_
     def mock_run(*args, **kwargs):
         core_subprocesses.append(args)
         cmd = args[0]
-        out_idx = cmd.index("--output-file") + 1
-        out_file = Path(cmd[out_idx])
-        out_file.parent.mkdir(parents=True, exist_ok=True)
         headers = [
             "Quotation", "WordSource", "WordSource2", "WordSourceInflectedForm", "WordSourceInflectedForm2",
             "WordDestination", "SentenceSourceIndex", "SentenceSource", "SentenceDestination",
@@ -311,11 +352,12 @@ def test_fs_free_repeat_lookup_fast_cache_hit_zero_disk_writes(monkeypatch, tmp_
             ["Werde", "Werden", "Werden", "Werde", "Werde", "Становиться", "1", "Werde Fahrer.", "Стань водителем.", "", "", "0", "1"],
             ["Fahrer", "Fahrer", "Fahrer", "Fahrer", "Fahrer", "Водитель", "1", "Werde Fahrer.", "Стань водителем.", "", "", "0", "1"],
         ]
-        with open(out_file, "w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f, delimiter="\t", lineterminator="\n")
-            writer.writerow(headers)
-            for row in rows:
-                writer.writerow(row)
+        requested = json.loads(cmd[cmd.index('--anki-csv-header') + 1])
+        records = [dict(zip(headers, row)) for row in rows]
+        for index, record in enumerate(records):
+            record['TokenOrder'] = str(index)
+        output = [json.dumps({name: record.get(name, '') for name in requested}) for record in records]
+        return subprocess.CompletedProcess(cmd, 0, '\n'.join(output), '')
 
     monkeypatch.setattr(subprocess, "run", mock_run)
     monkeypatch.setattr(desk, "translate_source_text", lambda *a, **kw: {0: "Стань водителем."})
@@ -323,6 +365,7 @@ def test_fs_free_repeat_lookup_fast_cache_hit_zero_disk_writes(monkeypatch, tmp_
     monkeypatch.setattr(desk, "run_headless_intellifiller", lambda *a, **kw: None)
 
     # 1. First launch
+    owned_runtime(config, resolved_paths)
     test_zid_1 = "20260822140001"
     html_1 = desk.run_render_flow(
         text="The quick fox.",
@@ -502,7 +545,7 @@ DeskSelected = selected
     assert len(results_tsvs) == 0
 
 
-def test_clean_sentence_translation_view_in_sentences_mode(monkeypatch, tmp_path):
+def test_clean_sentence_translation_view_in_sentences_mode(monkeypatch, tmp_path, owned_runtime):
     """
     Verifies that sentences_mode stores clean unpadded sentence translation in sentences.sentence_destination
     for both master and child sessions, while keeping padded sentences in sentence_destination2 / card fields.
@@ -535,24 +578,23 @@ def test_clean_sentence_translation_view_in_sentences_mode(monkeypatch, tmp_path
 
     def mock_run(*args, **kwargs):
         cmd = args[0]
-        out_idx = cmd.index("--output-file") + 1
-        out_file = Path(cmd[out_idx])
-        out_file.parent.mkdir(parents=True, exist_ok=True)
         headers = ["WordSource", "WordDestination", "SentenceSourceIndex", "SentenceSource", "SentenceDestination2"]
         rows = [
             ["first", "", "1", "First sentence.", ""],
             ["second", "", "2", "Second sentence.", ""],
         ]
-        with open(out_file, "w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f, delimiter="\t", lineterminator="\n")
-            writer.writerow(headers)
-            for row in rows:
-                writer.writerow(row)
+        requested = json.loads(cmd[cmd.index('--anki-csv-header') + 1])
+        records = [dict(zip(headers, row)) for row in rows]
+        for index, record in enumerate(records):
+            record['TokenOrder'] = str(index)
+        output = [json.dumps({name: record.get(name, '') for name in requested}) for record in records]
+        return subprocess.CompletedProcess(cmd, 0, '\n'.join(output), '')
 
     monkeypatch.setattr(subprocess, "run", mock_run)
     monkeypatch.setattr(desk, "translate_source_text", lambda *a, **kw: {0: "Первое предложение.", 1: "Второе предложение."})
     monkeypatch.setattr(desk, "translate_lemmas_fast_path", lambda lemmas, *a, **kw: {l: f"{l}_ru" for l in lemmas})
 
+    owned_runtime(config, resolved_paths)
     test_zid = "20260822143000"
     desk.run_render_flow(
         text="First sentence. Second sentence.",

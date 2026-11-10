@@ -507,8 +507,8 @@ SentenceDestination = sentence_destination
 
 def test_sqlite_storage_adapter_sentinel_file_lock_busy_detection(sqlite_wordfill_db, tmp_path):
     """
-    Verifies that SqliteStorageAdapter properly acquires sentinel file locks
-    and check_coordination_busy detects active locks without requiring primary TSV on disk.
+    SQLite transaction ownership must not create or consult file sentinels.
+    Worker status is verified through the real controller/SQLite contract.
     """
     from kardenwort_desk import SqliteStorageAdapter, check_coordination_busy
     adapter = SqliteStorageAdapter(db_path=sqlite_wordfill_db.db_path)
@@ -519,7 +519,8 @@ def test_sqlite_storage_adapter_sentinel_file_lock_busy_detection(sqlite_wordfil
     assert not check_coordination_busy(dummy_tsv_path)
 
     with adapter.file_lock(sentinel_lock_target):
-        assert check_coordination_busy(dummy_tsv_path) is True
-        assert check_coordination_busy(sentinel_lock_target) is True
+        assert check_coordination_busy(dummy_tsv_path) is False
+        assert check_coordination_busy(sentinel_lock_target) is False
+        assert not sentinel_lock_target.exists()
 
     assert check_coordination_busy(dummy_tsv_path) is False

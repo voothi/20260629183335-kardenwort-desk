@@ -1517,14 +1517,19 @@ de_prompt=test
     config, resolved_paths, _, _ = kardenwort_desk.load_config(config_path)
     storage_adapter = kardenwort_desk.get_storage_adapter(config, resolved_paths)
 
-    with patch("kardenwort_desk.run_headless_intellifiller") as mock_runner:
-        def fake_runner(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
-            comments, headers, data_rows = kardenwort_desk.load_tsv_rows(tsv_path)
+    with patch("kardenwort_desk.query_intellifiller_server") as mock_runner:
+        def fake_runner(rows, **kwargs):
+            batch = rows
+            headers = list(batch[0])
+            data_rows = [[row.get(name, '') for name in headers] for row in batch]
             col_dest = headers.index("WordDestination")
             data_rows[0][col_dest] = "здание (reworded)"
-            storage_adapter._tsv_fallback.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-            return True
+
+            return dict(status='success', enriched_rows=[dict(zip(headers, row)) for row in data_rows])
+
         mock_runner.side_effect = fake_runner
+
+        storage_adapter.config.read_dict({'services': {'intellifiller_server_url': 'http://fixture-provider.invalid'}})
 
         ok = storage_adapter.enrich_session_intellifiller(
             session_zid=sess_zid,

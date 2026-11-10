@@ -15,6 +15,11 @@ _observers = []
 
 
 def _observe_writes(event, args):
+    if event in ('os.mkdir', 'os.rename') and _observers:
+        path = args[1] if event == 'os.rename' else args[0]
+        for observed in _observers:
+            observed.append(os.fsdecode(path))
+        return
     if event != 'open' or not _observers:
         return
     path, mode, flags = args
@@ -75,7 +80,8 @@ def test_reword_structured_batch_has_no_control_files_and_survives_cold_restore(
 
 
 @pytest.mark.parametrize('provider_name', ['intellifiller'])
-@pytest.mark.parametrize('damage', ['offline', 'missing', 'duplicate', 'unknown', 'malformed', 'identity', 'empty'])
+@pytest.mark.parametrize('damage', ['offline', 'missing', 'duplicate', 'unknown', 'malformed', 'identity', 'empty',
+                                  'failed-sentinel', 'error-sentinel', 'row-error'])
 def test_rejected_structured_batch_has_no_effects_events_or_control_files(world, monkeypatch, damage):
     def response(rows):
         item = dict(row_id=rows[0]['row_id'], WordDestination='fresh-Haus')
@@ -83,6 +89,9 @@ def test_rejected_structured_batch_has_no_effects_events_or_control_files(world,
             'missing': [], 'duplicate': [item, item], 'unknown': [dict(item, row_id=99)],
             'malformed': [dict(item, WordDestination=['wrong'])],
             'identity': [dict(item, TokenOrder='99')], 'empty': [dict(item, WordDestination='')],
+            'failed-sentinel': [dict(item, WordDestination='[FAILED]')],
+            'error-sentinel': [dict(item, WordDestination='[Error: provider failed]')],
+            'row-error': [dict(item, status='error')],
         }
         return None if damage == 'offline' else dict(status='success', enriched_rows=items[damage])
 

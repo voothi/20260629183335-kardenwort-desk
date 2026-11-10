@@ -91,6 +91,8 @@ def test_aggregate_sequential_distinct_morphology():
 def test_render_html_no_brackets_in_presentation(tmp_path):
     import kardenwort_desk
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("storage", "backend", "tsv")
+    resolved_paths["storage_backend"] = "tsv"
     raw_sentence = "Er fängt heute mit der Arbeit an, weil ihm das Projekt gefällt. Er soll den Erfolg bringen, der ihm versprochen wurde."
     tsv_file = tmp_path / "20261003180000-test.de.tsv"
     tsv_content = (
@@ -184,9 +186,11 @@ de_prompt=test
 
     captured_ephemeral_sent = []
 
-    with patch("kardenwort_desk.run_headless_intellifiller") as mock_runner:
-        def fake_runner(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
-            comments, headers, data_rows = kardenwort_desk.load_tsv_rows(tsv_path)
+    with patch("kardenwort_desk.query_intellifiller_server") as mock_runner:
+        def fake_runner(rows, **kwargs):
+            batch = rows
+            headers = list(batch[0])
+            data_rows = [[row.get(name, '') for name in headers] for row in batch]
             col_s_src = headers.index("SentenceSource")
             captured_ephemeral_sent.append(data_rows[0][col_s_src])
             
@@ -197,12 +201,14 @@ de_prompt=test
             data_rows[0][col_pos] = "pron."
             data_rows[0][col_dest] = "который"
             data_rows[0][col_morph] = "der (относительное местоимение)"
-            storage_adapter._tsv_fallback.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-            return True
+
+            return dict(status='success', enriched_rows=[dict(zip(headers, row)) for row in data_rows])
+
             
         mock_runner.side_effect = fake_runner
 
         # Target the second occurrence of 'der' (visual_idx = 38)
+        storage_adapter.config.read_dict({'services': {'intellifiller_server_url': 'http://fixture-provider.invalid'}})
         ok = storage_adapter.enrich_session_intellifiller(
             session_zid=sess_zid,
             prompt_name="test",
@@ -241,6 +247,8 @@ def test_render_html_occurrence_tooltips(tmp_path):
     import kardenwort_desk
     
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("storage", "backend", "tsv")
+    resolved_paths["storage_backend"] = "tsv"
     raw_sentence = "Er fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde."
     tsv_content = (
         "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tWordSourceMorphologyAI\tSentenceSourceIndex\n"

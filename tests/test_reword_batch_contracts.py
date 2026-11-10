@@ -27,7 +27,24 @@ def test_invalid_provider_batch_has_no_persisted_effect(world, monkeypatch, dama
         return damage != 'failure'
 
     module = desk if world.backend == 'sqlite' else controller
-    monkeypatch.setattr(module, 'run_headless_intellifiller', damaged_response)
+    if world.backend == 'sqlite':
+        def damaged_structured(rows, **kwargs):
+            response = world.provider.query(rows, **kwargs)
+            items = response['enriched_rows']
+            if damage == 'missing':
+                items.pop()
+            elif damage == 'duplicate':
+                items.append(dict(items[0]))
+            elif damage == 'changed':
+                items[0]['SentenceSourceIndex'] = '99'
+            elif damage == 'short':
+                items[0] = dict(row_id=items[0]['row_id'])
+            elif damage == 'failure':
+                response['status'] = 'error'
+            return response
+        monkeypatch.setattr(module, 'query_intellifiller_server', damaged_structured)
+    else:
+        monkeypatch.setattr(module, 'run_headless_intellifiller', damaged_response)
     channel = world.subscribe(ZID)
     before = world.snapshot()
     status, payload = world.post(world.payload())

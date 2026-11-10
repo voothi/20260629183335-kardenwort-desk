@@ -10,6 +10,7 @@ import pytest
 import kardenwort_desk as desk
 from kardenwort_controller import ControllerRequestHandler, ProcessSupervisor, SessionArbiter
 from tests.browser_test_server import _BrowserTestHTTPServer, create_browser_test_server
+from tests.test_spacy_service import MockSpacyRequestHandler
 
 TRANSLATOR = Path(__file__).resolve().parents[2] / '20241122093311-deep-translator'
 if str(TRANSLATOR) not in sys.path:
@@ -53,6 +54,17 @@ def translation_service(handler, auto_failover=False):
         server.server_close()
 
 
+@contextmanager
+def token_service():
+    """Only unmanaged NLP model output is deterministic; extraction/JSONL/SQLite remain real."""
+    server = create_browser_test_server(MockSpacyRequestHandler)
+    try:
+        server.start()
+        yield server
+    finally:
+        server.server_close()
+
+
 def owned_configuration(owner, translation_url, backend):
     root = Path(desk.__file__).resolve().parent
     config, paths, goldendict, _ = desk.load_config(root / 'config.ini')
@@ -88,6 +100,9 @@ def controller_lifetime(owner, translator, backend='sqlite'):
     try:
         server.config, server.resolved_paths, server.goldendict = config, paths, goldendict
         server.api_key = 'test-controller-api-key'
+        config.set('server', 'api_key', server.api_key)
+        config.set('server', 'port', str(server.server_port))
+        config.set('server', 'controller_port', str(server.server_port))
         server.seq_counter, server.seq_lock = 0, threading.Lock()
         server.start_time = time.time()
         arbiter = server.arbiter = SessionArbiter(config, paths, wordfill_cfg={'enabled': False})
@@ -108,8 +123,9 @@ def controller_lifetime(owner, translator, backend='sqlite'):
 @pytest.fixture
 def controller_world(tmp_path, request):
     """A fresh controller and real database per contract; no domain replacements."""
-    with translation_service(DeterministicTranslationHandler) as translator:
+    with translation_service(DeterministicTranslationHandler) as translator, token_service() as tokenizer:
         with controller_lifetime(tmp_path, translator, getattr(request, 'param', 'sqlite')) as world:
+            world[1].config.set('services', 'spacy_server_url', f'http://127.0.0.1:{tokenizer.server_port}')
             seed_cached_lookup_inputs(world[1])
             yield world
 

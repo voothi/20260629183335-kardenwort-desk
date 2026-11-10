@@ -73,6 +73,8 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
     if not js.strip():
         modular_scripts = [
             "types.js",
+            "features/preferences.js",
+            "features/sqlite-state.js",
             "state/store.js",
             "components/SourceViewer.js",
             "components/TranslationView.js",

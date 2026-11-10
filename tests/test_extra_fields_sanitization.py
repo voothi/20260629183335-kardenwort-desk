@@ -289,19 +289,23 @@ fallback_to_tsv = true
     db.save_session_bundle(session, sentences, words)
 
     # Mock headless intellifiller
-    with patch("kardenwort_desk.run_headless_intellifiller") as mock_runner:
-        def fake_runner(tsv_path, *args, **kwargs):
-            comments, headers, data_rows = load_tsv_rows(tsv_path)
+    with patch("kardenwort_desk.query_intellifiller_server") as mock_runner:
+        def fake_runner(rows, **kwargs):
+            batch = rows
+            headers = list(batch[0])
+            data_rows = [[row.get(name, '') for name in headers] for row in batch]
             # Verify no nested extra_fields in headers
             assert "extra_fields" not in [h.lower() for h in headers]
             dest_col = headers.index("WordDestination")
-            data_rows[1][dest_col] = "стал (reworded)"
-            adapter._tsv_fallback.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-            return True
+            data_rows[0][dest_col] = "стал (reworded)"
+
+            return dict(status='success', enriched_rows=[dict(zip(headers, row)) for row in data_rows])
+
 
         mock_runner.side_effect = fake_runner
 
         # First re-word
+        adapter.config.read_dict({'services': {'intellifiller_server_url': 'http://fixture-provider.invalid'}})
         ok1 = adapter.enrich_session_intellifiller(
             session_zid=session_zid,
             prompt_name="test",
@@ -311,6 +315,7 @@ fallback_to_tsv = true
         assert ok1 is True
 
         # Second re-word (re-clicking re-word on already enriched/wordfill row)
+        adapter.config.read_dict({'services': {'intellifiller_server_url': 'http://fixture-provider.invalid'}})
         ok2 = adapter.enrich_session_intellifiller(
             session_zid=session_zid,
             prompt_name="test",

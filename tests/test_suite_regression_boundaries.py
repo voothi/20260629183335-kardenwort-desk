@@ -69,14 +69,11 @@ def test_invalid_reword_target_formats_reject_without_writes(tmp_path, boundary,
 def test_visual_context_retains_selected_sqlite_occurrence(tmp_path, monkeypatch):
     _, _, adapter = seed_sqlite(tmp_path)
 
-    def provider(tsv_path, selected_rows=None, **kwargs):
-        comments, headers, rows = desk.load_tsv_rows(tsv_path)
-        for index in selected_rows:
-            rows[index][headers.index('WordDestination')] = 'cottage'
-        desk.save_tsv_rows_safely(tsv_path, comments, headers, rows)
-        return True
+    def provider(rows, **kwargs):
+        return dict(status='success', enriched_rows=[dict(row_id=row['row_id'], WordDestination='cottage') for row in rows])
 
-    monkeypatch.setattr(desk, 'run_headless_intellifiller', provider)
+    adapter.config.read_dict({'services': {'intellifiller_server_url': 'http://fixture-provider.invalid'}})
+    monkeypatch.setattr(desk, 'query_intellifiller_server', provider)
     assert adapter.enrich_session_intellifiller(
         ZID, 'fixture', selected_rows=[0], reprocess=True,
         target_coordinates=[{'visual_idx': 1, 'sentence_idx': 99}])

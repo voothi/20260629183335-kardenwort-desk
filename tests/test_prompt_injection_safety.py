@@ -186,14 +186,15 @@ de_prompt=test
 
     captured_prompt_args = {}
 
-    with patch("kardenwort_desk.run_headless_intellifiller") as mock_runner:
-        def fake_runner(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
-            captured_prompt_args["prompt_name"] = prompt_name
+    with patch("kardenwort_desk.query_intellifiller_server") as mock_runner:
+        def fake_runner(rows, prompt, **kwargs):
+            captured_prompt_args["prompt_name"] = prompt
             captured_prompt_args["target_lang"] = config.get("settings", "default_target_language")
-            return True
+            return dict(status='success', enriched_rows=[dict(row_id=row['row_id'], WordSourceIPA='/safe/') for row in rows])
 
         mock_runner.side_effect = fake_runner
 
+        config.read_dict({'services': {'intellifiller_server_url': 'http://fixture-provider.invalid'}})
         storage_adapter.enrich_session_intellifiller(
             session_zid=sess_zid,
             prompt_name="standard_enrichment",
