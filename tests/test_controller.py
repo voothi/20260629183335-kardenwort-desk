@@ -18,6 +18,7 @@ import kardenwort_desk
 import kardenwort_controller
 from tests.thread_support import sse_events
 from tests.controller_test_support import controller_world
+from tests.audio_test_support import audio_server
 from kardenwort_controller import (
     ProcessSupervisor,
     SessionArbiter,
@@ -1245,20 +1246,13 @@ def test_session_status_multi_sentence_preserves_stable_row_indices(running_cont
             pass
 
 
-def test_audio_play_endpoint_success_and_validation(running_controller, monkeypatch):
-    server_url, server = running_controller
-    spawned_cmds = []
-
-    def mock_popen(cmd, *args, **kwargs):
-        spawned_cmds.append((cmd, kwargs))
-        class MockProc:
-            pid = 12345
-            def poll(self): return 0
-        return MockProc()
-
-    import subprocess
-    import kardenwort_controller
-    monkeypatch.setattr(kardenwort_controller.subprocess, "Popen", mock_popen)
+def test_audio_play_endpoint_success_and_validation(audio_server):
+    server, owner = audio_server
+    server_url = 'http://127.0.0.1:' + str(server.server_address[1])
+    recorded = owner/'dispatch.jsonl'
+    script = owner/'anki-tts-cli-host-port.py'
+    script.write_text('import json,sys\nwith open(' + repr(str(recorded)) + ", 'a') as out: out.write(json.dumps(sys.argv)+'\\n')\n")
+    server.resolved_paths['anki_tts_cli'] = script
 
     # 1. Successful POST /api/v1/audio/play
     payload = json.dumps({"text": "Guten Tag", "language": "de"}).encode('utf-8')
@@ -1273,15 +1267,18 @@ def test_audio_play_endpoint_success_and_validation(running_controller, monkeypa
         assert data["status"] == "success"
         res = data.get("data", data)
         assert res["ok"] is True
-        assert res["status"] == "playing"
+        assert res["status"] == "completed"
+        assert res["playback_confirmed"] is False
+        assert res["deprecated"] is True
         assert res["text"] == "Guten Tag"
         assert res["language"] == "de"
 
+    spawned_cmds = [json.loads(line) for line in recorded.read_text().splitlines()]
     assert len(spawned_cmds) == 1
-    cmd, kwargs = spawned_cmds[0]
+    cmd = spawned_cmds[0]
     assert cmd[2] == "Guten Tag"
     assert cmd[3] == "de"
-    assert "anki-tts-cli" in str(cmd[1])
+    assert "anki-tts-cli" in str(cmd[0])
 
     # 2. Alias POST /session/play
     payload_alias = json.dumps({"text": "Hello world", "language": "en"}).encode('utf-8')
@@ -1298,8 +1295,9 @@ def test_audio_play_endpoint_success_and_validation(running_controller, monkeypa
         assert res_alias["text"] == "Hello world"
         assert res_alias["language"] == "en"
 
+    spawned_cmds = [json.loads(line) for line in recorded.read_text().splitlines()]
     assert len(spawned_cmds) == 2
-    cmd2, _ = spawned_cmds[1]
+    cmd2 = spawned_cmds[1]
     assert cmd2[2] == "Hello world"
     assert cmd2[3] == "en"
 

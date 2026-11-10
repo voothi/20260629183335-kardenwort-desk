@@ -215,14 +215,14 @@ def test_f1_non_german_lookup_language_metadata(page, src_lang, tgt_lang, src_wo
 
     # 5. Source audio playback
     page.evaluate(f"() => window.playAudio('{src_word}', '{src_lang}')")
-    audio_src_req = page.evaluate(f"__requests.find(r => r.url.includes('/api/v1/audio/play') && r.body && r.body.language === '{src_lang}')")
+    audio_src_req = page.evaluate(f"__requests.find(r => r.url.includes('/api/v1/audio/synthesize') && r.body && r.body.language === '{src_lang}')")
     assert audio_src_req is not None
     assert audio_src_req["body"]["text"] == src_word
     assert audio_src_req["headers"].get("X-API-Token") == "test-controller-api-key"
 
     # 6. Target audio playback
     page.evaluate(f"() => window.playAudio('{tgt_word}', '{tgt_lang}')")
-    audio_tgt_req = page.evaluate(f"__requests.find(r => r.url.includes('/api/v1/audio/play') && r.body && r.body.language === '{tgt_lang}')")
+    audio_tgt_req = page.evaluate(f"__requests.find(r => r.url.includes('/api/v1/audio/synthesize') && r.body && r.body.language === '{tgt_lang}')")
     assert audio_tgt_req is not None
     assert audio_tgt_req["body"]["text"] == tgt_word
     assert audio_tgt_req["headers"].get("X-API-Token") == "test-controller-api-key"

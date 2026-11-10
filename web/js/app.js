@@ -5472,6 +5472,24 @@
             return s.replace(/\s+/g, ' ').trim();
         }
 
+        var browserAudio = null;
+        function clientAudio() {
+            if (browserAudio) return browserAudio;
+            browserAudio = new window.DeskAudioPlayback({
+                url: function () { return resolveBackendUrl('/api/v1/audio/synthesize'); },
+                token: function () { return getApiToken(); },
+                onState: function (detail) {
+                    window.dispatchEvent(new CustomEvent('desk-audio-state', { detail: detail }));
+                },
+                onError: function (message) {
+                    window.showToast('Audio failed: ' + message + '. Click again to retry.', 'error');
+                }
+            });
+            window.audioPlayback = browserAudio;
+            return browserAudio;
+        }
+        window.addEventListener('pagehide', function () { if (browserAudio) browserAudio.cancel(); });
+
         /** @param {string} text @param {string} lang */
         function playAudio(text, lang) {
             if (!text || !lang) return;
@@ -5487,23 +5505,8 @@
                 try {
                     window.ahkCall('play', audioPythonExe + "\\n" + audioAnkiTtsCli + "\\n" + lang + "\\n" + escapedText);
                 } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-            } else if (typeof fetch === 'function') {
-                var headers = { 'Content-Type': 'application/json' };
-                if (typeof getApiToken === 'function') {
-                    var tok = getApiToken();
-                    if (tok) {
-                        headers['X-API-Token'] = tok;
-                    }
-                } else if (typeof API_TOKEN !== 'undefined' && API_TOKEN && API_TOKEN !== '__API_TOKEN__') {
-                    headers['X-API-Token'] = API_TOKEN;
-                }
-                fetch(resolveBackendUrl('/api/v1/audio/play'), {
-                    method: 'POST',
-                    headers: headers,
-                    body: JSON.stringify({ text: clean, language: lang })
-                }).catch(function(e) {
-                    console.warn('[Audio] Background audio playback endpoint failed:', e);
-                });
+            } else {
+                clientAudio().play(clean, lang);
             }
         }
         window.playAudio = playAudio;
@@ -5537,12 +5540,21 @@
             }
             var cleanToken = (tokenText || "").trim().toLowerCase();
             var filtered = parts.filter(function(p) {
-                return p.trim().toLowerCase() !== cleanToken;
+                return p.trim().toLowerCase() === cleanToken;
             });
             if (filtered.length > 0) {
                 return filtered[0];
             }
             return parts[0];
+        }
+
+        // A contraction expands to multiple rows; omit its shared surface form
+        // only in that explicit coordinate, never for a single inflected word.
+        function getExpandedConstituentInflection(rawInflection, tokenText) {
+            var token = tokenText.trim().toLowerCase();
+            var variants = rawInflection.split(',').map(function (part) { return part.trim(); });
+            var constituents = variants.filter(function (part) { return part && part.toLowerCase() !== token; });
+            return constituents[0] || variants[0] || '';
         }
 
         /** @param {HTMLElement} span @param {string} sourceMode @param {HTMLElement[]} group */
@@ -5693,7 +5705,8 @@
                     for (var d = 0; d < directMatchRows.length; d++) {
                         var rowObj = directMatchRows[d];
                         if (sourceMode === 'inflection') {
-                            var cleanInflection = getCleanConstituentInflection(rowObj.inflected, spanClean);
+                            var resolveInflection = directMatchRows.length > 1 ? getExpandedConstituentInflection : getCleanConstituentInflection;
+                            var cleanInflection = resolveInflection(rowObj.inflected, spanClean);
                             if (cleanInflection && cleanInflection.toLowerCase() !== spanClean && (cleanInflection.indexOf('-') !== -1 || cleanInflection.indexOf('_') !== -1 || cleanInflection.indexOf(' ') !== -1 || cleanInflection.indexOf('/') !== -1 || cleanInflection.indexOf('\\\\') !== -1)) {
                                 cleanInflection = (rowObj.lemma && rowObj.lemma.toLowerCase() === spanClean) ? rowObj.lemma : spanText;
                             }

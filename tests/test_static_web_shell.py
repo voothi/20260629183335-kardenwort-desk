@@ -558,7 +558,7 @@ def test_playwright_action_toolbar_shortcuts_modal_and_audio(page, test_server):
         calls.append(("export", route.request.post_data)),
         route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok", "exported_count": 1}))
     ))
-    page.route("**/api/v1/audio/play", lambda route: (
+    page.route("**/api/v1/audio/synthesize", lambda route: (
         calls.append(("audio", route.request.post_data)),
         route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok"}))
     ))
@@ -1008,13 +1008,13 @@ def test_receive_update_resilience_and_watchdog_lifecycle(page, test_server):
 def test_audio_drag_zoom_and_contextual_reword(page, test_server):
     """
     Task 8.15 (R46, R47, R49, R50, R51, R52):
-    Verify audio playback endpoint dispatch (/api/v1/audio/play), ahkCall invocation,
+    Verify audio playback endpoint dispatch (/api/v1/audio/synthesize), ahkCall invocation,
     table drag selection, configurable zoom scaling, and contextual reword target coordinates.
     """
     port = test_server
 
     audio_calls = []
-    page.route("**/api/v1/audio/play", lambda route: (
+    page.route("**/api/v1/audio/synthesize", lambda route: (
         audio_calls.append(json.loads(route.request.post_data)),
         route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok"}))
     ))

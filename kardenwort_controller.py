@@ -6,6 +6,8 @@ import kardenwort_reword as reword
 from kardenwort_state_http import STATE_ROUTES, dispatch_state, set_language
 from kardenwort_sqlite_preferences import PreferenceConflict
 from kardenwort_state_runtime import refresh_preferences, preference_store
+from kardenwort_audio import AudioError
+from kardenwort_audio_runtime import execute_audio
 import os
 import re
 import json
@@ -206,6 +208,8 @@ def committed_recovery_snapshot(arbiter, zid):
     return snapshot
 
 ERROR_STATUS_MATRIX = {
+    "TIMEOUT": 504,
+    "INTERRUPTED": 409,
     "INVALID_PAYLOAD": 400,
     "MISSING_FIELD": 400,
     "UNAUTHORIZED": 403,
@@ -3139,11 +3143,29 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._send_cors_headers()
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(body)))
+            if content_type.startswith('audio/'):
+                self.send_header('Cache-Control', 'no-store')
             self.end_headers()
             self.wfile.write(body)
         except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
             self.close_connection = True
             logger.debug('Peer disconnected during response to %s', self.path)
+
+    def _audio_request(self, path):
+        if not getattr(self.server, 'api_key', ''):
+            raise StructuredError(ErrorCode.TOKEN_NOT_CONFIGURED, 'Audio requires configured authentication')
+        self._authenticate_token()
+        body = self._read_json_body()
+        try:
+            result = execute_audio(body, self.server.resolved_paths, self.server.config,
+                self.connection, WindowsJobObject, synthesize=path == '/api/v1/audio/synthesize')
+        except AudioError as error:
+            raise StructuredError(ErrorCode(error.code), str(error)) from error
+        if isinstance(result, dict):
+            self._send_json(200, result)
+        else:
+            data, content_type = result
+            self._send_bytes(200, data, content_type)
 
     def _state_request(self, path, method):
         body = self._read_json_body() if method == 'POST' else {}
@@ -5026,68 +5048,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
-        # Audio playback endpoint (Non-blocking background TTS synthesis for web sessions)
-        if path in ('/api/v1/audio/play', '/session/play'):
+        # Canonical synthesis and explicitly deprecated host-play aliases.
+        if path in ('/api/v1/audio/synthesize', '/api/v1/audio/play', '/session/play'):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
-            body = self._read_json_body()
-            self._authenticate_token(body)
-
-            text = body.get('text') or qs.get('text', [None])[0]
-            language = body.get('language') or body.get('lang') or qs.get('language', [None])[0] or qs.get('lang', [None])[0]
-            if not text:
-                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'text' in payload")
-            if not language:
-                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'language' in payload")
-
-            anki_tts_cli = None
-            if hasattr(self.server, 'resolved_paths') and self.server.resolved_paths:
-                anki_tts_cli = self.server.resolved_paths.get('anki_tts_cli')
-
-            if not anki_tts_cli or not Path(anki_tts_cli).exists():
-                desk_dir = Path(__file__).resolve().parent
-                workspace_parent = desk_dir.parent
-                candidates = list(workspace_parent.glob("*-anki-tts-cli/anki-tts-cli.py"))
-                if candidates:
-                    anki_tts_cli = candidates[0]
-
-            if not anki_tts_cli or not Path(anki_tts_cli).exists():
-                raise StructuredError(ErrorCode.CONFIGURATION_ERROR, "anki_tts_cli script path is not configured or does not exist")
-
-            python_exe = None
-            if hasattr(self.server, 'resolved_paths') and self.server.resolved_paths:
-                python_exe = self.server.resolved_paths.get('kardenwort_python')
-            if not python_exe and hasattr(self.server, 'config') and self.server.config:
-                try:
-                    python_exe = self.server.config.get(SEC_ENVIRONMENT, 'kardenwort_python', fallback=sys.executable)
-                except Exception:
-                    python_exe = sys.executable
-            if not python_exe:
-                python_exe = sys.executable
-
-            creationflags = 0
-            if sys.platform == "win32":
-                creationflags = 0x08000000  # CREATE_NO_WINDOW
-
-            cmd = [str(python_exe), str(anki_tts_cli), str(text), str(language)]
-            try:
-                subprocess.Popen(
-                    cmd,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=creationflags,
-                )
-            except Exception as e:
-                logger.warning(f"Failed to spawn audio player: {e}")
-                raise StructuredError(ErrorCode.SERVER_ERROR, f"Failed to spawn audio player: {e}")
-
-            self._send_json(200, {
-                "ok": True,
-                "status": "playing",
-                "text": text,
-                "language": language
-            })
+            self._audio_request(path)
             return
 
         # 5. Admin Panel UI & Static Assets

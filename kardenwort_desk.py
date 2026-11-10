@@ -13697,6 +13697,7 @@ def render_declarative_web_shell(
         "services/sse.js",
         "features/preferences.js",
         "features/sqlite-state.js",
+        "features/audio.js",
         "app.js",
     ):
         p_script = web_dir / "js" / script_rel
@@ -14036,6 +14037,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         "services/sse.js",
         "features/preferences.js",
         "features/sqlite-state.js",
+        "features/audio.js",
         "app.js",
     ):
         p_script = web_dir / "js" / script_rel

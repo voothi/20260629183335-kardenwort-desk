@@ -81,6 +81,7 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
             "components/LemmaTable.js",
             "components/WorkspaceTabs.js",
             "services/sse.js",
+            "features/audio.js",
             "app.js",
         ]
         bundle = []
@@ -4179,10 +4180,10 @@ def test_audio_playback_web_fallback_and_ahk_parity(page):
     assert len(ahk_play_calls) == 1
     assert "Haus" in ahk_play_calls[0]["arg"]
     assert "de" in ahk_play_calls[0]["arg"]
-    audio_fetch_calls = [f for f in fetch_calls if f.get("url") == "/api/v1/audio/play"]
+    audio_fetch_calls = [f for f in fetch_calls if f.get("url") == "/api/v1/audio/synthesize"]
     assert len(audio_fetch_calls) == 0
 
-    # Scenario B: When window.ahkCall is absent/undefined, client falls back to POST /api/v1/audio/play
+    # Scenario B: When window.ahkCall is absent/undefined, client falls back to POST /api/v1/audio/synthesize
     page.set_content(html)
     page.evaluate("""
         delete window.ahkCall;
@@ -4198,7 +4199,7 @@ def test_audio_playback_web_fallback_and_ahk_parity(page):
     span.click(button="left")
 
     fetch_calls = page.evaluate("window.__fetchCalls")
-    audio_fetch_calls = [f for f in fetch_calls if f.get("url") == "/api/v1/audio/play"]
+    audio_fetch_calls = [f for f in fetch_calls if f.get("url") == "/api/v1/audio/synthesize"]
     assert len(audio_fetch_calls) == 1
     assert audio_fetch_calls[0]["options"]["method"] == "POST"
     body = json.loads(audio_fetch_calls[0]["options"]["body"])

@@ -409,7 +409,7 @@ def test_2_1_article_commands_and_autosave_reach_configured_backend(running_cont
     intercepted.clear()
     page.evaluate("window.playAudio('Haus', 'de', 0)")
     page.wait_for_timeout(200)
-    audio_reqs = [r for r in intercepted if "/api/v1/audio/play" in r["url"]]
+    audio_reqs = [r for r in intercepted if "/api/v1/audio/synthesize" in r["url"]]
     assert len(audio_reqs) == 1
     assert audio_reqs[0]["url"].startswith(server_url)
 
