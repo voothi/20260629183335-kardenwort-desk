@@ -1,4 +1,5 @@
 from pathlib import Path
+from contextlib import contextmanager
 import pytest
 import kardenwort_desk
 import kardenwort_controller
@@ -6,6 +7,7 @@ from kardenwort_controller import SessionArbiter
 from kardenwort_desk import StructuredError
 
 
+@contextmanager
 def _make_reword_arbiter(tmp_path, monkeypatch):
     config_path = tmp_path / "config.ini"
     mapping_path = tmp_path / "mapping.ini"
@@ -78,61 +80,82 @@ de_prompt=test
         "word_provenance": "live:intellifiller"
     })
 
-    def fake_headless(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
-        comments, headers, rows = kardenwort_desk.load_tsv_rows(tsv_path)
-        for row, trans, ipa in zip(rows, ["свежий_ai_партнер", "свежий_ai_клиент"], ["/ˈliːfɐˌpaʁtnɐ/", "/ˈkʊndə/"]):
-            row[headers.index("WordDestination")] = trans
-            row[headers.index("WordSourceIPA")] = ipa
-            row[headers.index("WordSourceMorphologyAI")] = "Substantiv, m"
-        kardenwort_desk.save_tsv_rows_safely(tsv_path, comments, headers, rows)
-        return True
-
-    monkeypatch.setattr(kardenwort_controller, "run_headless_intellifiller", fake_headless)
-    monkeypatch.setattr(kardenwort_desk, "run_headless_intellifiller", fake_headless)
-
+    from tests.enrichment_test_support import enrichment_engine
     calls = []
-    monkeypatch.setattr(arbiter, "propagate_enrichment_to_siblings", lambda *a, **k: calls.append("enrich"))
-    monkeypatch.setattr(arbiter, "propagate_translations_to_siblings", lambda *a, **k: calls.append("trans"))
+    original_enrich = arbiter.propagate_enrichment_to_siblings
+    original_translations = arbiter.propagate_translations_to_siblings
 
-    return arbiter, sess_zid, calls
+    def observe_enrichment(*args, **kwargs):
+        calls.append('enrich')
+        return original_enrich(*args, **kwargs)
+
+    def observe_translations(*args, **kwargs):
+        calls.append('trans')
+        return original_translations(*args, **kwargs)
+
+    monkeypatch.setattr(arbiter, 'propagate_enrichment_to_siblings', observe_enrichment)
+    monkeypatch.setattr(arbiter, 'propagate_translations_to_siblings', observe_translations)
+    sibling_zid = '20260913000002'
+    sibling_file = results_dir/f'{sibling_zid}.de.tsv'
+    sibling_file.write_bytes(tsv_file.read_bytes())
+    sibling_before = sibling_file.read_bytes()
+    arbiter.sessions[sibling_zid] = dict(arbiter.sessions[sess_zid], session_zid=sibling_zid,
+        data_rows=[row[:] for row in arbiter.sessions[sess_zid]['data_rows']], tsv_path=str(sibling_file))
+    config.add_section('services')
+    try:
+        with enrichment_engine(config) as engine:
+            engine.release.set()
+            yield arbiter, sess_zid, calls
+            _, headers, stored = kardenwort_desk.load_tsv_rows(tsv_file)
+            for request in engine.requests:
+                for row in request['rows']:
+                    item = next(item for item in stored if item[headers.index('WordSource')] == row['WordSource'])
+                    assert item[headers.index('WordDestination')] == 'trans_' + row['WordSource']
+            if calls:
+                _, sibling_headers, siblings = kardenwort_desk.load_tsv_rows(sibling_file)
+                assert any(row[sibling_headers.index('WordDestination')].startswith('trans_') for row in siblings)
+            else:
+                assert sibling_file.read_bytes() == sibling_before
+    finally:
+        arbiter.enrichment_queue.shutdown(wait=True)
 
 
 def test_explicit_master_propagates(tmp_path, monkeypatch):
-    arbiter, sess_zid, calls = _make_reword_arbiter(tmp_path, monkeypatch)
-    arbiter.reword_session(session_zid=sess_zid, selected_rows=[0, 1], language="de", sentence_idx=0)
-    assert len(calls) == 1
+    with _make_reword_arbiter(tmp_path, monkeypatch) as (arbiter, sess_zid, calls):
+        arbiter.reword_session(session_zid=sess_zid, selected_rows=[0, 1], language="de", sentence_idx=0)
+        assert len(calls) == 1
 
 
 def test_omitted_sentence_idx_propagates(tmp_path, monkeypatch):
-    arbiter, sess_zid, calls = _make_reword_arbiter(tmp_path, monkeypatch)
-    arbiter.reword_session(session_zid=sess_zid, selected_rows=[0, 1], language="de")
-    assert len(calls) == 1
+    with _make_reword_arbiter(tmp_path, monkeypatch) as (arbiter, sess_zid, calls):
+        arbiter.reword_session(session_zid=sess_zid, selected_rows=[0, 1], language="de")
+        assert len(calls) == 1
 
 
 def test_child_sentence_idx_isolated(tmp_path, monkeypatch):
-    arbiter, sess_zid, calls = _make_reword_arbiter(tmp_path, monkeypatch)
-    arbiter.reword_session(session_zid=sess_zid, selected_rows=[0, 1], language="de", sentence_idx=2)
-    assert calls == []
+    with _make_reword_arbiter(tmp_path, monkeypatch) as (arbiter, sess_zid, calls):
+        arbiter.reword_session(session_zid=sess_zid, selected_rows=[0, 1], language="de", sentence_idx=2)
+        assert calls == []
 
 
 def test_target_coordinates_do_not_override(tmp_path, monkeypatch):
-    arbiter, sess_zid, calls = _make_reword_arbiter(tmp_path, monkeypatch)
-    arbiter.reword_session(
-        session_zid=sess_zid,
-        selected_rows=[0],
-        language="de",
-        target_coordinates=[{"visual_idx": 1, "sentence_idx": 3}],
-    )
-    assert len(calls) == 1
+    with _make_reword_arbiter(tmp_path, monkeypatch) as (arbiter, sess_zid, calls):
+        arbiter.reword_session(
+            session_zid=sess_zid,
+            selected_rows=[0],
+            language="de",
+            target_coordinates=[{"visual_idx": 1, "sentence_idx": 3}],
+        )
+        assert len(calls) == 1
 
 
 @pytest.mark.parametrize("invalid_sent", [-1, "abc", True])
 def test_invalid_sentence_idx_rejected(tmp_path, monkeypatch, invalid_sent):
-    arbiter, sess_zid, calls = _make_reword_arbiter(tmp_path, monkeypatch)
-    with pytest.raises(StructuredError) as ei:
-        arbiter.reword_session(session_zid=sess_zid, selected_rows=[0, 1], language="de", sentence_idx=invalid_sent)
-    assert ei.value.error_code == "INVALID_PAYLOAD"
-    assert calls == []
+    with _make_reword_arbiter(tmp_path, monkeypatch) as (arbiter, sess_zid, calls):
+        with pytest.raises(StructuredError) as ei:
+            arbiter.reword_session(session_zid=sess_zid, selected_rows=[0, 1], language="de", sentence_idx=invalid_sent)
+        assert ei.value.error_code == "INVALID_PAYLOAD"
+        assert calls == []
 
 
 # --- Phase 3: Retext persistence tests ---
@@ -274,6 +297,9 @@ def test_persist_retext_multi_sentence_without_index_col_raises(tmp_path):
     arbiter, adapter, session_zid, tsv_file = _make_persist_fixture(
         tmp_path, headers=headers_no_sent, initial_rows=initial_rows, save_sqlite=False
     )
+    # Missing column is a retained TSV schema error; SQLite restores its own index column.
+    arbiter.storage_adapter = kardenwort_desk.TsvStorageAdapter(arbiter.config, arbiter.resolved_paths)
+    before = tsv_file.read_bytes()
     with pytest.raises(StructuredError) as ei:
         arbiter._persist_retext_updates(
             session_zid=session_zid,
@@ -283,6 +309,8 @@ def test_persist_retext_multi_sentence_without_index_col_raises(tmp_path):
             tsv_path=tsv_file
         )
     assert ei.value.error_code == "INVALID_STATE"
+    assert tsv_file.read_bytes() == before
+    assert adapter.db.get_session(session_zid) is None
 
 
 # --- Phase 5: Paired assembly tests ---

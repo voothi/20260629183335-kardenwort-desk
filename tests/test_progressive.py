@@ -206,112 +206,64 @@ def test_progressive_worker_exception_fallback(tmp_path):
 # when run_lemma_enrichment = manual).
 # ---------------------------------------------------------------------------
 
-def test_master_window_sentences_mode_translation_skeleton(monkeypatch, tmp_path):
-    """
-    Reproduces the Sentences Mode master window: it is rendered monolithic
-    (progressive text streaming is incompatible with the multi-window
-    architecture) but still receives lemma data progressively from children.
+def render_legacy_master(server, monkeypatch, zid, text_mode):
+    """Retained TSV hierarchy with real controller enqueue, HTTP and worker effects."""
+    import threading
+    from tests.controller_test_support import DeterministicTranslationHandler
+    from tests.thread_support import executor_tasks
+    config, paths = server.config, server.resolved_paths
+    config.read_dict({'rendering': {'display_mode': 'progressive'},
+        'sentences_mode': {'enabled': 'true', 'parent_mode': 'table', 'delivery_mode': 'multi_window'},
+        'pipeline': {'progressive_text_translation': 'true'},
+        'triggers': {'run_text_translation': 'manual', 'run_lemma_base_translation': 'auto',
+                     'run_lemma_enrichment': 'manual'},
+        'wordfill': {'enabled': 'false'}})
+    headers = ['TokenOrder', 'WordSource', 'WordDestination', 'WordSourceIPA',
+        'WordSourceMorphology', 'SentenceSourceIndex', 'SentenceSource', 'SentenceDestination', 'DeskSelected']
+    text = 'Haus ist gut.\nDas Buch ist rot.' if text_mode == 'multi' else 'Haus ist gut. Das Buch ist rot.'
+    master_tsv = paths['results_dir']/f'{zid}-master.de.tsv'
+    child_tsv = paths['results_dir']/f'{int(zid)+5}-child.de.tsv'
+    desk.save_tsv_rows_safely(master_tsv, [], headers, [['0', 'Haus', '', '', '', '1', text, '', '0']])
+    desk.save_tsv_rows_safely(child_tsv, [], headers, [['0', 'Buch', 'book', '', '', '1', 'Das Buch ist rot.', '', '0']])
+    master_tsv.with_suffix('.txt').write_text(text, encoding='utf-8')
+    entered, release = threading.Event(), threading.Event()
+    original_engine = DeterministicTranslationHandler.translate
+    original_dispatch = desk.run_progressive_worker_async
+    worker_calls = []
 
-    Before the fix, skeleton generation was gated solely by `is_progressive`,
-    so the master's empty translation cells never shimmered. After the fix the
-    decision is decoupled from display mode and tied to provider expectation,
-    so a pending translation cell (run_lemma_base_translation = auto) emits a
-    skeleton loader, while IPA/Morphology stay empty (run_lemma_enrichment = manual).
-    """
-    config = configparser.ConfigParser()
-    config.read_string(f"""
-[settings]
-default_target_language=ru
-[rendering]
-display_mode=progressive
-[translation]
-translation_wrap_max_chars=90
-[pipeline]
-progressive_text_translation=true
-progressive_timeout_seconds=15
-lemma_base_provider=google
-lemma_reprocess_provider=intellifiller
-[triggers]
-run_text_translation=auto
-run_lemma_base_translation=auto
-run_lemma_enrichment=manual
-[sentences_mode]
-enabled=true
-parent_mode=table
-[languages]
-de_prompt=
-[fields]
-""")
+    def held_engine(handler, *args, **kwargs):
+        entered.set()
+        assert release.wait(5), 'Master translation engine was not released'
+        return original_engine(handler, *args, **kwargs)
 
-    mapping_file = tmp_path / "mapping.ini"
-    mapping_file.write_text(
-        "[fields]\n"
-        "WordSource=\nWordDestination=\nWordSourceIPA=\nWordSourceMorphology=\n"
-        "SentenceSourceIndex=\nSentenceDestination=\nDeskSelected=\nWordSourceInflectedForm=\n"
-        "[fields_mapping.word]\n"
-        "WordSource=lemma\nWordDestination=word_translation\nWordSourceIPA=word_ipa\n"
-        "WordSourceMorphology=word_morphology\nSentenceSourceIndex=sentence_index\n"
-        "SentenceDestination=sentence_destination\nDeskSelected=selected\n"
-        "WordSourceInflectedForm=inflected\n",
-        encoding="utf-8",
-    )
+    def observe_dispatch(*args, **kwargs):
+        worker_calls.append((args, kwargs))
+        return original_dispatch(*args, **kwargs)
 
-    resolved_paths = {
-        'results_dir': tmp_path,
-        'kardenwort_core_py': tmp_path / 'dummy.py',
-        'kardenwort_python': tmp_path / 'python',
-        'anki_mapping_file': mapping_file,
-        'kardenwort_workspace': tmp_path,
-        'settings_file': tmp_path / 'settings.ini',
-    }
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', held_engine)
+    monkeypatch.setattr(desk, 'run_progressive_worker_async', observe_dispatch)
+    with executor_tasks(monkeypatch):
+        try:
+            html_out = desk.run_render_flow(text, 'de', zid, text_mode, config, paths,
+                tsv_path=str(master_tsv), spawn_children=False, wordfill_cfg={'enabled': False})
+            assert entered.wait(5), 'Actual queued master worker did not contact the engine'
+            _, stored_headers, pending_rows = desk.load_tsv_rows(master_tsv)
+            assert pending_rows[0][stored_headers.index('WordDestination')] == ''
+        finally:
+            release.set()
+    _, stored_headers, rows = desk.load_tsv_rows(master_tsv)
+    assert rows[0][stored_headers.index('WordDestination')] == 'google: Haus'
+    _, child_headers, child_rows = desk.load_tsv_rows(child_tsv)
+    assert child_rows[0][child_headers.index('WordDestination')] == 'book'
+    assert server.translation_service.provider_calls == [('Haus', 'de', 'ru')]
+    return html_out, worker_calls
 
-    headers = [
-        "WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphology",
-        "SentenceSourceIndex", "SentenceDestination", "DeskSelected", "WordSourceInflectedForm",
-    ]
-    data_rows = [["Haus", "", "", "", "1", "", "0", ""]]
 
-    role_fields = {
-        "lemma": "WordSource",
-        "word_translation": "WordDestination",
-        "word_ipa": "WordSourceIPA",
-        "word_morphology": "WordSourceMorphology",
-        "sentence_index": "SentenceSourceIndex",
-        "sentence_destination": "SentenceDestination",
-        "selected": "DeskSelected",
-        "inflected": "WordSourceInflectedForm",
-    }
-
-    # Master TSV with a 14-digit ZID prefix...
-    master_tsv = tmp_path / "20260810153000-master.en.tsv"
-    master_tsv.write_text("\t".join(headers) + "\n" + "\t".join(data_rows[0]) + "\n", encoding="utf-8")
-    # ...and a child TSV a few seconds later, so the master is detected as a
-    # parent window with active children (forces monolithic display + worker).
-    child_tsv = tmp_path / "20260810153005-child.en.tsv"
-    child_tsv.write_text("", encoding="utf-8")
-
-    monkeypatch.setattr(desk, 'load_anki_mapping', lambda p: configparser.ConfigParser())
-    monkeypatch.setattr(desk, 'load_tsv_rows', lambda p: ([""], headers, [list(r) for r in data_rows]))
-    monkeypatch.setattr(desk, 'is_tsv_llm_filled', lambda *a, **kw: False)
-    monkeypatch.setattr(desk, 'get_role_fields', lambda m, h: role_fields)
-    monkeypatch.setattr(desk, 'load_kardenwort_config', lambda w: configparser.ConfigParser())
-    monkeypatch.setattr(desk, 'resolve_results_dir', lambda rp, kw: tmp_path)
-    monkeypatch.setattr(desk, 'prepare_lookup_tsv', lambda *a, **kw: master_tsv)
-    monkeypatch.setattr(desk, 'run_progressive_worker_async', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'write_update_js', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'spawn_ahk', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'translate_source_text', lambda *a, **kw: {0: "Haus-DE"})
-    monkeypatch.setattr(desk, 'resolve_translations', lambda *a, **kw: None)
-
-    html_out = desk.run_render_flow(
-        "Haus ist gut.\nDas Buch ist rot.",
-        "de",
-        "20260810153010",
-        "multi",
-        config,
-        resolved_paths,
-        tsv_path=str(master_tsv),
-    )
+@pytest.mark.parametrize('controller_world', ['tsv'], indirect=True)
+def test_master_window_sentences_mode_translation_skeleton(monkeypatch, controller_world):
+    """Pending master lemma shimmers; manual IPA/morphology remain plain."""
+    _, server = controller_world
+    html_out, _ = render_legacy_master(server, monkeypatch, '20260810153000', 'multi')
 
     # Translation cell is pending and a provider is expected to fill it -> skeleton.
     assert "<tbody>" in html_out and "</tbody>" in html_out
@@ -382,98 +334,11 @@ def test_progressive_worker_child_single_mode_syncs_with_siblings(monkeypatch, t
     assert rows[0][1] == "house", "Child worker in single mode should cross-pollinate WordDestination from sibling"
 
 
-def test_single_mode_master_window_launches_progressive_worker(monkeypatch, tmp_path):
-    """
-    Verify that when text_mode is 'single' and children TSVs exist on disk,
-    run_render_flow recognizes the master window and launches run_progressive_worker_async.
-    """
-    config = configparser.ConfigParser()
-    config.read_string("""
-[settings]
-default_target_language=ru
-[rendering]
-display_mode=progressive
-[pipeline]
-progressive_text_translation=true
-progressive_timeout_seconds=15
-lemma_base_provider=google
-lemma_reprocess_provider=intellifiller
-[triggers]
-run_text_translation=auto
-run_lemma_base_translation=auto
-run_lemma_enrichment=manual
-[sentences_mode]
-enabled=true
-parent_mode=table
-[languages]
-de_prompt=
-[fields]
-""")
-
-    mapping_file = tmp_path / "mapping.ini"
-    mapping_file.write_text(
-        "[fields]\n"
-        "WordSource=\nWordDestination=\n"
-        "SentenceSourceIndex=\nSentenceDestination=\nDeskSelected=\n"
-        "[fields_mapping.word]\n"
-        "WordSource=lemma\nWordDestination=word_translation\n"
-        "SentenceSourceIndex=sentence_index\n"
-        "SentenceDestination=sentence_destination\nDeskSelected=selected\n",
-        encoding="utf-8",
-    )
-
-    resolved_paths = {
-        'results_dir': tmp_path,
-        'kardenwort_core_py': tmp_path / 'dummy.py',
-        'kardenwort_python': tmp_path / 'python',
-        'anki_mapping_file': mapping_file,
-        'kardenwort_workspace': tmp_path,
-        'settings_file': tmp_path / 'settings.ini',
-    }
-
-    headers = [
-        "WordSource", "WordDestination",
-        "SentenceSourceIndex", "SentenceDestination", "DeskSelected",
-    ]
-    data_rows = [["Haus", "", "1", "", "0"]]
-
-    role_fields = {
-        "lemma": "WordSource",
-        "word_translation": "WordDestination",
-        "sentence_index": "SentenceSourceIndex",
-        "sentence_destination": "SentenceDestination",
-        "selected": "DeskSelected",
-    }
-
-    master_tsv = tmp_path / "20260814120000-master.de.tsv"
-    master_tsv.write_text("\t".join(headers) + "\n" + "\t".join(data_rows[0]) + "\n", encoding="utf-8")
-    child_tsv = tmp_path / "20260814120005-child.de.tsv"
-    child_tsv.write_text("", encoding="utf-8")
-
-    worker_calls = []
-
-    monkeypatch.setattr(desk, 'load_anki_mapping', lambda p: configparser.ConfigParser())
-    monkeypatch.setattr(desk, 'load_tsv_rows', lambda p: ([""], headers, [list(r) for r in data_rows]))
-    monkeypatch.setattr(desk, 'is_tsv_llm_filled', lambda *a, **kw: False)
-    monkeypatch.setattr(desk, 'get_role_fields', lambda m, h: role_fields)
-    monkeypatch.setattr(desk, 'load_kardenwort_config', lambda w: configparser.ConfigParser())
-    monkeypatch.setattr(desk, 'resolve_results_dir', lambda rp, kw: tmp_path)
-    monkeypatch.setattr(desk, 'prepare_lookup_tsv', lambda *a, **kw: master_tsv)
-    monkeypatch.setattr(desk, 'run_progressive_worker_async', lambda *a, **kw: worker_calls.append((a, kw)))
-    monkeypatch.setattr(desk, 'write_update_js', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'spawn_ahk', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'translate_source_text', lambda *a, **kw: {0: "Haus-DE"})
-    monkeypatch.setattr(desk, 'resolve_translations', lambda *a, **kw: None)
-
-    html_out = desk.run_render_flow(
-        "Haus ist gut. Das Buch ist rot.",
-        "de",
-        "20260814120000",
-        "single",
-        config,
-        resolved_paths,
-        tsv_path=str(master_tsv),
-    )
+@pytest.mark.parametrize('controller_world', ['tsv'], indirect=True)
+def test_single_mode_master_window_launches_progressive_worker(monkeypatch, controller_world):
+    """Retained single-mode TSV master dispatch executes and persists real work."""
+    _, server = controller_world
+    html_out, worker_calls = render_legacy_master(server, monkeypatch, '20260814120000', 'single')
 
     assert len(worker_calls) == 1, "run_progressive_worker_async must be called for master window in single mode"
     assert "skeleton-loader" in html_out, "Master window in single mode must render skeleton loader for pending lemmas"
@@ -512,108 +377,31 @@ def test_child_window_does_not_claim_younger_siblings_as_children(controller_wor
     assert prohibited(writes) == []
 
 
-def test_the_cut_respects_sentence_source_index_no_word_bleeding(monkeypatch, tmp_path):
-    """
-    Verify that during 'the cut' in Sentences Mode, rows with an explicit SentenceSourceIndex
-    are assigned strictly to their matching sentence index and not leaked into other sentences
-    via fallback substring matching.
-    """
-    config = configparser.ConfigParser()
-    config.read_string("""
-[settings]
-default_target_language=ru
-[rendering]
-display_mode=progressive
-[pipeline]
-progressive_text_translation=true
-progressive_timeout_seconds=15
-lemma_base_provider=google
-lemma_reprocess_provider=intellifiller
-[triggers]
-run_text_translation=auto
-run_lemma_base_translation=auto
-run_lemma_enrichment=manual
-[sentences_mode]
-enabled=true
-parent_mode=table
-[languages]
-en_prompt=
-[fields]
-""")
-
-    mapping_file = tmp_path / "mapping.ini"
-    mapping_file.write_text(
-        "[fields]\n"
-        "WordSource=\nWordDestination=\nWordSourceInflectedForm=\n"
-        "SentenceSourceIndex=\nSentenceDestination=\nDeskSelected=\n"
-        "[fields_mapping.word]\n"
-        "WordSource=lemma\nWordDestination=word_translation\n"
-        "WordSourceInflectedForm=inflected\n"
-        "SentenceSourceIndex=sentence_index\n"
-        "SentenceDestination=sentence_destination\nDeskSelected=selected\n",
-        encoding="utf-8",
-    )
-
-    resolved_paths = {
-        'results_dir': tmp_path,
-        'kardenwort_core_py': tmp_path / 'dummy.py',
-        'kardenwort_python': tmp_path / 'python',
-        'anki_mapping_file': mapping_file,
-        'kardenwort_workspace': tmp_path,
-        'settings_file': tmp_path / 'settings.ini',
-        'base_dir': tmp_path,
-    }
-
-    headers = [
-        "WordSource", "WordDestination", "WordSourceInflectedForm",
-        "SentenceSourceIndex", "SentenceDestination", "DeskSelected"
-    ]
-    # Row 1 belongs to Sentence 1 (SentenceSourceIndex=1)
-    # Row 2 belongs to Sentence 2 (SentenceSourceIndex=2), with inflected="e.g."
-    # Sentence 1 starts with "E." (so 'e' might match 'e.g.' in buggy fuzzy matching)
-    data_rows = [
-        ["scalability", "", "Scalability", "1", "", "0"],
-        ["for", "", "e.g.", "2", "", "0"],
-    ]
-
-    role_fields = {
-        "lemma": "WordSource",
-        "word_translation": "WordDestination",
-        "inflected": "WordSourceInflectedForm",
-        "sentence_index": "SentenceSourceIndex",
-        "sentence_destination": "SentenceDestination",
-        "selected": "DeskSelected",
-    }
-
-    master_tsv = tmp_path / "20260814120000-master.en.tsv"
-    master_tsv.write_text("\t".join(headers) + "\n" + "\n".join("\t".join(r) for r in data_rows) + "\n", encoding="utf-8")
-
-    spawned_children = []
-
-    def mock_spawn_ahk(args, base_dir):
-        spawned_children.extend(args)
-
-    monkeypatch.setattr(desk, 'load_anki_mapping', lambda p: configparser.ConfigParser())
-    monkeypatch.setattr(desk, 'is_tsv_llm_filled', lambda *a, **kw: False)
-    monkeypatch.setattr(desk, 'get_role_fields', lambda m, h: role_fields)
-    monkeypatch.setattr(desk, 'load_kardenwort_config', lambda w: configparser.ConfigParser())
-    monkeypatch.setattr(desk, 'resolve_results_dir', lambda rp, kw: tmp_path)
-    monkeypatch.setattr(desk, 'prepare_lookup_tsv', lambda *a, **kw: master_tsv)
-    monkeypatch.setattr(desk, 'run_progressive_worker_async', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'write_update_js', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'spawn_ahk', mock_spawn_ahk)
-    monkeypatch.setattr(desk, 'translate_source_text', lambda *a, **kw: {0: "Масштабируемость", 1: "Например"})
-    monkeypatch.setattr(desk, 'resolve_translations', lambda *a, **kw: None)
-
-    desk.run_render_flow(
-        "E. Scalability & Edge Cases.\nSecond sentence e.g. for something.",
-        "en",
-        "20260814120000",
-        "multi",
-        config,
-        resolved_paths,
-        tsv_path=None,
-    )
+@pytest.mark.parametrize('controller_world', ['tsv'], indirect=True)
+def test_the_cut_respects_sentence_source_index_no_word_bleeding(monkeypatch, controller_world):
+    """Explicit stored sentence indices outrank misleading inflected substrings."""
+    from tests.thread_support import executor_tasks
+    _, server = controller_world
+    config, paths = server.config, server.resolved_paths
+    config.read_dict({'rendering': {'display_mode': 'progressive'},
+        'sentences_mode': {'enabled': 'true', 'parent_mode': 'table', 'delivery_mode': 'multi_window',
+                           'multi_mode_sentence_decomposition': 'false'},
+        'triggers': {'run_text_translation': 'manual', 'run_lemma_base_translation': 'manual',
+                     'run_lemma_enrichment': 'manual'}})
+    text = 'E. Scalability & Edge Cases.\nSecond sentence e.g. for something.'
+    zid = '20260814120000'
+    tmp_path = paths['results_dir']
+    headers = ['WordSource', 'WordDestination', 'WordSourceInflectedForm',
+               'SentenceSourceIndex', 'SentenceDestination', 'DeskSelected']
+    data_rows = [['scalability', '', 'Scalability', '1', '', '0'],
+                 ['for', '', 'e.g.', '2', '', '0']]
+    # A real retained cache input lets the cut read declared rows without replacing extraction.
+    master_tsv = tmp_path/f'{zid}-{desk.generate_slug(text)}.en.tsv'
+    desk.save_tsv_rows_safely(master_tsv, [], headers, data_rows)
+    with executor_tasks(monkeypatch):
+        desk.run_render_flow(text, 'en', zid, 'multi', config, paths,
+                             spawn_children=False, wordfill_cfg={'enabled': False})
+    assert server.translation_service.provider_calls == []
 
     # Check child 1 TSV generated on disk
     child1_tsv = tmp_path / "20260814120001-e-scalability-edge-cases.en.tsv"
@@ -764,50 +552,47 @@ def test_progressive_translation_failure_preserves_cell_state(monkeypatch, tmp_p
     assert "failed_lemmas" in failed_event[0]["error"]["details"]
 
 
-def test_progressive_worker_sqlite_mode_exception_non_destructive(monkeypatch, tmp_path):
-    """
-    Verify that in SQLite mode, when an exception occurs in progressive worker translation,
-    existing word records are preserved and not wiped to empty strings.
-    """
-    config, resolved_paths = setup_test_env(tmp_path)
-    tsv_file = tmp_path / "20260828114000-failtest.de.tsv"
-    headers = ["WordSource", "WordDestination", "TokenOrder"]
-    rows = [["Apfel", "", "0"], ["Birne", "груша", "1"]]
-    desk.save_tsv_rows_safely(tsv_file, [], headers, rows)
+def test_progressive_worker_sqlite_mode_exception_non_destructive(monkeypatch, controller_world):
+    """Real failed provider work preserves both pending and translated SQL records."""
+    from tests.controller_test_support import DeterministicTranslationHandler
+    from tests.render_test_support import seed_render_rows
+    from translate_server import TranslationServerException
+    _, server = controller_world
+    config, paths = server.config, server.resolved_paths
+    config.read_dict({'settings': {'default_language': 'de',
+        'anki_mapping_file': str(paths['anki_mapping_file'])},
+        'server': {'update_delivery': 'desktop_file'},
+        'wordfill': {'enabled': 'false'},
+        'triggers': {'run_text_translation': 'manual', 'run_lemma_base_translation': 'auto',
+                     'run_lemma_enrichment': 'manual'}})
+    zid = '20260828114000'
+    seed_render_rows(config, paths, zid, 'Apfel Birne.', 'de',
+        ['WordSource', 'WordDestination', 'TokenOrder', 'SentenceSourceIndex', 'SentenceSource'],
+        [['Apfel', '', '0', '1', 'Apfel Birne.'], ['Birne', 'pear', '1', '1', 'Apfel Birne.']])
+    cold = desk.SqliteStorageAdapter(config, paths)
+    before = cold.db.get_words_by_session(zid)
+    unrelated = cold.db.get_session_bundle('20261108113001')
+    configuration = paths['base_dir']/'failure-config.ini'
+    with configuration.open('w', encoding='utf-8') as stream:
+        config.write(stream)
 
-    args = types.SimpleNamespace(
-        tsv=str(tsv_file),
-        config=str(tmp_path / "config.ini"),
-        language="de",
-        target_lang="ru",
-        prompt="",
-        provider="google",
-        text_mode="single",
-        skip_intellifiller=True,
-        zid="20260828114000",
-        trace_id="test:trace:sqlite",
-    )
+    def unavailable(handler, provider, text, source, target):
+        handler.server.provider_calls.append((text, source, target))
+        raise TranslationServerException(503, 'ERR_NETWORK_UNREACHABLE', 'Owned provider unavailable')
 
-    written_events = []
-    def mock_safe_write_update_js(path, r_rows, h_headers, r_fields, stage=None, status=None, error=None, **kw):
-        written_events.append({"stage": stage, "status": status, "error": error, "rows": r_rows})
-
-    class MockSqliteStorageAdapter:
-        backend_name = "sqlite"
-        def file_lock(self, path):
-            import contextlib
-            return contextlib.nullcontext()
-        def load_tsv_rows(self, path):
-            return [], headers, [list(r) for r in rows]
-        def batch_update_words(self, session_zid, updates_list, zid=None):
-            pass
-
-    monkeypatch.setattr(desk, 'load_config', lambda *a, **kw: (config, resolved_paths, {}, {}))
-    monkeypatch.setattr(desk, 'get_storage_adapter', lambda *a, **kw: MockSqliteStorageAdapter())
-    monkeypatch.setattr(desk, 'translate_lemmas_fast_path', lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("Network failure")))
-    monkeypatch.setattr(desk, 'safe_write_update_js', mock_safe_write_update_js)
-
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', unavailable)
+    tsv_file = paths['results_dir']/f'{zid}-failtest.de.tsv'
+    args = types.SimpleNamespace(tsv=str(tsv_file), config=str(configuration),
+        language='de', target_lang='ru', prompt='', provider='google', text_mode='single',
+        skip_intellifiller=True, zid=zid, trace_id=f'{zid}:test')
     desk.cmd_progressive_worker(args)
+    written_events = [json.loads(path.read_text(encoding='utf-8').split('window.receiveUpdate(', 1)[1][:-4])
+                      for path in sorted(tsv_file.with_suffix('.updates').glob('*.js'))]
+    cold = desk.SqliteStorageAdapter(config, paths)
+    assert cold.db.get_words_by_session(zid) == before
+    assert cold.db.get_session_bundle('20261108113001') == unrelated
+    assert cold.db.get_worker_status(zid)['worker_status'] == 'failed'
+    assert server.translation_service.provider_calls == [('Apfel', 'de', 'ru')]
 
     failed_events = [e for e in written_events if e.get("status") == "failed"]
     assert len(failed_events) >= 1

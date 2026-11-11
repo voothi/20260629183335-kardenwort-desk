@@ -769,38 +769,47 @@ def test_button_loading_normal_resolution_clears_timer(page, tmp_path):
     assert toasts.count() == 0
 
 
-def test_skeleton_stage_tooltips_rendered(tmp_path, monkeypatch):
-    import configparser
-    from tests.test_progressive import setup_test_env
-    config, resolved_paths = setup_test_env(tmp_path)
-    if not config.has_section('languages'):
-        config.add_section('languages')
-    config.set('languages', 'en_prompt', 'dummy')
+def test_skeleton_stage_tooltips_rendered(controller_world, monkeypatch):
+    """Provider tooltip comes from a real pending SQLite worker and provider route."""
+    import threading
+    from tests.controller_test_support import DeterministicTranslationHandler
+    from tests.thread_support import executor_tasks
+    from tests.test_structured_enrichment import control_writes, prohibited
+    _, server = controller_world
+    config, paths = server.config, server.resolved_paths
+    config.read_dict({'rendering': {'display_mode': 'progressive'},
+        'pipeline': {'progressive_text_translation': 'true'},
+        'sentences_mode': {'enabled': 'false'},
+        'triggers': {'run_text_translation': 'manual', 'run_lemma_base_translation': 'auto',
+                     'run_lemma_enrichment': 'manual'}})
+    zid = '20261111202500'
+    seed_render_rows(config, paths, zid, 'Hello', 'en',
+        ['TokenOrder', 'WordSource', 'WordDestination', 'SentenceSourceIndex', 'SentenceSource'],
+        [['0', 'hello', '', '1', 'Hello']])
+    entered, release = threading.Event(), threading.Event()
+    original = DeterministicTranslationHandler.translate
 
-    def mock_prepare_lookup_tsv(*args, **kwargs):
-        p = tmp_path / "mock.tsv"
-        p.write_text(
-            "WordSource\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\tSentenceSourceIndex\tSentenceDestination\n"
-            "Haus\t\t\t\t1\t\n",
-            encoding="utf-8"
-        )
-        return p
+    def held(handler, *args, **kwargs):
+        entered.set()
+        assert release.wait(5), 'Tooltip provider gate was not released'
+        return original(handler, *args, **kwargs)
 
-    monkeypatch.setattr(kardenwort_desk, 'prepare_lookup_tsv', mock_prepare_lookup_tsv)
-    monkeypatch.setattr(kardenwort_desk, 'translate_text', lambda *a, **k: "")
-    monkeypatch.setattr(kardenwort_desk, 'load_anki_mapping', lambda x: configparser.ConfigParser())
-    monkeypatch.setattr(kardenwort_desk, 'get_role_fields', lambda m, h: {
-        'lemma': 'WordSource', 'word_translation': 'WordDestination', 'ipa': 'WordSourceIPA', 'morphology': 'WordSourceMorphologyAI',
-        'sentence_destination': 'SentenceDestination', 'sentence_index': 'SentenceSourceIndex'
-    })
-    monkeypatch.setattr(kardenwort_desk, 'resolve_translations', lambda *a, **k: None)
-    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *a, **k: None)
-    monkeypatch.setattr(kardenwort_desk, 'write_update_js', lambda *a, **k: None)
-    monkeypatch.setattr(kardenwort_desk, 'load_kardenwort_config', lambda x: configparser.ConfigParser())
-    monkeypatch.setattr(kardenwort_desk, 'resolve_results_dir', lambda a, b: tmp_path)
-    monkeypatch.setattr(kardenwort_desk, 'spawn_ahk', lambda *a, **k: None)
-
-    html_out = kardenwort_desk.run_render_flow("Hello", "en", "123", "single", config, resolved_paths)
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', held)
+    with control_writes() as writes, executor_tasks(monkeypatch):
+        try:
+            html_out = kardenwort_desk.run_render_flow('Hello', 'en', zid, 'single', config, paths,
+                spawn_children=False, wordfill_cfg={'enabled': False})
+            assert entered.wait(5), 'Actual tooltip provider route was not executed'
+            pending = kardenwort_desk.SqliteStorageAdapter(config, paths).db.get_words_by_session(zid)
+            assert not pending[0]['word_destination']
+        finally:
+            release.set()
+    cold = kardenwort_desk.SqliteStorageAdapter(config, paths)
+    word = cold.db.get_words_by_session(zid)[0]
+    assert word['word_destination'] == 'google: hello'
+    assert word['word_provenance'] == 'live:google'
+    assert server.translation_service.provider_calls == [('hello', 'en', 'ru')]
+    assert prohibited(writes) == []
 
     assert 'title="Google..."' in html_out
     assert '>Google...<' in html_out

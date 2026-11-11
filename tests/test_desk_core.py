@@ -19,6 +19,7 @@ import configparser
 from pathlib import Path
 import pytest
 import kardenwort_desk as desk
+from tests.controller_test_support import controller_world
 
 def test_write_update_js(tmp_path):
     tsv_path = tmp_path / "data.tsv"
@@ -1327,86 +1328,53 @@ def test_is_base_translation_finished_intellifiller():
 # Task 3.2: has_untranslated_lemmas — intellifiller sets flag on missing IPA
 # ---------------------------------------------------------------------------
 
-def test_has_untranslated_lemmas_intellifiller(monkeypatch, tmp_path):
-    """
-    In run_render_flow's has_untranslated_lemmas logic, when base_provider is
-    'intellifiller' and a row has WordDestination filled but WordSourceIPA or
-    WordSourceMorphologyAI is missing, the flag must be True (i.e., enrichment
-    must still be triggered for that row).
-    """
-    import configparser
-    import types
-
-    config = configparser.ConfigParser()
-    config.read_string(
-        "[settings]\ndefault_language=en\ndefault_target_language=ru\n"
-        "[pipeline]\n"
-        "lemma_base_provider=intellifiller\n"
-        "lemma_reprocess_provider=intellifiller\n"
-        "display_mode=progressive\n"
-        "[triggers]\n"
-        "run_lemma_base_translation=auto\n"
-        "run_text_translation=manual\n"
-        "run_lemma_enrichment=auto\n"
-        "[rendering]\nauto_inject_updates=false\n"
-        "[sentences_mode]\nenabled=false\n"
-        "[languages]\nen_prompt=test-prompt\n"
-        "[fields]\n"
-    )
-
-    mapping_path = tmp_path / "mapping.ini"
-    mapping_path.write_text(
-        "[fields_mapping.word]\n"
-        "WordSource=lemma\n"
-        "WordDestination=word_translation\n"
-        "WordSourceIPA=word_ipa\n"
-        "WordSourceMorphologyAI=word_morphology_ai\n",
-        encoding="utf-8",
-    )
-
-    resolved_paths = {
-        "results_dir": tmp_path,
-        "anki_mapping_file": mapping_path,
-        "kardenwort_workspace": tmp_path,
-        "settings_file": tmp_path / "settings.ini",
-        "kardenwort_core_py": tmp_path / "core.py",
-        "kardenwort_python": "python",
-    }
-
-    # TSV with dest filled but IPA/Morphology missing
-    tsv_path = tmp_path / "20260809190000-test.en.tsv"
-    tsv_path.write_text(
-        "WordSource\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\n"
-        "Haus\thouse\t\t\n",
-        encoding="utf-8",
-    )
-
+def test_has_untranslated_lemmas_intellifiller(monkeypatch, controller_world):
+    """Missing IPA/morphology dispatches actual enrichment despite a stored translation."""
+    from tests.enrichment_test_support import enrichment_engine
+    from tests.render_test_support import seed_render_rows
+    from tests.thread_support import executor_tasks
+    from tests.test_structured_enrichment import control_writes, prohibited
+    _, server = controller_world
+    config, paths = server.config, server.resolved_paths
+    config.read_dict({'rendering': {'display_mode': 'progressive'},
+        'sentences_mode': {'enabled': 'false'},
+        'pipeline': {'lemma_base_provider': 'intellifiller', 'lemma_provider_chain': 'intellifiller',
+                     'lemma_reprocess_provider': 'intellifiller'},
+        'triggers': {'run_text_translation': 'manual', 'run_lemma_base_translation': 'auto',
+                     'run_lemma_enrichment': 'auto'},
+        'languages': {'en_prompt': 'test-prompt'}})
+    zid = '20260809190000'
+    seed_render_rows(config, paths, zid, 'Haus', 'en',
+        ['TokenOrder', 'WordSource', 'WordDestination', 'WordSourceIPA', 'WordSourceMorphologyAI',
+         'SentenceSourceIndex', 'SentenceSource'], [['0', 'Haus', 'house', '', '', '1', 'Haus']])
     progressive_worker_was_launched = []
+    original = desk.run_progressive_worker_async
 
-    def mock_run_progressive_worker_async(tsv, lang, tgt_lang, prompt, base_provider, has_untranslated, skip_intelli, mode):
-        progressive_worker_was_launched.append(has_untranslated)
+    def observe(*args, **kwargs):
+        progressive_worker_was_launched.append(args[5])
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(desk, "prepare_lookup_tsv", lambda *a, **kw: tsv_path)
-    monkeypatch.setattr(desk, "load_anki_mapping", lambda p: configparser.ConfigParser())
-    monkeypatch.setattr(desk, "get_role_fields", lambda m, h: {
-        "lemma": "WordSource",
-        "word_translation": "WordDestination",
-        "ipa": "WordSourceIPA",
-        "morphology": "WordSourceMorphologyAI",
-    })
-    monkeypatch.setattr(desk, "load_tsv_rows", lambda p: (
-        [],
-        ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"],
-        [["Haus", "house", "", ""]],
-    ))
-    monkeypatch.setattr(desk, "run_progressive_worker_async", mock_run_progressive_worker_async)
-    monkeypatch.setattr(desk, "write_update_js", lambda *a, **kw: None)
-    monkeypatch.setattr(desk, "load_kardenwort_config", lambda x: configparser.ConfigParser())
-    monkeypatch.setattr(desk, "resolve_results_dir", lambda a, b: tmp_path)
-    monkeypatch.setattr(desk, "find_wordfill_match", lambda *a, **kw: None)
-    monkeypatch.setattr(desk, "spawn_ahk", lambda *a, **kw: None)
-
-    desk.run_render_flow("Haus", "en", "20260809190000", "single", config, resolved_paths)
+    monkeypatch.setattr(desk, 'run_progressive_worker_async', observe)
+    with enrichment_engine(config) as engine:
+        with control_writes() as writes, executor_tasks(monkeypatch):
+            try:
+                desk.run_render_flow('Haus', 'en', zid, 'single', config, paths,
+                    spawn_children=False, wordfill_cfg={'enabled': False})
+                with engine.changed:
+                    assert engine.changed.wait_for(lambda: len(engine.requests) == 1, 5), 'Missing IPA did not reach enrichment'
+                pending = desk.SqliteStorageAdapter(config, paths).db.get_words_by_session(zid)[0]
+                assert pending['word_destination'] == 'house' and not pending['ipa']
+            finally:
+                engine.release.set()
+        cold = desk.SqliteStorageAdapter(config, paths)
+        word = cold.db.get_words_by_session(zid)[0]
+        assert word['word_destination'] == 'trans_Haus'
+        assert word['ipa'] == '/ipa_Haus/'
+        assert word['morphology'] == 'morph_Haus'
+        assert word['word_provenance'] == 'live:intellifiller'
+        assert cold.db.get_worker_status(zid)['worker_status'] == 'finished'
+        assert engine.requests[0]['prompt'] == 'test-prompt'
+        assert prohibited(writes) == []
 
     assert len(progressive_worker_was_launched) > 0, (
         "run_progressive_worker_async was NOT called — "

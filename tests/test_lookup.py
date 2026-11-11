@@ -6,6 +6,7 @@ from kardenwort_desk import (
     SEC_PROJECT_STRUCTURE, SEC_AUDIO, SEC_GOLDENDICT, SEC_WORDFILL
 )
 import pytest
+import json
 import subprocess
 import configparser
 import sys
@@ -14,10 +15,8 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 import kardenwort_desk
-
-@pytest.fixture(autouse=True)
-def mock_progressive_worker(monkeypatch):
-    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+from tests.controller_test_support import controller_world, DeterministicTranslationHandler
+from tests.test_lookup_cli import lookup_cli_world
 
 def setup_test_env(tmp_path):
     config = configparser.ConfigParser()
@@ -184,17 +183,16 @@ def test_lookup_intellifiller(monkeypatch, tmp_path):
     # Should clear morphology data
     assert data_rows[0][headers.index('WordSourceMorphologyAI')] == ''
 
-def test_lookup_utf8_stdout(monkeypatch, tmp_path):
+def test_lookup_utf8_stdout(monkeypatch, lookup_cli_world):
     import io
-    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
-    
-    def mock_load_config(*args, **kwargs):
-        return config, resolved_paths, goldendict, {}
-        
-    monkeypatch.setattr(kardenwort_desk, 'load_config', mock_load_config)
-    
-    monkeypatch.setattr(kardenwort_desk, 'run_lookup_flow', lambda *a, **kw: ([], ['WordSource'], [['test']], "тест"))
-    
+    server, configuration = lookup_cli_world
+
+    def engine(handler, provider, text, source, target):
+        handler.server.provider_calls.append((text, source, target))
+        return '\u0442\u0435\u0441\u0442'
+
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', engine)
+
     # Mock sys.__stdout__ directly as it's what emit_payload uses
     mock_stdout = io.TextIOWrapper(io.BytesIO(), encoding='utf-8')
     monkeypatch.setattr(sys, '__stdout__', mock_stdout)
@@ -209,7 +207,8 @@ def test_lookup_utf8_stdout(monkeypatch, tmp_path):
         lemma_columns = None
         no_headings = False
         theme = "dark"
-        config = None
+        config = str(configuration)
+        zid = "20261111203200"
         verbose = False
         debug = False
         disable_css = False
@@ -220,70 +219,92 @@ def test_lookup_utf8_stdout(monkeypatch, tmp_path):
     mock_stdout.seek(0)
     decoded = mock_stdout.read()
     assert "тест" in decoded
+    cold = kardenwort_desk.SqliteStorageAdapter(server.config, server.resolved_paths)
+    assert cold.db.get_sentences_by_session(Args.zid)[0]['sentence_destination'] == '\u0442\u0435\u0441\u0442'
+    assert cold.db.get_words_by_session(Args.zid)
+    assert server.translation_service.provider_calls
 
-def test_progressive_worker_stages(monkeypatch, tmp_path):
-    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
-    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
-    
-    # Enable new triggers
-    config.set(SEC_PIPELINE, 'lemma_base_provider', 'google')
-    config.set(SEC_PIPELINE, 'lemma_reprocess_provider', 'intellifiller')
-    
-    config.add_section(SEC_TRIGGERS)
-    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
-    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'auto')
-    
-    config.add_section(SEC_RENDERING)
-    config.set(SEC_RENDERING, 'display_mode', 'progressive')
-    
-    config.set(SEC_SETTINGS, 'intellifiller_batch_size', '2')
-    
-    # Create working TSV
-    tsv_path = resolved_paths['kardenwort_workspace'] / "results" / "test.tsv"
-    tsv_path.parent.mkdir(parents=True, exist_ok=True)
-    tsv_path.write_text("WordSource\tWordSourceMorphologyAI\tWordSourceIPA\tWordDestination\nword1\t\t\t\nword2\t\t\t\nword3\t\t\t\n", encoding='utf-8')
-    
-    # Sibling text file
-    txt_path = tsv_path.with_suffix('.txt')
-    txt_path.write_text("word1 word2 word3", encoding='utf-8')
-    
-    # Record write_update_js calls
-    write_calls = []
-    def mock_write_update_js(tsv_p, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None):
-        write_calls.append((stage, status, len(data_rows)))
-        
-    monkeypatch.setattr(kardenwort_desk, 'write_update_js', mock_write_update_js)
-    
-    # Mock translation calls
-    monkeypatch.setattr(kardenwort_desk, 'translate_source_text', lambda *a, **kw: {0: "trans_sentence"})
-    monkeypatch.setattr(kardenwort_desk, 'translate_lemmas_fast_path', lambda *a, **kw: {"word1": "trans1", "word2": "trans2", "word3": "trans3"})
-    
-    # Mock IntelliFiller - it will write filled fields to tsv
-    def mock_run_headless_intellifiller(tsv_p, prompt, conf, res_paths, selected_rows=None, reprocess=False):
-        # fill morphology and ipa for selected_rows
-        comments, headers, data_rows = kardenwort_desk.load_tsv_rows(tsv_p)
-        col_morph = headers.index('WordSourceMorphologyAI')
-        col_ipa = headers.index('WordSourceIPA')
-        for r_idx in selected_rows:
-            data_rows[r_idx][col_morph] = f"morph{r_idx}"
-            data_rows[r_idx][col_ipa] = f"ipa{r_idx}"
-        kardenwort_desk.save_tsv_rows_safely(tsv_p, comments, headers, data_rows)
-        
-    monkeypatch.setattr(kardenwort_desk, 'run_headless_intellifiller', mock_run_headless_intellifiller)
-    
-    class Args:
-        config = None
-        tsv = str(tsv_path)
-        language = "en"
-        target_lang = "ru"
-        prompt = "en_prompt"
-        provider = "google"
-        word_empty = "true"
-        text_mode = "single"
-        skip_intellifiller = False
-        
-    kardenwort_desk.cmd_progressive_worker(Args())
-    
+
+def run_lookup_worker_profile(server, monkeypatch, profile):
+    """Actual deprecated worker stages with owned TSV inputs and unmanaged HTTP engines."""
+    import types
+    from tests.enrichment_test_support import enrichment_engine
+    from translate_server import TranslationServerException
+    config, paths = server.config, server.resolved_paths
+    count = 3 if profile == 'stages' else 1
+    fail_text = profile == 'failure'
+    config.read_dict({'settings': {'default_language': 'en', 'default_target_language': 'ru',
+        'anki_mapping_file': str(paths['anki_mapping_file']), 'intellifiller_batch_size': '2'},
+        'server': {'update_delivery': 'desktop_file'}, 'wordfill': {'enabled': 'false'},
+        'pipeline': {'text_base_provider': 'deepl' if fail_text else 'google',
+                     'text_provider_chain': 'deepl' if fail_text else 'google',
+                     'lemma_reprocess_provider': 'intellifiller'},
+        'triggers': {'run_text_translation': 'manual' if profile == 'enrichment' else 'auto',
+                     'run_lemma_base_translation': 'manual' if profile == 'enrichment' else 'auto',
+                     'run_lemma_enrichment': 'manual' if profile == 'mode' else 'auto'}})
+    identity = '20261111203500'
+    tsv_path = paths['results_dir']/f'{identity}-worker.en.tsv'
+    headers = ['WordSource', 'WordSourceMorphologyAI', 'WordSourceIPA', 'WordDestination',
+               'TokenOrder', 'SentenceSourceIndex', 'SentenceSource', 'SentenceDestination']
+    text = ' '.join(f'word{i}' for i in range(1, count+1))
+    rows = [[f'word{i}', '', '', '', str(i-1), '1', text, ''] for i in range(1, count+1)]
+    kardenwort_desk.save_tsv_rows_safely(tsv_path, ['# language=en'], headers, rows)
+    tsv_path.with_suffix('.txt').write_text(text, encoding='utf-8')
+    write_calls, text_modes = [], []
+    original_write = kardenwort_desk.write_update_js
+    original_translate = kardenwort_desk.translate_source_text
+    original_engine = DeterministicTranslationHandler.translate
+
+    def observe_write(path, data_rows, headers, roles, *args, **kwargs):
+        write_calls.append((kwargs.get('stage'), kwargs.get('status', 'success'), len(data_rows)))
+        return original_write(path, data_rows, headers, roles, *args, **kwargs)
+
+    def observe_mode(text, source, target, text_mode, *args, **kwargs):
+        text_modes.append(text_mode)
+        return original_translate(text, source, target, text_mode, *args, **kwargs)
+
+    def engine(handler, provider, text, source, target):
+        if fail_text and provider == 'deepl':
+            handler.server.provider_calls.append((text, source, target))
+            raise TranslationServerException(503, 'ERR_NETWORK_UNREACHABLE', 'Owned text provider unavailable')
+        return original_engine(handler, provider, text, source, target)
+
+    monkeypatch.setattr(kardenwort_desk, 'write_update_js', observe_write)
+    monkeypatch.setattr(kardenwort_desk, 'translate_source_text', observe_mode)
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', engine)
+    with enrichment_engine(config) as enrichment:
+        enrichment.release.set()
+        configuration = paths['base_dir']/'worker-config.ini'
+        with configuration.open('w', encoding='utf-8') as stream:
+            config.write(stream)
+        args = types.SimpleNamespace(config=str(configuration), tsv=str(tsv_path), language='en',
+            target_lang='ru', prompt='en_prompt', provider='google', word_empty='true',
+            text_mode='multi_line' if profile == 'mode' else 'single',
+            skip_intellifiller=profile == 'mode', zid=identity, trace_id=f'{identity}:test')
+        kardenwort_desk.cmd_progressive_worker(args)
+        _, stored_headers, stored = kardenwort_desk.load_tsv_rows(tsv_path)
+        assert len(stored) == count
+        if profile != 'mode':
+            assert len(enrichment.requests) == (2 if count == 3 else 1)
+            assert all(row[stored_headers.index('WordSourceMorphologyAI')].startswith('morph_word') for row in stored)
+            assert all(row[stored_headers.index('WordSourceIPA')].startswith('/ipa_word') for row in stored)
+        if profile == 'enrichment':
+            assert server.translation_service.provider_calls == []
+        else:
+            assert server.translation_service.provider_calls
+        payloads = [json.loads(path.read_text(encoding='utf-8').split('window.receiveUpdate(', 1)[1][:-4])
+                    for path in sorted(tsv_path.with_suffix('.updates').glob('*.js'))]
+        final = payloads[-1]
+        assert final['stage'] == 'finished'
+        assert final['status'] == ('failed' if fail_text else 'success')
+    return write_calls, text_modes
+
+
+@pytest.mark.parametrize('controller_world', ['tsv'], indirect=True)
+def test_progressive_worker_stages(monkeypatch, controller_world):
+    _, server = controller_world
+    write_calls, _ = run_lookup_worker_profile(server, monkeypatch, 'stages')
+
     # Stage emission order and tags:
     # 1. source (status success)
     # 2. translated_text (status success)
@@ -300,52 +321,12 @@ def test_progressive_worker_stages(monkeypatch, tmp_path):
     assert write_calls[5] == ('enrichment', 'success', 3)
     assert write_calls[6] == ('finished', 'success', 3)
 
-def test_progressive_worker_failure_isolation(monkeypatch, tmp_path):
-    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
-    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
-    
-    config.set(SEC_PIPELINE, 'lemma_base_provider', 'google')
-    config.set(SEC_PIPELINE, 'lemma_reprocess_provider', 'intellifiller')
-    config.add_section(SEC_TRIGGERS)
-    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
-    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'auto')
-    config.add_section(SEC_RENDERING)
-    config.set(SEC_RENDERING, 'display_mode', 'progressive')
-    
-    tsv_path = resolved_paths['kardenwort_workspace'] / "results" / "test2.tsv"
-    tsv_path.parent.mkdir(parents=True, exist_ok=True)
-    tsv_path.write_text("WordSource\tWordSourceMorphologyAI\tWordSourceIPA\tWordDestination\nword1\t\t\t\n", encoding='utf-8')
-    txt_path = tsv_path.with_suffix('.txt')
-    txt_path.write_text("word1", encoding='utf-8')
-    
-    write_calls = []
-    def mock_write_update_js(tsv_p, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None):
-        write_calls.append((stage, status))
-        
-    monkeypatch.setattr(kardenwort_desk, 'write_update_js', mock_write_update_js)
-    
-    # Inject translation failure
-    def failing_translate(*args, **kwargs):
-        raise RuntimeError("Translation error")
-    monkeypatch.setattr(kardenwort_desk, 'translate_source_text', failing_translate)
-    monkeypatch.setattr(kardenwort_desk, 'translate_lemmas_fast_path', lambda *a, **kw: {"word1": "слово1"})
-    
-    # Enrichment succeeds
-    monkeypatch.setattr(kardenwort_desk, 'run_headless_intellifiller', lambda *a, **kw: None)
-    
-    class Args:
-        config = None
-        tsv = str(tsv_path)
-        language = "en"
-        target_lang = "ru"
-        prompt = "en_prompt"
-        provider = "google"
-        word_empty = "true"
-        text_mode = "single"
-        skip_intellifiller = False
-        
-    kardenwort_desk.cmd_progressive_worker(Args())
-    
+@pytest.mark.parametrize('controller_world', ['tsv'], indirect=True)
+def test_progressive_worker_failure_isolation(monkeypatch, controller_world):
+    _, server = controller_world
+    calls, _ = run_lookup_worker_profile(server, monkeypatch, 'failure')
+    write_calls = [(stage, status) for stage, status, count in calls]
+
     # Even though text translation failed non-fatally, lemma translation, enrichment, and finished still ran!
     assert len(write_calls) == 6
     assert write_calls[0] == ('source', 'success')
@@ -354,82 +335,21 @@ def test_progressive_worker_failure_isolation(monkeypatch, tmp_path):
     assert write_calls[4] == ('enrichment', 'success')
     assert write_calls[5] == ('finished', 'failed')
 
-def test_progressive_worker_d3_enrichment_only(monkeypatch, tmp_path):
-    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
-    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
-    
-    config.set(SEC_PIPELINE, 'lemma_base_provider', 'google')
-    config.set(SEC_PIPELINE, 'lemma_reprocess_provider', 'intellifiller')
-    config.add_section(SEC_TRIGGERS)
-    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'manual')
-    config.set(SEC_TRIGGERS, 'run_text_translation', 'manual')
-    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'auto')
-    
-    tsv_path = resolved_paths['kardenwort_workspace'] / "results" / "test.tsv"
-    tsv_path.parent.mkdir(parents=True, exist_ok=True)
-    tsv_path.write_text("WordSource\tWordSourceMorphologyAI\tWordSourceIPA\tWordDestination\nword1\t\t\t\n", encoding='utf-8')
-    tsv_path.with_suffix('.txt').write_text("word1", encoding='utf-8')
-    
-    write_calls = []
-    def mock_write_update_js(tsv_p, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None):
-        write_calls.append(stage)
-        
-    monkeypatch.setattr(kardenwort_desk, 'write_update_js', mock_write_update_js)
-    monkeypatch.setattr(kardenwort_desk, 'translate_source_text', lambda *a, **kw: {})
-    monkeypatch.setattr(kardenwort_desk, 'translate_lemmas_fast_path', lambda *a, **kw: {})
-    monkeypatch.setattr(kardenwort_desk, 'run_headless_intellifiller', lambda *a, **kw: None)
-    
-    args = MagicMock()
-    args.tsv = str(tsv_path)
-    args.language = 'en'
-    args.target_lang = 'ru'
-    args.prompt = 'default'
-    args.provider = 'google'
-    args.word_empty = 'True'
-    args.text_mode = 'single'
-    args.skip_intellifiller = False
-    
-    kardenwort_desk.cmd_progressive_worker(args)
-    
+@pytest.mark.parametrize('controller_world', ['tsv'], indirect=True)
+def test_progressive_worker_d3_enrichment_only(monkeypatch, controller_world):
+    _, server = controller_world
+    calls, _ = run_lookup_worker_profile(server, monkeypatch, 'enrichment')
+    write_calls = [stage for stage, status, count in calls]
+
     assert "translated" not in write_calls
     assert "enrichment" in write_calls
 
-def test_progressive_worker_d4_text_mode(monkeypatch, tmp_path):
-    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
-    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
-    
-    config.set(SEC_PIPELINE, 'lemma_base_provider', 'google')
-    config.set(SEC_PIPELINE, 'lemma_reprocess_provider', 'intellifiller')
-    config.add_section(SEC_TRIGGERS)
-    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
-    
-    tsv_path = resolved_paths['kardenwort_workspace'] / "results" / "test.tsv"
-    tsv_path.parent.mkdir(parents=True, exist_ok=True)
-    tsv_path.write_text("WordSource\tWordSourceMorphologyAI\tWordSourceIPA\tWordDestination\nword1\t\t\t\n", encoding='utf-8')
-    tsv_path.with_suffix('.txt').write_text("word1", encoding='utf-8')
-    
-    passed_text_mode = None
-    def mock_translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider, **kwargs):
-        nonlocal passed_text_mode
-        passed_text_mode = text_mode
-        return {}
-        
-    monkeypatch.setattr(kardenwort_desk, 'translate_source_text', mock_translate_source_text)
-    monkeypatch.setattr(kardenwort_desk, 'translate_lemmas_fast_path', lambda *a, **kw: {})
-    monkeypatch.setattr(kardenwort_desk, 'write_update_js', MagicMock())
-    
-    args = MagicMock()
-    args.tsv = str(tsv_path)
-    args.language = 'en'
-    args.target_lang = 'ru'
-    args.prompt = 'default'
-    args.provider = 'google'
-    args.word_empty = 'True'
-    args.text_mode = 'multi_line'
-    args.skip_intellifiller = True
-    
-    kardenwort_desk.cmd_progressive_worker(args)
-    
+@pytest.mark.parametrize('controller_world', ['tsv'], indirect=True)
+def test_progressive_worker_d4_text_mode(monkeypatch, controller_world):
+    _, server = controller_world
+    _, modes = run_lookup_worker_profile(server, monkeypatch, 'mode')
+    passed_text_mode = modes[0]
+
     assert passed_text_mode == 'multi_line'
 
 def test_reprocess_worker_classification_update(monkeypatch, tmp_path):

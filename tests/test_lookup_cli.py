@@ -1,136 +1,79 @@
 import pytest
 import sys
-import argparse
-from unittest.mock import MagicMock
 import kardenwort_desk
-from kardenwort_desk import main, cmd_lookup
+from kardenwort_desk import main
+from tests.controller_test_support import controller_world, DeterministicTranslationHandler
 
-def test_lookup_cli_smoke(monkeypatch, capfd, tmp_path):
-    import subprocess
-    import configparser
-    
-    config = configparser.ConfigParser()
-    config.read_string("""
-[settings]
-default_target_language=ru
-[project_structure]
-generated_results_dir=results
-[languages]
-en_prompt=en_prompt
-de_prompt=de_prompt
-en_lemma_index=en_idx
-en_lemma_override=en_over
-[goldendict]
-""")
-    
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    
-    resolved_paths = {
-        'kardenwort_workspace': workspace,
-        'kardenwort_python': 'python',
-        'anki_mapping_file': str(tmp_path / "anki_mapping.ini")
-    }
-    
-    mapping = configparser.ConfigParser()
-    mapping.add_section('fields')
-    mapping.add_section('desk_columns')
-    with open(tmp_path / "anki_mapping.ini", 'w') as f:
-        mapping.write(f)
-        
-    def mock_load_config(*args, **kwargs):
-        return config, resolved_paths, {
-            'format': 'html',
-            'run_intellifiller': False,
-            'lookup_ttl_seconds': 3600,
-            'sections': ['source', 'translation', 'lemmas'],
-            'lemma_columns': ['inflected', 'lemma', 'translation']
-        }, {}
-        
-    monkeypatch.setattr(kardenwort_desk, 'load_config', mock_load_config)
-    
-    def mock_translate_source_text(*args, **kwargs):
-        return {0: "working"}
-        
-    monkeypatch.setattr(kardenwort_desk, 'translate_source_text', mock_translate_source_text)
-    
-    def mock_run_lookup_flow(*args, **kwargs):
-        return [], ['WordSource'], [['running']], "working"
-        
-    monkeypatch.setattr(kardenwort_desk, 'run_lookup_flow', mock_run_lookup_flow)
-    
-    monkeypatch.setattr(sys, 'argv', ['kardenwort_desk.py', 'lookup', '--text', 'running', '--language', 'en', '--format', 'text'])
-    
-    # Mock sys.__stdout__ and sys.stderr to avoid [WinError 6] under pytest capture on Windows
+@pytest.fixture
+def lookup_cli_world(controller_world, monkeypatch):
+    """Owned CLI configuration; only unmanaged translation output is deterministic."""
+    _, server = controller_world
+    config, paths = server.config, server.resolved_paths
+    config.read_dict({'settings': {'anki_mapping_file': str(paths['anki_mapping_file']),
+                                   'default_language': 'en', 'default_target_language': 'ru'},
+        'goldendict': {'run_intellifiller': 'false', 'lookup_ttl_seconds': '0',
+                      'sentence_match_strategy': 'none', 'format': 'html'},
+        'wordfill': {'enabled': 'false'}})
+    configuration = paths['base_dir']/'lookup-config.ini'
+    with configuration.open('w', encoding='utf-8') as stream:
+        config.write(stream)
+
+    def engine(handler, provider, text, source, target):
+        handler.server.provider_calls.append((text, source, target))
+        return 'working'
+
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', engine)
+    return server, configuration
+
+
+def assert_lookup_cli_persisted(server):
+    cold = kardenwort_desk.SqliteStorageAdapter(server.config, server.resolved_paths)
+    with cold.db.get_connection() as connection:
+        sessions = connection.execute("SELECT zid FROM sessions WHERE source_raw_text = 'running'").fetchall()
+    assert len(sessions) == 1
+    zid = sessions[0]['zid']
+    assert cold.db.get_sentences_by_session(zid)[0]['sentence_destination'] == 'working'
+    assert cold.db.get_words_by_session(zid)
+    assert server.translation_service.provider_calls
+
+
+def test_lookup_cli_smoke(monkeypatch, lookup_cli_world):
     import io
+    server, configuration = lookup_cli_world
+    monkeypatch.setattr(sys, 'argv', ['kardenwort_desk.py', '--config', str(configuration),
+        'lookup', '--text', 'running', '--language', 'en', '--format', 'text'])
     mock_out = io.StringIO()
     monkeypatch.setattr(sys, '__stdout__', mock_out)
     monkeypatch.setattr(sys, 'stdout', mock_out)
     monkeypatch.setattr(sys, 'stderr', mock_out)
-    
     with pytest.raises(SystemExit) as excinfo:
         main()
-        
+
     assert excinfo.value.code == 0
     out_str = mock_out.getvalue()
     assert "working" in out_str
-        
-def test_lookup_cli_overrides(monkeypatch, capfd, tmp_path):
-    import configparser
-    
-    config = configparser.ConfigParser()
-    config.read_string("""
-[settings]
-default_target_language=ru
-[project_structure]
-generated_results_dir=results
-[languages]
-en_prompt=en_prompt
-de_prompt=de_prompt
-[goldendict]
-""")
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    resolved_paths = {
-        'kardenwort_workspace': workspace,
-        'kardenwort_python': 'python',
-        'anki_mapping_file': str(tmp_path / "anki_mapping.ini")
-    }
-    mapping = configparser.ConfigParser()
-    mapping.add_section('fields')
-    mapping.add_section('desk_columns')
-    with open(tmp_path / "anki_mapping.ini", 'w') as f:
-        mapping.write(f)
-        
-    def mock_load_config(*args, **kwargs):
-        return config, resolved_paths, {
-            'format': 'html',
-            'run_intellifiller': False,
-            'lookup_ttl_seconds': 3600,
-            'sections': ['source', 'translation', 'lemmas'],
-            'lemma_columns': ['inflected', 'lemma', 'translation']
-        }, {}
-    monkeypatch.setattr(kardenwort_desk, 'load_config', mock_load_config)
-    monkeypatch.setattr(kardenwort_desk, 'translate_source_text', lambda *a, **kw: {0: "test"})
-    monkeypatch.setattr(kardenwort_desk, 'run_lookup_flow', lambda *a, **kw: ([], ['WordSource', 'WordDestination'], [['running', 'test']], "test"))
-    
-    monkeypatch.setattr(sys, 'argv', ['kardenwort_desk.py', 'lookup', '--text', 'running', '--language', 'en', '--sections', 'lemmas', '--lemma-columns', 'lemma,translation', '--no-headings'])
-    
-    # Mock sys.__stdout__ and sys.stderr
+    assert_lookup_cli_persisted(server)
+
+
+def test_lookup_cli_overrides(monkeypatch, lookup_cli_world):
     import io
+    server, configuration = lookup_cli_world
+    monkeypatch.setattr(sys, 'argv', ['kardenwort_desk.py', '--config', str(configuration),
+        'lookup', '--text', 'running', '--language', 'en', '--sections', 'lemmas',
+        '--lemma-columns', 'lemma,translation', '--no-headings'])
     mock_out = io.StringIO()
     monkeypatch.setattr(sys, '__stdout__', mock_out)
     monkeypatch.setattr(sys, 'stdout', mock_out)
     monkeypatch.setattr(sys, 'stderr', mock_out)
-    
     with pytest.raises(SystemExit):
         main()
-        
+
     out_str = mock_out.getvalue()
     assert '<div class="kw-translation"' not in out_str
     assert '<div class="kw-source-text"' not in out_str
     assert "<h3>" not in out_str
     assert "Lemma" in out_str
+    assert_lookup_cli_persisted(server)
 
 
 def test_cmd_merge_cli(tmp_path, monkeypatch):
