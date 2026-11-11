@@ -10003,6 +10003,8 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             text = normalize_bracket_spacing(text)
     target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
 
+    run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
+
     display_mode_val = config.get(SEC_RENDERING, 'display_mode', fallback='progressive')
     is_progressive_translation_enabled = config.getboolean(SEC_PIPELINE, 'progressive_text_translation', fallback=False)
     if display_mode_val != 'progressive':
@@ -10140,6 +10142,9 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         fast_fail_timeout = config.getfloat(SEC_PIPELINE, 'translation_fast_fail_timeout', fallback=3.0)
 
         def do_translation():
+            if run_text != 'auto':
+                logger.info(f"[{zid}] [Translation Worker] Text translation awaits a manual action")
+                return ""
             if is_progressive_translation_enabled:
                 logger.info(f"[{zid}] [Translation Worker] Bypassed background translation due to progressive_text_translation=true")
                 return ""
@@ -10160,25 +10165,25 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 future_trans = executor.submit(do_translation)
                 future_core = executor.submit(do_core)
 
-                try:
-                    master_tsv_path = future_core.result()
-                except Exception as core_exc:
-                    logger.error(f"[{zid}] Core TSV generation failed in parallel executor: {core_exc}")
-                    raise core_exc
-
-                try:
-                    translated_paragraph = future_trans.result(timeout=max(0.0, fast_fail_timeout))
-                    translated_sentences = split_single_mode_text(
-                        translated_paragraph, wrap_max_chars, abbrevs=None,
-                        terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks
-                    )
-                except concurrent.futures.TimeoutError:
+                from kardenwort_render_preparation import collect_preparation, TranslationStatus
+                prepared = collect_preparation(future_core, future_trans, fast_fail_timeout, zid, logger)
+                master_tsv_path = prepared.source
+                if prepared.status is TranslationStatus.READY:
+                    try:
+                        translated_paragraph = prepared.translation
+                        translated_sentences = split_single_mode_text(
+                            translated_paragraph, wrap_max_chars, abbrevs=None,
+                            terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks
+                        )
+                    except Exception as trans_exc:
+                        logger.warning(f"[{zid}] Holistic translation failed in parallel executor: {trans_exc}")
+                elif prepared.status is TranslationStatus.TIMED_OUT:
                     translation_fast_failed = True
                     logger.warning(f"[{zid}] Holistic translation exceeded fast-fail timeout ({fast_fail_timeout}s); proceeding without initial translation")
                     with TraceTimer("translation_fast_fail", zid, config, resolved_paths, extra={"timeout": fast_fail_timeout}):
                         pass
-                except Exception as trans_exc:
-                    logger.warning(f"[{zid}] Holistic translation failed in parallel executor: {trans_exc}")
+                else:
+                    logger.warning(f"[{zid}] Holistic translation failed in parallel executor: {prepared.error}")
             finally:
                 if sys.version_info >= (3, 9):
                     executor.shutdown(wait=False, cancel_futures=True)
@@ -10194,7 +10199,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             master_tsv_path = do_core()
 
         # Fallback to newline_join block translation when sentence-count alignment fails
-        attempt_newline_join = not is_progressive_translation_enabled and not translation_fast_failed and ((len(translated_sentences) != len(source_sentences)) or (alignment_method == 'newline_join'))
+        attempt_newline_join = run_text == 'auto' and not is_progressive_translation_enabled and not translation_fast_failed and ((len(translated_sentences) != len(source_sentences)) or (alignment_method == 'newline_join'))
         if attempt_newline_join and alignment_method != 'proportion':
             try:
                 translations_dict = translate_source_text(
@@ -10206,7 +10211,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 logger.error(f"[{zid}] Newline-join alignment fallback failed: {e}")
 
         # Final proportional safety net fallback
-        if not is_progressive_translation_enabled and not translation_fast_failed and len(translated_sentences) != len(source_sentences):
+        if run_text == 'auto' and not is_progressive_translation_enabled and not translation_fast_failed and len(translated_sentences) != len(source_sentences):
             if not translated_paragraph:
                 try:
                     translated_paragraph = translate_text(text, language, target_lang, config, resolved_paths, main_text_provider, zid=zid)
@@ -10840,7 +10845,6 @@ html, body {{
     hover_highlight_bookmarks = config.getint(SEC_RENDERING, 'hover_highlight_bookmarks', fallback=3)
     hover_highlight_rainbow = config.getboolean(SEC_RENDERING, 'hover_highlight_rainbow', fallback=True)
     run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
-    run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
     run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
     base_provider = lemma_base_provider
     enrich_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
@@ -10894,16 +10898,17 @@ html, body {{
         if not all(len(row) > col_word_dest and row[col_word_dest].strip() for row in data_rows if any(row)):
             has_untranslated_lemmas = True
 
-    # If monolithic mode and run_base is auto, run base translation synchronously
-    if not is_mismatch and not is_progressive and run_base == 'auto':
+    # Text and lemma triggers independently govern their synchronous work.
+    if not is_mismatch and not is_progressive:
         try:
-            if not sentence_translated and not translation_fast_failed:
+            if run_text == 'auto' and not sentence_translated and not translation_fast_failed:
                 with TraceTimer("monolithic_text_translation", zid, config, resolved_paths):
                     sentence_translations_raw = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider, zid=zid)
                 resolve_translations(
-                    text, text_mode, data_rows, col_index, col_sentence_dest,
+                    text, text_mode, data_rows, col_index,
+                    col_sentence_dest_orig if col_sentence_dest_orig != -1 else col_sentence_dest,
                     sentence_translations_raw, working_tsv_path, comments, headers,
-                    persist=(not is_sqlite), return_single=False
+                    col_sentence_dest2=col_sentence_dest2, persist=(not is_sqlite), return_single=False
                 )
                 if is_sqlite:
                     sync_text_prov = getattr(sentence_translations_raw, 'provenance', f"live:{main_text_provider}")
@@ -10933,9 +10938,10 @@ html, body {{
             logger.error(f"Monolithic translation alignment error: {tae}")
             sentence_translations_raw = tae.partial_dict
             resolve_translations(
-                text, text_mode, data_rows, col_index, col_sentence_dest,
+                text, text_mode, data_rows, col_index,
+                col_sentence_dest_orig if col_sentence_dest_orig != -1 else col_sentence_dest,
                 sentence_translations_raw, working_tsv_path, comments, headers,
-                persist=(not is_sqlite), return_single=False
+                col_sentence_dest2=col_sentence_dest2, persist=(not is_sqlite), return_single=False
             )
             if is_sqlite:
                 storage_adapter.save_session(
@@ -10959,7 +10965,7 @@ html, body {{
                 _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
             run_enrich = 'manual'
 
-        if has_untranslated_lemmas and not children_tsv_paths:
+        if run_base == 'auto' and has_untranslated_lemmas and not children_tsv_paths:
             if base_provider == 'intellifiller':
                 selected_rows_to_enrich = []
                 for i, row in enumerate(data_rows):
@@ -11005,8 +11011,15 @@ html, body {{
                                 if trans_val:
                                     row[col_word_dest] = trans_val
                                     row_provenances[row_id] = fast_prov
-                with file_lock(working_tsv_path):
-                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+                if is_sqlite:
+                    storage_adapter.save_session(
+                        session_zid=zid, slug=tsv_slug, source_language=language,
+                        target_language=target_lang, text_mode=text_mode, source_raw_text=text,
+                        comments=comments, headers=headers, data_rows=data_rows,
+                        working_tsv_path=None, row_provenances=row_provenances, zid=zid)
+                else:
+                    with file_lock(working_tsv_path):
+                        save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
 
     translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
 

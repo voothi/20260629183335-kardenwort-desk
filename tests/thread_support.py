@@ -1,5 +1,6 @@
 """Bounded test workers and owned SSE transports; errors return to the caller."""
 from contextlib import contextmanager
+import concurrent.futures
 from http.client import HTTPConnection
 import json
 import threading
@@ -62,6 +63,34 @@ def finish_workers(workers):
     if errors:
         raise BaseExceptionGroup('Owned caller failures', errors)
     return values
+
+
+@contextmanager
+def executor_tasks(monkeypatch):
+    """Observe real scheduling and drain test-owned executor work after release."""
+    submitted = []
+    original = concurrent.futures.ThreadPoolExecutor.submit
+
+    def observe(executor, *args, **kwargs):
+        future = original(executor, *args, **kwargs)
+        submitted.append((executor, future))
+        return future
+
+    monkeypatch.setattr(concurrent.futures.ThreadPoolExecutor, 'submit', observe)
+    try:
+        yield submitted
+    finally:
+        errors = []
+        for executor, future in submitted:
+            try:
+                future.result(timeout=5)
+            except BaseException as error:
+                errors.append(error)
+        for executor in {executor for executor, _ in submitted}:
+            if all(future.done() for owner, future in submitted if owner is executor):
+                executor.shutdown(wait=True)
+        if errors:
+            raise BaseExceptionGroup('Owned executor task failures', errors)
 
 
 class SSEEvents:

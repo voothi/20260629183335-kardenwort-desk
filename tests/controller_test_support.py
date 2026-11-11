@@ -56,9 +56,9 @@ def translation_service(handler, auto_failover=False, google_concurrency=1):
 
 
 @contextmanager
-def token_service():
+def token_service(handler=MockSpacyRequestHandler):
     """Only unmanaged NLP model output is deterministic; extraction/JSONL/SQLite remain real."""
-    server = create_browser_test_server(MockSpacyRequestHandler)
+    server = create_browser_test_server(handler)
     try:
         server.start()
         yield server

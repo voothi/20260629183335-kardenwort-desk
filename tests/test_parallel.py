@@ -1,119 +1,73 @@
-from kardenwort_desk import run_render_flow, TranslationAlignmentError, SEC_PIPELINE
+from kardenwort_desk import run_render_flow
 import pytest
-import configparser
-from pathlib import Path
 import time
 import kardenwort_desk
+from tests.render_pipeline_support import overlapping_pipeline
 
-def setup_test_env(tmp_path):
-    config = configparser.ConfigParser()
-    config.read_string(f"""
-[settings]
-default_target_language=ru
-[pipeline]
-parallelize_core_and_translation=true
-[sentences_mode]
-enabled=true
-parent_mode=table
-""")
-    resolved_paths = {
-        'results_dir': tmp_path,
-        'kardenwort_core_py': Path('dummy.py'),
-        'kardenwort_python': Path('python'),
-        'anki_mapping_file': Path('dummy.json'),
-        'kardenwort_workspace': tmp_path
-    }
-    return config, resolved_paths
-
-def test_parallel_execution_time(tmp_path, monkeypatch):
-    config, resolved_paths = setup_test_env(tmp_path)
-    
-    # Mock prepare_lookup_tsv
-    def mock_prepare_lookup_tsv(*args, **kwargs):
-        time.sleep(1.0)
-        p = tmp_path / "mock.tsv"
-        p.write_text("Row1\nRow2", encoding='utf-8')
-        return p
-        
-    # Mock translate_text
-    def mock_translate_text(*args, **kwargs):
-        time.sleep(1.0)
-        return "Translated Text"
-        
-    monkeypatch.setattr(kardenwort_desk, 'prepare_lookup_tsv', mock_prepare_lookup_tsv)
-    monkeypatch.setattr(kardenwort_desk, 'translate_text', mock_translate_text)
-    monkeypatch.setattr(kardenwort_desk, 'load_anki_mapping', lambda x: configparser.ConfigParser())
-    monkeypatch.setattr(kardenwort_desk, 'get_role_fields', lambda m, h: {})
-    monkeypatch.setattr(kardenwort_desk, 'load_tsv_rows', lambda p: ([], [], []))
-    monkeypatch.setattr(kardenwort_desk, 'resolve_translations', lambda *args, **kwargs: None)
-    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
-    monkeypatch.setattr(kardenwort_desk, 'write_update_js', lambda *args, **kwargs: None)
-    monkeypatch.setattr(kardenwort_desk, 'load_kardenwort_config', lambda x: configparser.ConfigParser())
-    monkeypatch.setattr(kardenwort_desk, 'resolve_results_dir', lambda a, b: tmp_path)
-    monkeypatch.setattr(kardenwort_desk, 'spawn_ahk', lambda *args, **kwargs: None)
-
+def test_parallel_execution_time(overlapping_pipeline):
+    server, observed = overlapping_pipeline
+    config, resolved_paths = server.config, server.resolved_paths
     start_time = time.time()
-    run_render_flow("Hello", "en", "123", "single", config, resolved_paths)
+    html = run_render_flow('Hello world. Another sentence.', 'en', '20261111135900', 'single',
+                           config, resolved_paths, spawn_children=False, wordfill_cfg={'enabled': False})
     end_time = time.time()
-    
     duration = end_time - start_time
-    
-    # If sequential, it would be 2.0s. If parallel, it should be ~1.0s.
     assert duration < 1.5, f"Execution was too slow: {duration}s, expected parallel execution (~1.0s)"
+    assert observed == {'extraction', 'translation'}
+    assert 'Hello' in html and 'Another' in html
+    cold = kardenwort_desk.SqliteStorageAdapter(config, resolved_paths)
+    assert len(cold.db.get_sentences_by_session('20261111135900')) == 2
+    assert all(row['sentence_destination'] for row in cold.db.get_sentences_by_session('20261111135900'))
 
-def test_parallel_execution_exception_handling(tmp_path, monkeypatch):
-    config, resolved_paths = setup_test_env(tmp_path)
-    
-    def mock_prepare_lookup_tsv(*args, **kwargs):
-        p = tmp_path / "mock.tsv"
-        p.write_text("Row1\nRow2", encoding='utf-8')
-        return p
-        
-    def mock_translate_text(*args, **kwargs):
-        raise ValueError("Network error simulated")
-        
-    monkeypatch.setattr(kardenwort_desk, 'prepare_lookup_tsv', mock_prepare_lookup_tsv)
-    monkeypatch.setattr(kardenwort_desk, 'translate_text', mock_translate_text)
-    monkeypatch.setattr(kardenwort_desk, 'load_anki_mapping', lambda x: configparser.ConfigParser())
-    monkeypatch.setattr(kardenwort_desk, 'get_role_fields', lambda m, h: {})
-    monkeypatch.setattr(kardenwort_desk, 'load_tsv_rows', lambda p: ([], [], []))
-    monkeypatch.setattr(kardenwort_desk, 'resolve_translations', lambda *args, **kwargs: None)
-    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
-    monkeypatch.setattr(kardenwort_desk, 'write_update_js', lambda *args, **kwargs: None)
-    monkeypatch.setattr(kardenwort_desk, 'load_kardenwort_config', lambda x: configparser.ConfigParser())
-    monkeypatch.setattr(kardenwort_desk, 'resolve_results_dir', lambda a, b: tmp_path)
-    monkeypatch.setattr(kardenwort_desk, 'spawn_ahk', lambda *args, **kwargs: None)
 
-    # Should gracefully catch and fallback without crashing
-    run_render_flow("Hello", "en", "123", "single", config, resolved_paths)
+def test_parallel_execution_exception_handling():
+    from concurrent.futures import ThreadPoolExecutor
+    from kardenwort_render_preparation import collect_preparation, TranslationStatus
 
-def test_parallel_core_failure(tmp_path, monkeypatch):
-    config, resolved_paths = setup_test_env(tmp_path)
-    
-    def mock_prepare_lookup_tsv(*args, **kwargs):
+    def translation():
+        raise ValueError('Network error simulated')
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        result = collect_preparation(executor.submit(lambda: 'source'), executor.submit(translation),
+                                     1, '20261111140901', kardenwort_desk.logger)
+    assert result.source == 'source'
+    assert result.status is TranslationStatus.FAILED
+    assert isinstance(result.error, ValueError)
+
+
+def test_parallel_core_failure():
+    from concurrent.futures import ThreadPoolExecutor
+    from kardenwort_render_preparation import collect_preparation
+
+    def core():
         raise RuntimeError("Fatal TSV error")
-        
-    def mock_translate_text(*args, **kwargs):
-        return "Translated"
-        
-    monkeypatch.setattr(kardenwort_desk, 'prepare_lookup_tsv', mock_prepare_lookup_tsv)
-    monkeypatch.setattr(kardenwort_desk, 'translate_text', mock_translate_text)
-    
-    with pytest.raises(RuntimeError, match="Fatal TSV error"):
-        run_render_flow("Hello", "en", "123", "single", config, resolved_paths)
 
-def test_parallel_exception_priority(tmp_path, monkeypatch):
-    config, resolved_paths = setup_test_env(tmp_path)
-    
-    def mock_prepare_lookup_tsv(*args, **kwargs):
-        time.sleep(0.1)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        core_task = executor.submit(core)
+        translation_task = executor.submit(lambda: 'Translated')
+        with pytest.raises(RuntimeError, match="Fatal TSV error"):
+            collect_preparation(core_task, translation_task, 1, '20261111140902', kardenwort_desk.logger)
+
+
+def test_parallel_exception_priority():
+    from concurrent.futures import ThreadPoolExecutor
+    from kardenwort_render_preparation import collect_preparation
+    import threading
+
+    translation_failed = threading.Event()
+
+    def core():
+        assert translation_failed.wait(5)
         raise RuntimeError("Fatal TSV error")
-        
-    def mock_translate_text(*args, **kwargs):
-        raise ValueError("Network error")
-        
-    monkeypatch.setattr(kardenwort_desk, 'prepare_lookup_tsv', mock_prepare_lookup_tsv)
-    monkeypatch.setattr(kardenwort_desk, 'translate_text', mock_translate_text)
-    
-    with pytest.raises(RuntimeError, match="Fatal TSV error"):
-        run_render_flow("Hello", "en", "123", "single", config, resolved_paths)
+
+    def translation():
+        raise ValueError('Network error')
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        core_task = executor.submit(core)
+        translation_task = executor.submit(translation)
+        translation_task.add_done_callback(lambda completed: translation_failed.set())
+        with pytest.raises(RuntimeError, match="Fatal TSV error"):
+            collect_preparation(core_task, translation_task, 1, '20261111140903', kardenwort_desk.logger)
+        assert translation_task.done()
+        assert isinstance(translation_task.exception(), ValueError)

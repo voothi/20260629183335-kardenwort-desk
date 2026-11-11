@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 import pytest
 import kardenwort_desk
+from tests.controller_test_support import controller_world
 from kardenwort_desk import run_render_flow, load_config, SEC_PIPELINE, _migrate_config
 
 
@@ -21,67 +22,54 @@ def test_config_fast_fail_timeout_parsing(tmp_path):
     assert cfg2.getfloat(SEC_PIPELINE, "translation_fast_fail_timeout") == 1.5
 
 
-def test_slow_translation_triggers_fast_fail(tmp_path, monkeypatch):
-    config = configparser.ConfigParser()
-    config.read_string("""
-[settings]
-default_target_language=ru
-[pipeline]
-parallelize_core_and_translation=true
-translation_fast_fail_timeout=0.2
-text_base_provider=deepl
-[sentences_mode]
-enabled=true
-parent_mode=table
-""")
-    _migrate_config(config)
+def test_slow_translation_triggers_fast_fail(controller_world, monkeypatch):
+    import threading
+    from tests.controller_test_support import DeterministicTranslationHandler
+    from tests.render_pipeline_support import configure_render_pipeline
+    from tests.thread_support import executor_tasks
 
-    resolved_paths = {
-        'results_dir': tmp_path,
-        'kardenwort_core_py': Path('dummy.py'),
-        'kardenwort_python': Path('python'),
-        'anki_mapping_file': Path('dummy.json'),
-        'kardenwort_workspace': tmp_path
-    }
+    _, server = controller_world
+    config, resolved_paths = server.config, server.resolved_paths
+    configure_render_pipeline(server)
+    config.set('pipeline', 'translation_fast_fail_timeout', '0.2')
+    entered, release = threading.Event(), threading.Event()
+    requests = []
+    original = DeterministicTranslationHandler.translate
 
-    def mock_prepare_lookup_tsv(*args, **kwargs):
-        p = tmp_path / "mock.tsv"
-        p.write_text("SentenceSourceIndex\tWordSource\tWordDestination\n1\tapple\tyabloko", encoding='utf-8')
-        return p
+    def held(handler, provider, text, source, target):
+        requests.append(text)
+        entered.set()
+        assert release.wait(5), 'Translation engine was not released'
+        return original(handler, provider, text, source, target)
 
-    def mock_slow_translate_text(*args, **kwargs):
-        # Simulate slow network translation
-        time.sleep(3.0)
-        return "Slow translation that exceeds timeout"
-
-    fallback_called = []
-    def mock_translate_source_text(*args, **kwargs):
-        fallback_called.append(True)
-        return {0: "Fallback translation"}
-
-    monkeypatch.setattr(kardenwort_desk, 'prepare_lookup_tsv', mock_prepare_lookup_tsv)
-    monkeypatch.setattr(kardenwort_desk, 'translate_text', mock_slow_translate_text)
-    monkeypatch.setattr(kardenwort_desk, 'translate_source_text', mock_translate_source_text)
-    monkeypatch.setattr(kardenwort_desk, 'load_anki_mapping', lambda x: configparser.ConfigParser())
-    monkeypatch.setattr(kardenwort_desk, 'get_role_fields', lambda m, h: {})
-    monkeypatch.setattr(kardenwort_desk, 'load_tsv_rows', lambda p: ([], ["SentenceSourceIndex", "WordSource"], [["1", "apple"]]))
-    monkeypatch.setattr(kardenwort_desk, 'resolve_translations', lambda *args, **kwargs: None)
-    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
-    monkeypatch.setattr(kardenwort_desk, 'write_update_js', lambda *args, **kwargs: None)
-    monkeypatch.setattr(kardenwort_desk, 'load_kardenwort_config', lambda x: configparser.ConfigParser())
-    monkeypatch.setattr(kardenwort_desk, 'resolve_results_dir', lambda a, b: tmp_path)
-    monkeypatch.setattr(kardenwort_desk, 'spawn_ahk', lambda *args, **kwargs: None)
-
-    start_time = time.time()
-    # "Sentence one. Sentence two." triggers splitting
-    html = run_render_flow("First sentence. Second sentence.", "en", "20260829013000", "single", config, resolved_paths)
-    elapsed = time.time() - start_time
-
-    # Must finish around 0.2s fast-fail timeout, well under the 3.0s sleep
-    assert elapsed < 1.0, f"Render flow took {elapsed}s; expected fast-fail under 1.0s"
-    assert not fallback_called, "Fallback translation should not have been invoked after fast-fail"
-    assert isinstance(html, str)
-    assert len(html) > 0
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', held)
+    with executor_tasks(monkeypatch) as submitted:
+        try:
+            start_time = time.time()
+            html = run_render_flow('First sentence. Second sentence.', 'und', '20260829013000', 'single',
+                                   config, resolved_paths, spawn_children=False, wordfill_cfg={'enabled': False})
+            elapsed = time.time() - start_time
+            fallback_called = [request for request in requests if '\n' in request]
+            assert elapsed < 1.0, f"Render flow took {elapsed}s; expected fast-fail under 1.0s"
+            assert not fallback_called, "Fallback translation should not have been invoked after fast-fail"
+            assert isinstance(html, str)
+            assert len(html) > 0
+            assert entered.is_set()
+            assert any(not future.done() for _, future in submitted)
+            assert requests == ['First sentence. Second sentence.']
+            before = kardenwort_desk.SqliteStorageAdapter(config, resolved_paths).db.get_sentences_by_session('20260829013000')
+            assert all(not row['sentence_destination'] for row in before)
+            with server.arbiter.enrichment_queue._lock:
+                progressive = server.arbiter.enrichment_queue._active_progressive_sessions['20260829013000']
+            assert any(future is progressive for _, future in submitted)
+            assert not progressive.done()
+        finally:
+            release.set()
+    assert all(future.done() for _, future in submitted)
+    cold = kardenwort_desk.SqliteStorageAdapter(config, resolved_paths)
+    assert [(row['sentence_destination'], row['text_provenance'])
+            for row in cold.db.get_sentences_by_session('20260829013000')] == [
+                ('google: First sentence.', 'live:google'), ('google: Second sentence.', 'live:google')]
 
 
 def test_fast_translation_completes_within_timeout(tmp_path, monkeypatch):
