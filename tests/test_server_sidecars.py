@@ -1,3 +1,5 @@
+from tests.browser_test_server import create_browser_test_server, _BrowserTestHTTPServer
+from tests.thread_support import Worker, wait_for_http
 import sys
 import os
 import json
@@ -76,10 +78,10 @@ def test_http_server_health_with_supervisor():
     desk_dir = Path(__file__).resolve().parent.parent
     config, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
 
-    port = get_free_port()
-    server = ThreadingHTTPServer(('127.0.0.1', port), APIRequestHandler)
+    server = create_browser_test_server(APIRequestHandler)
+    port = server.server_port
     server.allow_reuse_address = True
-    server.daemon_threads = True
+    server.daemon_threads = False
     server.disable_nagle_algorithm = True
 
     server.config = config
@@ -92,9 +94,7 @@ def test_http_server_health_with_supervisor():
     # Supervisor initialized but disabled for unit probe
     server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
 
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    time.sleep(0.1)
+    server_thread = server.start()
 
     try:
         url = f"http://127.0.0.1:{port}/api/v1/health"
@@ -127,10 +127,10 @@ def test_http_server_shutdown_lifecycle():
     desk_dir = Path(__file__).resolve().parent.parent
     config, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
 
-    port = get_free_port()
-    server = ThreadingHTTPServer(('127.0.0.1', port), APIRequestHandler)
+    server = create_browser_test_server(APIRequestHandler)
+    port = server.server_port
     server.allow_reuse_address = True
-    server.daemon_threads = True
+    server.daemon_threads = False
     server.disable_nagle_algorithm = True
 
     server.config = config
@@ -149,9 +149,7 @@ def test_http_server_shutdown_lifecycle():
 
     server.supervisor = MockSupervisor()
 
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    time.sleep(0.1)
+    server_thread = server.start()
 
     # Issue POST /api/v1/shutdown
     url = f"http://127.0.0.1:{port}/api/v1/shutdown"
@@ -163,8 +161,8 @@ def test_http_server_shutdown_lifecycle():
         assert data["status"] == "success"
         assert "zid" in data["data"]
 
-    # Give server time to execute shutdown callback
-    time.sleep(0.3)
+    # Observe successful completion of the shutdown callback and owned disposal.
+    assert server.closed_event.wait(3), server.errors
     assert stopped_flag[0] is True
 
 
@@ -175,12 +173,11 @@ def test_ahk_reload_lifecycle_simulation():
     desk_dir = Path(__file__).resolve().parent.parent
     config, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
 
-    port = get_free_port()
-
-    # 1. Start 1st server instance
-    server1 = ThreadingHTTPServer(('127.0.0.1', port), APIRequestHandler)
+    # 1. Start the owned first listener.
+    server1 = create_browser_test_server(APIRequestHandler)
+    port = server1.server_port
     server1.allow_reuse_address = True
-    server1.daemon_threads = True
+    server1.daemon_threads = False
     server1.config = config
     server1.resolved_paths = resolved_paths
     server1.goldendict = goldendict
@@ -189,9 +186,7 @@ def test_ahk_reload_lifecycle_simulation():
     server1.seq_lock = threading.Lock()
     server1.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
 
-    t1 = threading.Thread(target=server1.serve_forever, daemon=True)
-    t1.start()
-    time.sleep(0.1)
+    t1 = server1.start()
 
     # Verify server1 is responding
     req = urllib.request.Request(f"http://127.0.0.1:{port}/api/v1/health")
@@ -208,12 +203,13 @@ def test_ahk_reload_lifecycle_simulation():
         assert resp.status == 200
 
     t1.join(timeout=2.0)
-    time.sleep(0.1)
+    assert not t1.is_alive()
+    assert server1.closed_event.wait(3), server1.errors
 
     # 3. Start 2nd server instance on the exact same port (simulating new process boot)
-    server2 = ThreadingHTTPServer(('127.0.0.1', port), APIRequestHandler)
+    server2 = _BrowserTestHTTPServer(('127.0.0.1', port), APIRequestHandler)
     server2.allow_reuse_address = True
-    server2.daemon_threads = True
+    server2.daemon_threads = False
     server2.config = config
     server2.resolved_paths = resolved_paths
     server2.goldendict = goldendict
@@ -222,9 +218,7 @@ def test_ahk_reload_lifecycle_simulation():
     server2.seq_lock = threading.Lock()
     server2.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
 
-    t2 = threading.Thread(target=server2.serve_forever, daemon=True)
-    t2.start()
-    time.sleep(0.1)
+    t2 = server2.start()
 
     try:
         # Verify server2 is running cleanly on the same port
@@ -399,11 +393,11 @@ def test_cmd_server_launches_supervisor_and_serves_session_endpoints():
     port = get_free_port()
     args = DummyArgs(port=port, no_sidecars=True)
 
-    server_thread = threading.Thread(target=cmd_server, args=(args,), daemon=True)
-    server_thread.start()
-    time.sleep(0.2)
+    server_worker = Worker(lambda: cmd_server(args))
+    server_thread = server_worker.thread
 
     try:
+        wait_for_http(f"http://127.0.0.1:{port}/api/v1/health", server_thread.is_alive)
         # 1. Health probe includes status, services map, and controller info
         health_req = urllib.request.Request(f"http://127.0.0.1:{port}/api/v1/health")
         with urllib.request.urlopen(health_req, timeout=5.0) as resp:
@@ -444,7 +438,7 @@ def test_cmd_server_launches_supervisor_and_serves_session_endpoints():
         with urllib.request.urlopen(shut_req, timeout=5.0) as resp:
             assert resp.status == 200
 
-        server_thread.join(timeout=3.0)
+        server_worker.result(timeout=3.0)
     except Exception:
         # Fallback shutdown attempt
         try:

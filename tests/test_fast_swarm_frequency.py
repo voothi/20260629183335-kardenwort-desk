@@ -26,9 +26,9 @@ def test_load_lemma_frequency_index_cached_and_mtime_invalidation(tmp_path):
     assert str(idx_file.resolve()) in _LEMMA_FREQUENCY_INDEX_CACHE
 
     # Modify file and advance mtime
-    time.sleep(0.02)
+    next_mtime = idx_file.stat().st_mtime_ns + 1_000_000_000
     idx_file.write_text("apple\nbanana\ncherry\n", encoding="utf-8")
-    os.utime(idx_file, (time.time() + 1, time.time() + 1))
+    os.utime(idx_file, ns=(next_mtime, next_mtime))
 
     idx2 = load_lemma_frequency_index_cached(idx_file)
     assert idx2["apple"] == 0

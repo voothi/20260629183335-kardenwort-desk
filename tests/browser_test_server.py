@@ -91,6 +91,7 @@ class _BrowserTestHTTPServer(ThreadingHTTPServer):
         self.cancelled_connections = set()
         self.workers = []
         self.errors = []
+        self.closed_event = threading.Event()
         self.expected_disconnects = []
         self.lock = threading.Lock()
         self.serving = threading.Event()
@@ -177,6 +178,7 @@ class _BrowserTestHTTPServer(ThreadingHTTPServer):
             self.server_thread.join(max(0, deadline - monotonic()))
         super().server_close()
         self.check_closed(deadline)
+        self.closed_event.set()
 
     def check_closed(self, deadline):
         live = [worker.name for worker in self.workers if worker.is_alive()]

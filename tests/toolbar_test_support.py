@@ -7,13 +7,20 @@ import kardenwort_desk as desk
 
 
 @pytest.fixture
-def component_page(page, controller_world, monkeypatch):
+def component_configuration(controller_world, monkeypatch):
     url, server = controller_world
     server.api_key = 'secret-test-token-42'
     server.config.set('server', 'api_key', server.api_key)
     server.goldendict['server_api_key'] = server.api_key
     loader = desk.load_config
     monkeypatch.setattr(desk, 'load_config', lambda path=None: configure_component_input(loader, server, path))
+    return url, server
+
+
+@pytest.fixture
+def component_page(page, component_configuration):
+    url, server = component_configuration
+    page.set_extra_http_headers({'X-API-Token': server.api_key})
     page.evaluate(state_transport_script(url))
     yield page
     ready = page.evaluate("() => Promise.resolve(window.__stateReady).then(() => ({ready:true}), error => ({error:error.message}))")

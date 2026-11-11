@@ -1,6 +1,6 @@
 import pytest
 from tests.render_test_support import seed_render_tsv
-from tests.toolbar_test_support import component_page as page
+from tests.toolbar_test_support import component_configuration, component_page as page
 from tests.controller_test_support import controller_world
 import kardenwort_desk
 from kardenwort_desk import SEC_RENDERING

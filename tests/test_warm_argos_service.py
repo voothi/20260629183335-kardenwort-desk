@@ -1,3 +1,4 @@
+from tests.browser_test_server import create_browser_test_server
 import sys
 import time
 import json
@@ -6,7 +7,6 @@ import urllib.request
 import configparser
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from http.server import ThreadingHTTPServer
 import pytest
 
 import kardenwort_desk
@@ -141,9 +141,9 @@ def test_controller_health_endpoint_aggregates_argos_warmup(warm_argos_test_serv
     desk_dir = Path(__file__).resolve().parent.parent
     cfg, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
 
-    ctrl_server = ThreadingHTTPServer(('127.0.0.1', 0), ControllerRequestHandler)
+    ctrl_server = create_browser_test_server(ControllerRequestHandler)
     ctrl_server.allow_reuse_address = True
-    ctrl_server.daemon_threads = True
+    ctrl_server.daemon_threads = False
     ctrl_server.config = cfg
     ctrl_server.resolved_paths = resolved_paths
     ctrl_server.goldendict = goldendict
@@ -164,9 +164,7 @@ def test_controller_health_endpoint_aggregates_argos_warmup(warm_argos_test_serv
     assert supervisor.services["translation"].is_healthy is True
 
     ctrl_server.supervisor = supervisor
-    ctrl_thread = threading.Thread(target=ctrl_server.serve_forever, daemon=True)
-    ctrl_thread.start()
-    time.sleep(0.1)
+    ctrl_server.start()
 
     try:
         url = f"http://127.0.0.1:{ctrl_port}/api/v1/health"

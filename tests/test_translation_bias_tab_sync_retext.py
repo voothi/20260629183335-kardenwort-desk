@@ -4,6 +4,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import kardenwort_desk
+from tests.render_test_support import seed_render_tsv
+from tests.sqlite_document_support import wait_state
+from tests.toolbar_test_support import component_configuration, component_page as page
+from tests.controller_test_support import controller_world
+
+pytestmark = pytest.mark.usefixtures("component_configuration")
 from kardenwort_desk import SqliteStorageAdapter
 from kardenwort_controller import SessionArbiter
 
@@ -34,8 +40,8 @@ def test_intellifiller_prompt_constraints():
 
 
 def test_sqlite_storage_adapter_multi_sentence_retext_persistence(tmp_path):
-    db_file = tmp_path / "test_retext_persistence.db"
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_file = Path(resolved_paths["sqlite_db_path"])
     resolved_paths["sqlite_db_path"] = str(db_file)
 
     adapter = SqliteStorageAdapter(config=config, resolved_paths=resolved_paths, db_path=str(db_file))
@@ -187,6 +193,7 @@ def test_retext_session_failover_provider_chain(tmp_path):
     tsv_file = results_dir / f"{session_zid}.de.tsv"
     tsv_file.write_text("\t".join(headers) + "\n" + "\t".join(rows[0]), encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, tsv_file, session_zid, "\n".join(row[headers.index("SentenceSource")] for row in rows), "de", text_mode="multi")
     arbiter.sessions[session_zid] = {
         "session_zid": session_zid,
         "language": "de",
@@ -222,8 +229,8 @@ def test_retext_session_failover_provider_chain(tmp_path):
 
 
 def test_retext_session_sqlite_sentence_index_alignment(tmp_path):
-    db_file = tmp_path / "test_retext_alignment.db"
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_file = Path(resolved_paths["sqlite_db_path"])
     resolved_paths["sqlite_db_path"] = str(db_file)
     results_dir = tmp_path / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -315,6 +322,7 @@ def test_tab_reword_isolation_and_overview_sync(page, tmp_path):
     tsv_file = tmp_path / "20261012040404-test.de.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20261012040404', raw_text, 'de', text_mode='multi')
     html_out = kardenwort_desk.run_render_flow(
         text=raw_text,
         language="de",
@@ -323,12 +331,12 @@ def test_tab_reword_isolation_and_overview_sync(page, tmp_path):
         config=config,
         resolved_paths=resolved_paths,
         tsv_path=str(tsv_file),
-        spawn_children=True,
+        spawn_children=False,
         return_children=False,
     )
 
     page.set_content(html_out)
-    page.wait_for_timeout(150)
+    wait_state(page)
 
     # Check card structure in WorkspaceTabs
     card_info = page.evaluate("""() => {
@@ -346,7 +354,6 @@ def test_tab_reword_isolation_and_overview_sync(page, tmp_path):
 
     # Switch to Sentence Tab 2
     page.evaluate(f"() => {{ if (window.WorkspaceTabs) window.WorkspaceTabs.switchToTab({s2_seq}); }}")
-    page.wait_for_timeout(50)
 
     # Apply progressive update via receiveUpdate targeting Sentence 2's token (token_order = 5, lemma = "gehen")
     # While active tab is Sentence 2
@@ -363,7 +370,6 @@ def test_tab_reword_isolation_and_overview_sync(page, tmp_path):
             }
         });
     }""")
-    page.wait_for_timeout(50)
 
     # Read updated cards from WorkspaceTabs
     updated_cards = page.evaluate("""() => {
@@ -402,6 +408,7 @@ def test_on_retext_click_updates_workspace_tabs_cards(page, tmp_path):
     tsv_file = tmp_path / "20261012050505-test.de.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20261012050505', raw_text, 'de', text_mode='multi')
     html_out = kardenwort_desk.run_render_flow(
         text=raw_text,
         language="de",
@@ -410,12 +417,12 @@ def test_on_retext_click_updates_workspace_tabs_cards(page, tmp_path):
         config=config,
         resolved_paths=resolved_paths,
         tsv_path=str(tsv_file),
-        spawn_children=True,
+        spawn_children=False,
         return_children=False,
     )
 
     page.set_content(html_out)
-    page.wait_for_timeout(150)
+    wait_state(page)
 
     # Simulate fetch /session/retext response inside onRetextClick
     page.evaluate("""() => {
@@ -440,7 +447,7 @@ def test_on_retext_click_updates_workspace_tabs_cards(page, tmp_path):
         };
         window.onRetextClick();
     }""")
-    page.wait_for_timeout(100)
+    page.wait_for_function("!document.getElementById('kw-btn-retext').disabled")
 
     # Verify WorkspaceTabs cards updated
     cards_translated = page.evaluate("""() => {
@@ -453,9 +460,7 @@ def test_on_retext_click_updates_workspace_tabs_cards(page, tmp_path):
 
     # Switch tabs back and forth to ensure translation is preserved and does not revert
     page.evaluate("() => { if (window.WorkspaceTabs) window.WorkspaceTabs.switchToTab(2); }")
-    page.wait_for_timeout(50)
     page.evaluate("() => { if (window.WorkspaceTabs) window.WorkspaceTabs.switchToTab(1); }")
-    page.wait_for_timeout(50)
 
     tc_text = page.locator("#translation-container").inner_text()
     assert "Он идет домой (обновлено)" in tc_text
@@ -463,7 +468,7 @@ def test_on_retext_click_updates_workspace_tabs_cards(page, tmp_path):
 
 def test_retext_from_child_sentence_tab_synchronizes_all_cards(page, tmp_path):
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
-    db_file = tmp_path / "test_retext_child_tab.db"
+    db_file = Path(resolved_paths["sqlite_db_path"])
     resolved_paths["sqlite_db_path"] = str(db_file)
     results_dir = tmp_path / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -503,12 +508,12 @@ def test_retext_from_child_sentence_tab_synchronizes_all_cards(page, tmp_path):
         config=config,
         resolved_paths=resolved_paths,
         tsv_path=str(tsv_file),
-        spawn_children=True,
+        spawn_children=False,
         return_children=False,
     )
 
     page.set_content(html_out)
-    page.wait_for_timeout(150)
+    wait_state(page)
 
     # 1. Switch to Tab for Sentence 2 (sent_idx == 2)
     card_info = page.evaluate("""() => {
@@ -518,7 +523,6 @@ def test_retext_from_child_sentence_tab_synchronizes_all_cards(page, tmp_path):
     s2_seq = next(c["seq"] for c in card_info if c["sent_idx"] == 2)
 
     page.evaluate(f"() => {{ if (window.WorkspaceTabs) window.WorkspaceTabs.switchToTab({s2_seq}); }}")
-    page.wait_for_timeout(50)
 
     # Verify initial translation of Sentence 2 on screen
     initial_tc = page.locator("#translation-container").inner_text()
@@ -538,8 +542,8 @@ def test_retext_from_child_sentence_tab_synchronizes_all_cards(page, tmp_path):
                             translatedText: '{retext_full}',
                             translated_text: '{retext_full}',
                             sentences: {{
-                                0: 'Он шагает домой (retext).',
-                                1: 'Она шагает в парк (retext).'
+                                1: 'Он шагает домой (retext).',
+                                2: 'Она шагает в парк (retext).'
                             }}
                         }}
                     }});
@@ -548,7 +552,7 @@ def test_retext_from_child_sentence_tab_synchronizes_all_cards(page, tmp_path):
         }};
         window.onRetextClick();
     }}""")
-    page.wait_for_timeout(100)
+    page.wait_for_function("!document.getElementById('kw-btn-retext').disabled")
 
     # 3. Assert: Active tab (Sentence 2) displays ONLY Sentence 2's translation, NOT full paragraph!
     active_tc = page.locator("#translation-container").inner_text()
@@ -576,7 +580,6 @@ def test_retext_from_child_sentence_tab_synchronizes_all_cards(page, tmp_path):
     # 5. Switch to Overview Tab (sent_idx == 0)
     overview_seq = next(c["seq"] for c in card_info if c["sent_idx"] == 0)
     page.evaluate(f"() => {{ if (window.WorkspaceTabs) window.WorkspaceTabs.switchToTab({overview_seq}); }}")
-    page.wait_for_timeout(50)
     overview_tc = page.locator("#translation-container").inner_text()
     assert "Он шагает домой (retext)." in overview_tc
     assert "Она шагает в парк (retext)." in overview_tc
@@ -584,7 +587,6 @@ def test_retext_from_child_sentence_tab_synchronizes_all_cards(page, tmp_path):
     # 6. Switch to Sentence 1 Tab (sent_idx == 1)
     sent1_seq = next(c["seq"] for c in card_info if c["sent_idx"] == 1)
     page.evaluate(f"() => {{ if (window.WorkspaceTabs) window.WorkspaceTabs.switchToTab({sent1_seq}); }}")
-    page.wait_for_timeout(50)
     sent1_tc = page.locator("#translation-container").inner_text()
     assert "Он шагает домой (retext)." in sent1_tc
     assert "Она шагает в парк (retext)." not in sent1_tc
@@ -631,6 +633,7 @@ def test_on_retext_click_failfast_when_sentences_missing_or_malformed(page, tmp_
     tsv_file = tmp_path / "20261013211705-test.de.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20261013211705', raw_text, 'de', text_mode='multi')
     html_out = kardenwort_desk.run_render_flow(
         text=raw_text,
         language="de",
@@ -639,11 +642,11 @@ def test_on_retext_click_failfast_when_sentences_missing_or_malformed(page, tmp_
         config=config,
         resolved_paths=resolved_paths,
         tsv_path=str(tsv_file),
-        spawn_children=True,
+        spawn_children=False,
         return_children=False,
     )
     page.set_content(html_out)
-    page.wait_for_timeout(150)
+    wait_state(page)
 
     # Record initial card translations
     initial_cards = page.evaluate("""() => {
@@ -681,7 +684,7 @@ def test_on_retext_click_failfast_when_sentences_missing_or_malformed(page, tmp_
         };
         window.onRetextClick();
     }""")
-    page.wait_for_timeout(100)
+    page.wait_for_function("!document.getElementById('kw-btn-retext').disabled")
 
     assert any("Retext failed: invalid sentence translation payload from server" in t[0] and t[1] == "error" for t in toast_messages)
 
@@ -716,7 +719,7 @@ def test_on_retext_click_failfast_when_sentences_missing_or_malformed(page, tmp_
         };
         window.onRetextClick();
     }""")
-    page.wait_for_timeout(100)
+    page.wait_for_function("!document.getElementById('kw-btn-retext').disabled")
 
     assert any("Retext failed: invalid sentence translation payload from server" in t[0] and t[1] == "error" for t in toast_messages)
 
@@ -747,6 +750,7 @@ def test_retext_session_backend_normalized_sentences_contract(tmp_path):
     tsv_file = results_dir / f"{session_zid}.de.tsv"
     tsv_file.write_text("\t".join(headers) + "\n" + "\n".join("\t".join(r) for r in rows), encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, tsv_file, session_zid, "\n".join(row[headers.index("SentenceSource")] for row in rows), "de", text_mode="multi")
     arbiter.sessions[session_zid] = {
         "session_zid": session_zid,
         "language": "de",
@@ -789,8 +793,8 @@ def test_retext_session_backend_normalized_sentences_contract(tmp_path):
 
 
 def test_persist_retext_updates_isolated_command_execution(tmp_path):
-    db_file = tmp_path / "test_persist_retext.db"
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_file = Path(resolved_paths["sqlite_db_path"])
     resolved_paths["sqlite_db_path"] = str(db_file)
     results_dir = tmp_path / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -896,8 +900,8 @@ def test_retext_session_preserves_short_multi_sentence_isolation(tmp_path):
     boundaries, translating each sentence 1-to-1 without collapsing or leaking Sentence 2
     into Sentence 1.
     """
-    db_file = tmp_path / "test_short_retext.db"
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_file = Path(resolved_paths["sqlite_db_path"])
     resolved_paths["sqlite_db_path"] = str(db_file)
     results_dir = tmp_path / "results"
     results_dir.mkdir(parents=True, exist_ok=True)

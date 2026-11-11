@@ -1,13 +1,12 @@
+from tests.browser_test_server import create_browser_test_server
 import os
 import sys
 import json
 import time
-import socket
 import threading
 import urllib.request
 import urllib.error
 from pathlib import Path
-from http.server import ThreadingHTTPServer
 import pytest
 
 import kardenwort_desk
@@ -19,13 +18,9 @@ from kardenwort_controller import (
 )
 
 
-def get_free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def tsv_test_controller_server(tmp_path_factory):
     test_dir = tmp_path_factory.mktemp("kardenwort_tsv_test")
     desk_dir = Path(__file__).resolve().parent.parent
@@ -118,10 +113,10 @@ def tsv_test_controller_server(tmp_path_factory):
     ]
     db.save_session_bundle(session_data, sentences_data, words_data)
 
-    port = get_free_port()
-    server = ThreadingHTTPServer(('127.0.0.1', port), ControllerRequestHandler)
+    server = create_browser_test_server(ControllerRequestHandler)
+    port = server.server_port
     server.allow_reuse_address = True
-    server.daemon_threads = True
+    server.daemon_threads = False
     server.disable_nagle_algorithm = True
 
     server.config = config
@@ -137,9 +132,7 @@ def tsv_test_controller_server(tmp_path_factory):
     server.arbiter.goldendict = goldendict
     server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
 
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    time.sleep(0.1)
+    server.start()
 
     server_url = f"http://127.0.0.1:{port}"
     yield server_url, server, db, sample_zid

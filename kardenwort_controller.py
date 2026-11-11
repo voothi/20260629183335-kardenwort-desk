@@ -2114,9 +2114,10 @@ class SessionArbiter:
         from kardenwort_alignment import sentence_sources
         if records:
             return sentence_sources(records)
-        source = path.with_suffix('.txt')
-        if adapter.backend_name != 'sqlite' and source.exists():
-            return source.read_text(encoding='utf-8')
+        if adapter.backend_name != 'sqlite':
+            source = Path(path).with_suffix('.txt')
+            if source.exists():
+                return source.read_text(encoding='utf-8')
         if memo.get('text'):
             return memo['text']
         try:
@@ -3076,7 +3077,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format_str, *args):
         # Suppress access logs for health probes to avoid log spam
-        if self.path and ('/health' in self.path or '/events' in self.path):
+        path = getattr(self, 'path', '')
+        if path and ('/health' in path or '/events' in path):
             return
         logger.info("%s - - [%s] %s" % (self.address_string(), self.log_date_time_string(), format_str % args))
 

@@ -137,7 +137,10 @@ parent_mode=table
     assert "Первое предложение" in html
 
 
-def test_circuit_breaker_record_and_cooldown_expiration():
+def test_circuit_breaker_record_and_cooldown_expiration(monkeypatch):
+    from types import SimpleNamespace
+    clock = [100.0]
+    monkeypatch.setattr("kardenwort_desk.time", SimpleNamespace(time=lambda: clock[0]))
     kardenwort_desk.clear_provider_cooldowns()
     assert not kardenwort_desk.is_provider_cooled_down("google")
 
@@ -146,7 +149,7 @@ def test_circuit_breaker_record_and_cooldown_expiration():
     assert kardenwort_desk.is_provider_cooled_down("google")
     assert kardenwort_desk.get_provider_cooldown_remaining("google") > 0
 
-    time.sleep(0.15)
+    clock[0] += 0.15
     assert not kardenwort_desk.is_provider_cooled_down("google")
     assert kardenwort_desk.get_provider_cooldown_remaining("google") == 0.0
 

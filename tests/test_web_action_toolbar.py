@@ -3,7 +3,7 @@ from pathlib import Path
 import kardenwort_desk
 from tests.render_test_support import seed_render_tsv, seed_render_rows
 from tests.controller_test_support import controller_world
-from tests.toolbar_test_support import with_translation_skeleton, controlled_event_stream_script, component_page as page
+from tests.toolbar_test_support import with_translation_skeleton, controlled_event_stream_script, component_configuration, component_page as page
 
 
 def get_desk_page_html(tmp_path, theme="dark", zid="20260826214953", seq_num=None, backend='sqlite'):

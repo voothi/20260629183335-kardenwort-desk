@@ -207,6 +207,7 @@ def test_1_3_different_origin_article_request_destinations(running_controller, p
                 "method": req.method,
                 "headers": dict(req.headers),
             })
+            page.evaluate("window.__articleRequestObserved = true")
             route.continue_()
 
     page.route("**/*", handle_article_route)
@@ -216,8 +217,9 @@ def test_1_3_different_origin_article_request_destinations(running_controller, p
 
     # Invoke Re-text from the different origin
     intercepted_requests.clear()
+    page.evaluate("window.__articleRequestObserved = false")
     page.evaluate("window.onRetextClick()")
-    page.wait_for_timeout(300)
+    page.wait_for_function("window.__articleRequestObserved")
 
     # Contract: Re-text MUST target the configured backend server_url, NOT http://article.invalid
     retext_reqs = [r for r in intercepted_requests if "/session/retext" in r["url"]]
@@ -271,8 +273,7 @@ def test_1_4_same_origin_and_native_save_contracts(page):
     assert page.evaluate("isDirty() === true"), "Page must be dirty after cell edit"
 
     # Save via native bridge
-    page.evaluate("window.onSaveClick()")
-    page.wait_for_timeout(200)
+    page.evaluate("() => window.onSaveClick()")
 
     native_calls = page.evaluate("window.__ahkCalls")
     persist_calls = [c for c in native_calls if c["cmd"] == "persist_selection"]
@@ -378,8 +379,8 @@ def test_2_1_article_commands_and_autosave_reach_configured_backend(running_cont
 
     # 1. Retext
     intercepted.clear()
-    page.evaluate("async () => { await window.onRetextClick(); }")
-    page.wait_for_timeout(300)
+    with page.expect_response(lambda response: '/session/retext' in response.url and response.request.method != "OPTIONS"):
+        page.evaluate("async () => { await window.onRetextClick(); }")
     retext_reqs = [r for r in intercepted if "/session/retext" in r["url"]]
     assert len(retext_reqs) == 1
     assert retext_reqs[0]["url"].startswith(server_url)
@@ -388,9 +389,8 @@ def test_2_1_article_commands_and_autosave_reach_configured_backend(running_cont
     # 2. Reword (select rows via window.selectAllRows)
     intercepted.clear()
     page.evaluate("window.selectAllRows()")
-    page.wait_for_timeout(400)
-    page.evaluate("async () => { await window.onRewordClick(); }")
-    page.wait_for_timeout(300)
+    with page.expect_response(lambda response: '/session/reword' in response.url and response.request.method != "OPTIONS"):
+        page.evaluate("async () => { await window.onRewordClick(); }")
     reword_reqs = [r for r in intercepted if "/session/reword" in r["url"]]
     assert len(reword_reqs) == 1
     assert reword_reqs[0]["url"].startswith(server_url)
@@ -398,8 +398,8 @@ def test_2_1_article_commands_and_autosave_reach_configured_backend(running_cont
 
     # 3. Export to Anki
     intercepted.clear()
-    page.evaluate("window.onSendToAnkiClick()")
-    page.wait_for_timeout(200)
+    with page.expect_response(lambda response: '/session/export' in response.url and response.request.method != "OPTIONS"):
+        page.evaluate("window.onSendToAnkiClick()")
     export_reqs = [r for r in intercepted if "/session/export" in r["url"]]
     assert len(export_reqs) == 1
     assert export_reqs[0]["url"].startswith(server_url)
@@ -407,8 +407,8 @@ def test_2_1_article_commands_and_autosave_reach_configured_backend(running_cont
 
     # 4. Audio
     intercepted.clear()
-    page.evaluate("window.playAudio('Haus', 'de', 0)")
-    page.wait_for_timeout(200)
+    with page.expect_response(lambda response: '/api/v1/audio/synthesize' in response.url and response.request.method != "OPTIONS"):
+        page.evaluate("window.playAudio('Haus', 'de', 0)")
     audio_reqs = [r for r in intercepted if "/api/v1/audio/synthesize" in r["url"]]
     assert len(audio_reqs) == 1
     assert audio_reqs[0]["url"].startswith(server_url)
@@ -420,8 +420,7 @@ def test_2_1_article_commands_and_autosave_reach_configured_backend(running_cont
     input_box = trans_cell.locator('input.edit-input')
     input_box.fill("жилище")
     input_box.press("Enter")
-    page.evaluate("window.onSaveClick()")
-    page.wait_for_timeout(200)
+    page.evaluate("() => window.onSaveClick()")
     save_reqs = [r for r in intercepted if "/session/save" in r["url"]]
     assert len(save_reqs) >= 1
     assert save_reqs[0]["url"].startswith(server_url)
@@ -432,16 +431,16 @@ def test_2_1_article_commands_and_autosave_reach_configured_backend(running_cont
     trans_cell.dblclick()
     input_box.fill("домик")
     input_box.press("Enter")
-    page.evaluate("window.dispatchEvent(new Event('pagehide'))")
-    page.wait_for_timeout(200)
+    with page.expect_response(lambda response: '/session/save' in response.url and response.request.method != "OPTIONS"):
+        page.evaluate("window.dispatchEvent(new Event('pagehide'))")
     close_save_reqs = [r for r in intercepted if "/session/save" in r["url"]]
     assert len(close_save_reqs) >= 1
     assert close_save_reqs[0]["url"].startswith(server_url)
 
     # 7. Update / status read
     intercepted.clear()
-    page.evaluate("window.onUpdateClick()")
-    page.wait_for_timeout(200)
+    with page.expect_response(lambda response: '/session/status' in response.url and response.request.method != "OPTIONS"):
+        page.evaluate("window.onUpdateClick()")
     status_reqs = [r for r in intercepted if "/session/status" in r["url"]]
     assert len(status_reqs) >= 1
     assert status_reqs[0]["url"].startswith(server_url)
@@ -474,6 +473,7 @@ def test_2_4_action_availability_projection_when_server_disabled(page):
         expect(btn).to_be_disabled()
         assert btn.get_attribute("title") == "Server interaction is disabled in configuration"
 
+    page.clock.install()
     intercepted.clear()
 
     # Invocations show warning toast and dispatch zero network requests
@@ -491,7 +491,7 @@ def test_2_4_action_availability_projection_when_server_disabled(page):
     page.evaluate("window.onRewordClick()")
     page.evaluate("window.onSendToAnkiClick()")
     page.evaluate("window.onUpdateClick()")
-    page.wait_for_timeout(200)
+    page.clock.run_for(200)
 
     # All dispatched zero requests
     assert len(intercepted) == 0, f"Expected zero network requests when server disabled, got {intercepted}"

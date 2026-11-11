@@ -3,6 +3,11 @@ import json
 import configparser
 from pathlib import Path
 import kardenwort_desk
+from tests.render_test_support import seed_render_tsv
+from tests.toolbar_test_support import component_configuration, component_page as page
+from tests.controller_test_support import controller_world
+
+pytestmark = pytest.mark.usefixtures("component_configuration")
 
 def create_mock_config(web_tab_mode="container", sentences_enabled=True):
     config = configparser.ConfigParser()
@@ -42,6 +47,7 @@ def test_render_flow_single_sentence_no_tabs(tmp_path):
     tsv_file = tmp_path / "20260828111800-test.de.tsv"
     tsv_file.write_text("Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\nHaus\tHaus\tдом\t1\t\n", encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260828111800', text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -67,6 +73,7 @@ def test_render_flow_multi_sentence_container_tabs(tmp_path):
     tsv_file = tmp_path / "20260828111800-test.de.tsv"
     tsv_file.write_text("Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\nHaus\tHaus\tдом\t1\t\nKatze\tKatze\tкошка\t2\t\n", encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260828111800', text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -103,6 +110,7 @@ def test_render_flow_multi_sentence_tabs_mode(tmp_path):
     tsv_file = tmp_path / "20260828111800-test.de.tsv"
     tsv_file.write_text("Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\nHaus\tHaus\tдом\t1\t\nKatze\tKatze\tкошка\t2\t\n", encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260828111800', text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -128,6 +136,7 @@ def test_sentence_chunks_encapsulation_structure(tmp_path):
     tsv_file = tmp_path / "20260828111800-test.de.tsv"
     tsv_file.write_text("Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\nZeile\tZeile\tстрока\t1\t\nZeile\tZeile\tстрока\t2\t\nZeile\tZeile\tстрока\t3\t\n", encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260828111800', text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -156,6 +165,7 @@ def test_window_title_parity_with_ahk(tmp_path):
     tsv_file = tmp_path / "20260828161106-first-sentence-second-sentence.en.tsv"
     tsv_file.write_text("Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\nFirst\tFirst\tпервый\t1\t\nSecond\tSecond\tвторой\t2\t\n", encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260828161106', text, 'en', text_mode='multi')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -172,10 +182,11 @@ def test_window_title_parity_with_ahk(tmp_path):
     import re
     m = re.search(r"<title>(.*?)</title>", html)
     actual_title = m.group(0) if m else ""
-    assert actual_title == "<title>Kardenwort - en (multi) - 20260828161106-first-sentence-second-sentence.en.tsv - Ready</title>"
+    assert actual_title == "<title>Kardenwort - en (multi) - 20260828161106 - Ready</title>"
 
     # Parity in multi_window mode: no prefix
     config.set("sentences_mode", "delivery_mode", "multi_window")
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260828161106', text, 'en', text_mode='multi')
     html_mw = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -189,7 +200,7 @@ def test_window_title_parity_with_ahk(tmp_path):
     )
     m_mw = re.search(r"<title>(.*?)</title>", html_mw)
     actual_title_mw = m_mw.group(0) if m_mw else ""
-    assert actual_title_mw == "<title>Kardenwort - en (multi) - 20260828161106-first-sentence-second-sentence.en.tsv - Ready</title>"
+    assert actual_title_mw == "<title>Kardenwort - en (multi) - 20260828161106 - Ready</title>"
 
 
 def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
@@ -212,6 +223,7 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260828170000', text, 'en', text_mode='multi')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -232,7 +244,7 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
     active_chip = page.locator(".kw-tab-chip.active")
     assert active_chip.inner_text() == "1"
     assert not page.title().startswith("[")
-    assert page.title() == "Kardenwort - en (multi) - 20260828170000-first-sentence-second-sentence.en.tsv - Ready"
+    assert page.title() == "Kardenwort - en (multi) - 20260828170000 - Ready"
 
     # Click Tab 2 (Sentence 1: sentence_idx = 1)
     tab2 = page.locator('.kw-tab-chip[data-tab-seq="2"]')
@@ -286,6 +298,7 @@ def test_playwright_tab_docking_positions(page, tmp_path):
 
     # 1. Top docking
     config.set("sentences_mode", "tab_bar_position", "top")
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260828180000', text, 'en', text_mode='multi')
     html_top = kardenwort_desk.run_render_flow(
         text=text, language="en", zid="20260828180000", text_mode="multi",
         config=config, resolved_paths=resolved_paths, tsv_path=str(tsv_file),
@@ -304,6 +317,7 @@ def test_playwright_tab_docking_positions(page, tmp_path):
 
     # 2. Bottom docking
     config.set("sentences_mode", "tab_bar_position", "bottom")
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260828180000', text, 'en', text_mode='multi')
     html_bottom = kardenwort_desk.run_render_flow(
         text=text, language="en", zid="20260828180000", text_mode="multi",
         config=config, resolved_paths=resolved_paths, tsv_path=str(tsv_file),
@@ -322,6 +336,7 @@ def test_playwright_tab_docking_positions(page, tmp_path):
 
     # 3. Inline mode
     config.set("sentences_mode", "tab_bar_position", "inline")
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260828180000', text, 'en', text_mode='multi')
     html_inline = kardenwort_desk.run_render_flow(
         text=text, language="en", zid="20260828180000", text_mode="multi",
         config=config, resolved_paths=resolved_paths, tsv_path=str(tsv_file),
@@ -353,6 +368,7 @@ def test_playwright_glassmorphic_styling_and_hover(page, tmp_path):
     )
 
     # Dark Theme
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260828180500', text, 'en', text_mode='multi')
     html_dark = kardenwort_desk.run_render_flow(
         text=text, language="en", zid="20260828180500", text_mode="multi",
         config=config, resolved_paths=resolved_paths, tsv_path=str(tsv_file),
@@ -371,7 +387,7 @@ def test_playwright_glassmorphic_styling_and_hover(page, tmp_path):
 
     # Hover solid opaque background (dark: #161b22 -> rgb(22, 27, 34))
     tab_bar.hover()
-    page.wait_for_timeout(300)
+    page.wait_for_function("(el) => getComputedStyle(el).backgroundColor === 'rgb(22, 27, 34)'", arg=tab_bar.element_handle())
     bg_hover = tab_bar.evaluate("el => window.getComputedStyle(el).backgroundColor")
     assert "rgb(22, 27, 34)" in bg_hover
 
@@ -392,6 +408,7 @@ def test_playwright_dynamic_document_title_card_prefix(page, tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260828181000', text, 'en', text_mode='multi')
     html = kardenwort_desk.run_render_flow(
         text=text, language="en", zid="20260828181000", text_mode="multi",
         config=config, resolved_paths=resolved_paths, tsv_path=str(tsv_file),
@@ -402,7 +419,7 @@ def test_playwright_dynamic_document_title_card_prefix(page, tmp_path):
 
     # Initial title: no [1/3] prefix
     assert not page.title().startswith("[")
-    assert page.title() == "Kardenwort - en (multi) - 20260828181000-first-sentence-second-sentence.en.tsv - Ready"
+    assert page.title() == "Kardenwort - en (multi) - 20260828181000 - Ready"
 
     # Click tab 2 (Sentence 1): updates dynamically without prefix, with sentence 1 slug
     page.locator('.kw-tab-chip[data-tab-seq="2"]').click()
@@ -417,7 +434,7 @@ def test_playwright_dynamic_document_title_card_prefix(page, tmp_path):
     # Click tab 1 (All overview): updates dynamically back to overview without prefix
     page.locator('.kw-tab-chip[data-tab-seq="1"]').click()
     assert not page.title().startswith("[")
-    assert page.title() == "Kardenwort - en (multi) - 20260828181000-first-sentence-second-sentence.en.tsv - Ready"
+    assert page.title() == "Kardenwort - en (multi) - 20260828181000 - Ready"
 
 
 def test_clean_window_title_and_fallback_slug_synthesis(tmp_path):
@@ -443,7 +460,7 @@ def test_clean_window_title_and_fallback_slug_synthesis(tmp_path):
     assert m is not None
     title = m.group(1)
     assert not title.startswith("[")
-    assert title == "Kardenwort - en (multi) - 20260828235000-alpha-sentence-beta-sentence.en.tsv - Ready"
+    assert title == "Kardenwort - en (multi) - 20260828235000 - Ready"
 
 
 def test_distinct_per_sentence_card_slugs_and_restore_session(tmp_path):
@@ -465,6 +482,7 @@ def test_distinct_per_sentence_card_slugs_and_restore_session(tmp_path):
         config.add_section("storage")
     config.set("storage", "cache_ttl_seconds", "0")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260828233844', text, 'en', text_mode='multi')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -552,6 +570,7 @@ def test_container_initial_active_tab_spawn_order_reverse(page, tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260829011000', text, 'en', text_mode='multi')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -608,6 +627,7 @@ def test_container_initial_active_tab_spawn_order_normal(page, tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260829011000', text, 'en', text_mode='multi')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -664,6 +684,7 @@ def test_container_initial_active_tab_explicit_seq_num_override(tmp_path):
 
     # 1. Reverse spawn order with explicit seq_num=3 (Sentence 2)
     config.set("sentences_mode", "spawn_order", "reverse")
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260829011000', text, 'en', text_mode='multi')
     html_seq3 = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -682,6 +703,7 @@ def test_container_initial_active_tab_explicit_seq_num_override(tmp_path):
 
     # 2. Normal spawn order with explicit seq_num=1 (Master overview)
     config.set("sentences_mode", "spawn_order", "normal")
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260829011000', text, 'en', text_mode='multi')
     html_seq1 = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -699,7 +721,7 @@ def test_container_initial_active_tab_explicit_seq_num_override(tmp_path):
     assert '<link rel="icon" type="image/x-icon" href="/assets/numbers/1.ico">' in html_seq1
 
 
-def test_playwright_child_tab_translation_skeletons_and_live_updates(page, tmp_path, monkeypatch):
+def test_playwright_child_tab_translation_skeletons_and_live_updates(page, tmp_path):
     """
     Verify that:
     1. Child tabs retain skeleton loaders while translation is pending (!AppState.isFinished).
@@ -707,8 +729,6 @@ def test_playwright_child_tab_translation_skeletons_and_live_updates(page, tmp_p
     3. Switching back to Tab 1 after translation completes renders the dynamic master translation without stuck skeletons.
     4. Switching to a failed tab when AppState.isFinished renders an interactive retry badge.
     """
-    monkeypatch.setattr(kardenwort_desk, "translate_text", lambda *args, **kwargs: "")
-    monkeypatch.setattr(kardenwort_desk, "translate_source_text", lambda *args, **kwargs: {})
 
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
@@ -716,7 +736,7 @@ def test_playwright_child_tab_translation_skeletons_and_live_updates(page, tmp_p
     config.set("sentences_mode", "spawn_order", "normal")
     config.set("rendering", "display_mode", "progressive")
     config.set("pipeline", "progressive_text_translation", "true")
-    config.set("triggers", "run_text_translation", "auto")
+    config.set("triggers", "run_text_translation", "manual")
     if not config.has_section("storage"):
         config.add_section("storage")
     config.set("storage", "cache_ttl_seconds", "0")
@@ -743,6 +763,7 @@ def test_playwright_child_tab_translation_skeletons_and_live_updates(page, tmp_p
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), unique_zid, text, 'en', text_mode='multi')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -815,6 +836,7 @@ def test_tab_switching_renders_clean_plaintext_without_div_tokens(page, tmp_path
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260829193000', text, 'en', text_mode='multi')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -871,7 +893,7 @@ def test_tab_switching_renders_clean_plaintext_without_div_tokens(page, tmp_path
     assert page.locator('#translation-container span.word:has-text("div")').count() == 0
 
 
-def test_skeleton_provider_state_indicators(page, tmp_path, monkeypatch):
+def test_skeleton_provider_state_indicators(page, tmp_path):
     """
     Verifies that pending skeleton loaders display concise provider state indicators
     (e.g., Argos..., DeepL..., IntelliFiller...) in translation container and lemma table
@@ -886,7 +908,7 @@ def test_skeleton_provider_state_indicators(page, tmp_path, monkeypatch):
     config.set("pipeline", "lemma_base_provider", "argos")
     config.set("pipeline", "lemma_reprocess_provider", "intellifiller")
     config.set("pipeline", "progressive_text_translation", "true")
-    config.set("triggers", "run_text_translation", "auto")
+    config.set("triggers", "run_text_translation", "manual")
     config.set("triggers", "run_lemma_base_translation", "auto")
     config.set("triggers", "run_lemma_enrichment", "auto")
     config.set("wordfill", "enabled", "false")
@@ -905,13 +927,10 @@ def test_skeleton_provider_state_indicators(page, tmp_path, monkeypatch):
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
-    monkeypatch.setattr(kardenwort_desk, "prepare_lookup_tsv", lambda *args, **kwargs: tsv_file)
-    monkeypatch.setattr(kardenwort_desk, "translate_text", lambda *a, **k: "")
-    monkeypatch.setattr(kardenwort_desk, "translate_source_text", lambda *a, **k: {})
-    monkeypatch.setattr(kardenwort_desk, "run_progressive_worker_async", lambda *a, **k: None)
-    monkeypatch.setattr(kardenwort_desk, "write_update_js", lambda *a, **k: None)
 
-    html = kardenwort_desk._run_render_flow_impl(
+    seed_render_tsv(config, resolved_paths, tsv_file, unique_zid, "Das ist der erste Satz. Das ist der zweite Satz.", "de", text_mode="multi")
+    config.read_dict({"pipeline":{"text_provider_chain":"argos", "lemma_provider_chain":"argos"}})
+    html = kardenwort_desk.run_render_flow(
         text="Das ist der erste Satz. Das ist der zweite Satz.",
         language="de",
         zid=unique_zid,
@@ -964,6 +983,7 @@ def test_single_sentence_container_mode_preserves_seq_num_1(tmp_path):
     tsv_file = tmp_path / "20260831021500-single.de.tsv"
     tsv_file.write_text("TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n0\tSatz\tпредложение\t1\n", encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260831021500', text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -991,10 +1011,10 @@ def test_card_oriented_workspace_container_vocabulary_and_inflection_isolation(t
     - Each card includes words and sentence context metadata
     """
     from kardenwort_db import KardenwortDB
-    db_path = tmp_path / "test_isol.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_path = Path(resolved_paths["sqlite_db_path"])
     KardenwortDB(db_path=db_path).run_migrations()
 
-    config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "deduplication_scope", "sentence")
     config.set("sentences_mode", "enabled", "true")
@@ -1015,6 +1035,7 @@ def test_card_oriented_workspace_container_vocabulary_and_inflection_isolation(t
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), unique_zid, text, 'en', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -1063,10 +1084,10 @@ def test_playwright_card_scoped_independent_selections(page, tmp_path):
     and switching between tabs preserves each card's independent selections.
     """
     from kardenwort_db import KardenwortDB
-    db_path = tmp_path / "test_selections.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_path = Path(resolved_paths["sqlite_db_path"])
     KardenwortDB(db_path=db_path).run_migrations()
 
-    config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     config.set("sentences_mode", "spawn_order", "normal")
@@ -1085,6 +1106,7 @@ def test_playwright_card_scoped_independent_selections(page, tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), unique_zid, text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -1146,10 +1168,10 @@ def test_playwright_bidirectional_token_hover_mapping_parity(page, tmp_path):
     Verifies bidirectional token hover and selection mapping parity across child tabs in container mode.
     """
     from kardenwort_db import KardenwortDB
-    db_path = tmp_path / "test_hover.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_path = Path(resolved_paths["sqlite_db_path"])
     KardenwortDB(db_path=db_path).run_migrations()
 
-    config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     config.set("sentences_mode", "spawn_order", "normal")
@@ -1168,6 +1190,7 @@ def test_playwright_bidirectional_token_hover_mapping_parity(page, tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), unique_zid, text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -1221,10 +1244,10 @@ def test_background_translation_update_automatically_hydrates_active_child_tab_a
     to click the Update button, and preserves translations across tab switches.
     """
     from kardenwort_db import KardenwortDB
-    db_path = tmp_path / "test_isol.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_path = Path(resolved_paths["sqlite_db_path"])
     KardenwortDB(db_path=db_path).run_migrations()
 
-    config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     config.set("sentences_mode", "spawn_order", "normal")
@@ -1242,6 +1265,7 @@ def test_background_translation_update_automatically_hydrates_active_child_tab_a
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260906200500', text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -1328,6 +1352,7 @@ def test_tab1_overview_row_and_source_text_highlight(page, tmp_path):
     )
 
     # Start on Tab 2 (Sentence 1)
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260906223000', text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -1404,6 +1429,7 @@ def test_container_update_matching_preserves_token_order_when_frequency_sorted(p
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260906233000', text, 'en', text_mode='multi')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -1476,6 +1502,7 @@ def test_container_multi_mode_preserves_lines_and_hyphens(page, tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260907011500', text, 'en', text_mode='multi')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -1531,6 +1558,7 @@ def test_drag_selection_across_filled_reword_row_in_table_of_lemmas(page, tmp_pa
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260907012000', text, 'en', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -1610,10 +1638,10 @@ def test_cross_tab_selection_isolation_preserves_clean_overview_tab(page, tmp_pa
     synchronizes into Tab 1 (Overview) upon tab switching, while unselected words remain unselected.
     """
     from kardenwort_db import KardenwortDB
-    db_path = tmp_path / "test_tab1_clean.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_path = Path(resolved_paths["sqlite_db_path"])
     KardenwortDB(db_path=db_path).run_migrations()
 
-    config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     config.set("sentences_mode", "spawn_order", "normal")
@@ -1740,6 +1768,7 @@ def test_overview_tab_multi_sentence_bidirectional_highlighting(page, tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260908164000', text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -1811,6 +1840,7 @@ def test_tab_switching_after_background_update_renders_fresh_translations_withou
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20260908221500', text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -1850,7 +1880,7 @@ def test_tab_switching_after_background_update_renders_fresh_translations_withou
     # Switch to Tab 2 (Sentence 1: Das Haus ist gross)
     tab2 = page.locator('.kw-tab-chip[data-tab-seq="2"]')
     tab2.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("WorkspaceTabs.getActiveTabSeq() === 2")
 
     # Check sentence translation and word destination on Tab 2
     tc = page.locator("#translation-container")
@@ -1864,7 +1894,7 @@ def test_tab_switching_after_background_update_renders_fresh_translations_withou
     # Switch to Tab 3 (Sentence 2: Die Katze schlaeft)
     tab3 = page.locator('.kw-tab-chip[data-tab-seq="3"]')
     tab3.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("WorkspaceTabs.getActiveTabSeq() === 3")
 
     # Check sentence translation and word destination on Tab 3
     assert "Кошка спит." in tc.inner_text()
@@ -1883,10 +1913,10 @@ def test_playwright_tab1_master_overview_multi_sentence_hover_and_rainbow(page, 
     - Clicking/pinning words establishes rainbow bookmarks on both source and translation across sentences.
     """
     from kardenwort_db import KardenwortDB
-    db_path = tmp_path / "test_tab1_hover.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_path = Path(resolved_paths["sqlite_db_path"])
     KardenwortDB(db_path=db_path).run_migrations()
 
-    config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     if not config.has_section("storage"):
@@ -1904,6 +1934,7 @@ def test_playwright_tab1_master_overview_multi_sentence_hover_and_rainbow(page, 
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), unique_zid, text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -1981,6 +2012,7 @@ def test_overview_tab_unification_article_pronoun_der(tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), unique_zid, text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -2021,10 +2053,10 @@ def test_playwright_cross_tab_selection_synchronization(page, tmp_path):
     containing that lemma.
     """
     from kardenwort_db import KardenwortDB
-    db_path = tmp_path / "test_cross_tab_sync.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_path = Path(resolved_paths["sqlite_db_path"])
     KardenwortDB(db_path=db_path).run_migrations()
 
-    config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     config.set("sentences_mode", "spawn_order", "normal")
@@ -2045,6 +2077,7 @@ def test_playwright_cross_tab_selection_synchronization(page, tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), unique_zid, text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -2097,10 +2130,10 @@ def test_playwright_cross_tab_deselection_global(page, tmp_path):
     Task 4.2: Verify deselecting a word on Tab 2 unmarks it globally on Tab 1 and Tab 3.
     """
     from kardenwort_db import KardenwortDB
-    db_path = tmp_path / "test_cross_tab_desel.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_path = Path(resolved_paths["sqlite_db_path"])
     KardenwortDB(db_path=db_path).run_migrations()
 
-    config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     config.set("sentences_mode", "spawn_order", "normal")
@@ -2121,6 +2154,7 @@ def test_playwright_cross_tab_deselection_global(page, tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), unique_zid, text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -2193,10 +2227,10 @@ def test_playwright_card_scoped_send_to_anki_export(page, tmp_path):
     while exporting on Tab 1 exports all selected words across the session.
     """
     from kardenwort_db import KardenwortDB
-    db_path = tmp_path / "test_card_scoped_export.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_path = Path(resolved_paths["sqlite_db_path"])
     KardenwortDB(db_path=db_path).run_migrations()
 
-    config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     config.set("sentences_mode", "spawn_order", "normal")
@@ -2216,6 +2250,7 @@ def test_playwright_card_scoped_send_to_anki_export(page, tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), unique_zid, text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -2261,7 +2296,7 @@ window.fetch = async function(url, options) {
 
     # Click 'Send to Anki' from Tab 2 (Sentence 1)
     page.locator("#kw-btn-export").click()
-    page.wait_for_timeout(100)
+    page.wait_for_function("window.__fetches.length && window.__fetches[window.__fetches.length-1].url === '/session/export'")
 
     fetches = page.evaluate("window.__fetches")
     assert len(fetches) >= 1
@@ -2280,7 +2315,7 @@ window.fetch = async function(url, options) {
     page.evaluate("toggleRowSelection(0, true); toggleRowSelection(2, true); notifyAHKSelection()")
     # Click 'Send to Anki' from Tab 1 (Master Overview)
     page.locator("#kw-btn-export").click()
-    page.wait_for_timeout(100)
+    page.wait_for_function("window.__fetches.filter(call => call.url === '/session/export').length === 2 && window.__fetches[window.__fetches.length-1].url === '/session/export'")
 
     fetches_all = page.evaluate("window.__fetches")
     assert len(fetches_all) >= 2
@@ -2300,10 +2335,10 @@ def test_playwright_container_tab_switching_repeated_words_and_empty_state(page,
     3. Switching between tabs dynamically updates the table and empty state.
     """
     from kardenwort_db import KardenwortDB
-    db_path = tmp_path / "test_repeated_and_empty.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_path = Path(resolved_paths["sqlite_db_path"])
     KardenwortDB(db_path=db_path).run_migrations()
 
-    config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     config.set("sentences_mode", "spawn_order", "normal")
@@ -2324,6 +2359,7 @@ def test_playwright_container_tab_switching_repeated_words_and_empty_state(page,
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), unique_zid, text, 'en', text_mode='multi')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -2373,10 +2409,10 @@ def test_playwright_container_tab_switching_repeated_words_and_empty_state(page,
 def test_workspace_tab_container_multi_mode_clean_line_translation(tmp_path, monkeypatch):
     """Verifies that multi-mode container tabs receive clean 1-to-1 line translations without context padding in cards[0] and child cards."""
     from kardenwort_db import KardenwortDB
-    db_path = tmp_path / "test_multi_clean_cards.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_path = Path(resolved_paths["sqlite_db_path"])
     KardenwortDB(db_path=db_path).run_migrations()
 
-    config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("settings", "storage_backend", "sqlite")
     config.set("settings", "anki_context_mode", "single")
     config.set("settings", "anki_context_words_before", "5")
@@ -2409,6 +2445,7 @@ def test_workspace_tab_container_multi_mode_clean_line_translation(tmp_path, mon
     monkeypatch.setattr(kardenwort_desk, "pad_translated_sentences", mock_pad)
     monkeypatch.setattr(kardenwort_desk, "run_progressive_worker_async", lambda *args, **kwargs: None)
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), unique_zid, text, 'en', text_mode='multi')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -2454,6 +2491,7 @@ def test_container_multi_translation_order_preserved_when_spawn_order_reverse(pa
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, text, 'en', text_mode='multi')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -2526,6 +2564,7 @@ def test_container_multi_occurrence_rollup_ignores_disparate_lemma_keys(page, tm
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, text, 'en', text_mode='multi')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -2618,6 +2657,7 @@ def test_overview_tab_consolidates_multi_sentence_pos_variants_while_sentence_ca
     )
 
     # 1. Default overview_deduplicate_pos_aware = False
+    seed_render_tsv(config, resolved_paths, str(tsv_file), unique_zid, text, 'en', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -2652,6 +2692,7 @@ def test_overview_tab_consolidates_multi_sentence_pos_variants_while_sentence_ca
 
     # 2. When overview_deduplicate_pos_aware = True
     config.set("sentences_mode", "overview_deduplicate_pos_aware", "true")
+    seed_render_tsv(config, resolved_paths, str(tsv_file), unique_zid, text, 'en', text_mode='single')
     html_strict = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -2697,6 +2738,7 @@ def test_playwright_pin_strip_zero_layout_displacement(page, tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -2721,7 +2763,7 @@ def test_playwright_pin_strip_zero_layout_displacement(page, tmp_path):
     # Find the token corresponding to 'gefällt' in source text and click it to pin
     gefaellt_span = page.locator("#source-container span.word").filter(has_text="gefällt").first
     gefaellt_span.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.querySelector('#lemma-table tr.hl-mvp-pin') !== null")
 
     # Verify that the table row now has the pin class
     row_class = gefaellt_row.get_attribute("class") or ""
@@ -2737,7 +2779,7 @@ def test_playwright_pin_strip_zero_layout_displacement(page, tmp_path):
 
     # Click again to unpin
     gefaellt_span.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.querySelector('#lemma-table tr.hl-mvp-pin') === null")
     box_unpinned = target_cell.bounding_box()
     assert box_unpinned is not None
     assert abs(box_unpinned["x"] - box_before["x"]) < 0.1
@@ -2767,6 +2809,7 @@ def test_playwright_tab1_master_overview_dynamic_occurrence_sync(page, tmp_path)
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -2795,7 +2838,7 @@ def test_playwright_tab1_master_overview_dynamic_occurrence_sync(page, tmp_path)
     # Click the token 'den' in the source text
     den_span = page.locator("#source-container span.word").filter(has_text="den").first
     den_span.click()
-    page.wait_for_timeout(60)
+    page.wait_for_function("document.querySelector('#lemma-table td.col-inflected').textContent.trim() === 'den'")
 
     # INFLECTED cell must dynamically show occurrence form 'den'
     updated_inf_text = inf_cell.inner_text().strip()
@@ -2803,7 +2846,7 @@ def test_playwright_tab1_master_overview_dynamic_occurrence_sync(page, tmp_path)
 
     # Click 'den' again to deselect
     den_span.click()
-    page.wait_for_timeout(60)
+    page.wait_for_function("document.querySelector('#lemma-table td.col-inflected').textContent.includes('das') && document.querySelector('#lemma-table td.col-inflected').textContent.includes('den') && document.querySelector('#lemma-table td.col-inflected').textContent.includes('der')")
 
     # Restored to baseline consolidated string
     restored_text = inf_cell.inner_text().strip()
@@ -2833,6 +2876,7 @@ def test_playwright_source_token_pin_frame_zero_layout_displacement(page, tmp_pa
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -2856,7 +2900,7 @@ def test_playwright_source_token_pin_frame_zero_layout_displacement(page, tmp_pa
     # Pin 'Arbeit' by clicking it
     arbeit = page.locator("#source-container span.word").filter(has_text="Arbeit").first
     arbeit.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.querySelector('#source-container .hl-mvp-pin') !== null")
 
     # Assert bookmark pin class is present
     arbeit_class = arbeit.get_attribute("class") or ""
@@ -2887,6 +2931,7 @@ def test_container_tab_subtoken_isolation_and_overview_retext_distribution(page,
         "Sie\tSie\tpron.\tОна\t2\tSie kommt.\tОна приходит.\t0\n"
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, 'Er geht. Sie kommt.', 'de', text_mode='multi')
     raw_html = kardenwort_desk.run_render_flow(
         text="Er geht. Sie kommt.",
         language="de",
@@ -3054,7 +3099,6 @@ def test_playwright_table_skeleton_zero_reflow_on_translation_arrival(page, tmp_
         };
         window.receiveUpdate(updatePayload);
     }""")
-    page.wait_for_timeout(100)
 
     after = page.evaluate(get_metrics)
 

@@ -21,6 +21,35 @@ from tests.test_release_boundary_contracts import wait_for_held
 ZID = '20261107230052'
 
 
+def test_idle_controller_connection_timeout_logs_before_request_path_exists(caplog):
+    from kardenwort_controller import ControllerRequestHandler
+    finished = threading.Event()
+
+    class IdleHandler(ControllerRequestHandler):
+        def setup(self):
+            super().setup()
+            self.connection.settimeout(0.01)
+
+        def finish(self):
+            try:
+                super().finish()
+            finally:
+                finished.set()
+
+    server = create_browser_test_server(IdleHandler)
+    try:
+        server.start()
+        with caplog.at_level('INFO', logger='kardenwort.desk.controller'):
+            with socket.create_connection(server.server_address, timeout=3) as client:
+                assert finished.wait(3), 'Idle connection did not reach its deadline'
+                assert client.recv(1) == b''
+    finally:
+        server.server_close()
+    assert 'Request timed out:' in caplog.text
+    assert not server.errors
+    assert_drained(server)
+
+
 @pytest.fixture
 def controllers(tmp_path):
     with ExitStack() as lifetimes:

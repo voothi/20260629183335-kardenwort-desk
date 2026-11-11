@@ -1,12 +1,12 @@
+from tests.browser_test_server import create_browser_test_server
 import re
 import json
 import time
-import socket
 import threading
 import configparser
 import pytest
 from pathlib import Path
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler
 
 from kardenwort_desk import (
     load_config,
@@ -16,10 +16,6 @@ from kardenwort_desk import (
 )
 
 
-def get_free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
 
 
 class MockSpacyRequestHandler(BaseHTTPRequestHandler):
@@ -58,11 +54,9 @@ class MockSpacyRequestHandler(BaseHTTPRequestHandler):
 
 @pytest.fixture(scope="module")
 def background_spacy_server():
-    port = get_free_port()
-    server = ThreadingHTTPServer(('127.0.0.1', port), MockSpacyRequestHandler)
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    time.sleep(0.1)
+    server = create_browser_test_server(MockSpacyRequestHandler)
+    port = server.server_port
+    server.start()
     server_url = f"http://127.0.0.1:{port}"
 
     yield server_url, server

@@ -32,6 +32,16 @@ def seed(server, zid):
     return adapter, path, headers, rows
 
 
+def test_sqlite_retext_reads_stored_source_without_a_file_path(controller_world):
+    _, server = controller_world
+    adapter = desk.get_storage_adapter(server.config, server.resolved_paths)
+    zid, text = '20261111102819', 'Stored source without a sentence projection.'
+    adapter.db.insert_session({'zid': zid, 'source_language': 'en', 'target_language': 'ru',
+                               'text_mode': 'single', 'source_raw_text': text})
+    assert adapter.db.get_sentences_by_session(zid) == []
+    assert server.arbiter._read_retext_source(adapter, zid, {}, zid, []) == text
+
+
 def snapshot(adapter, path, zid):
     if adapter.backend_name == 'sqlite':
         return (adapter.db.get_words_by_session(zid), adapter.db.get_sentences_by_session(zid))

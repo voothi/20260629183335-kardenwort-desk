@@ -4,6 +4,8 @@ import socket
 import threading
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import pytest
+from tests.browser_test_server import create_browser_test_server
+from tests.thread_support import Worker
 
 from kardenwort_desk import (
     query_spacy_server,
@@ -43,11 +45,14 @@ def test_circuit_breaker_record_and_cooldown():
     assert is_endpoint_available(url, cooldown=5.0) is True
 
 
-def test_circuit_breaker_expiration():
+def test_circuit_breaker_expiration(monkeypatch):
+    from types import SimpleNamespace
+    clock = [100.0]
+    monkeypatch.setattr("kardenwort_desk.time", SimpleNamespace(time=lambda: clock[0]))
     url = "http://127.0.0.1:54322"
     record_endpoint_failure(url)
     assert is_endpoint_available(url, cooldown=0.1) is False
-    time.sleep(0.15)
+    clock[0] += 0.15
     # After cooldown expiry, endpoint becomes available for probing
     assert is_endpoint_available(url, cooldown=0.1) is True
 
@@ -122,8 +127,8 @@ class SlowComputationServer(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
-        # Connected immediately, but simulate 0.5s computation time
-        time.sleep(0.4)
+        self.server.entered.set()
+        assert self.server.release.wait(3), 'Controlled response was not released'
         resp = {"status": "success", "translated_text": "Slow House"}
         resp_bytes = json.dumps(resp).encode('utf-8')
         self.send_response(200)
@@ -134,26 +139,35 @@ class SlowComputationServer(BaseHTTPRequestHandler):
 
 
 def test_connect_timeout_does_not_abort_slow_computation():
-    port = get_free_port()
-    server = ThreadingHTTPServer(('127.0.0.1', port), SlowComputationServer)
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    time.sleep(0.1)
+    server = create_browser_test_server(SlowComputationServer)
+    server.entered = threading.Event()
+    server.release = threading.Event()
+    server.start()
 
-    url = f"http://127.0.0.1:{port}"
+    url = f"http://127.0.0.1:{server.server_port}"
+    worker = None
     try:
         # connect_timeout is 0.2s, but total request timeout is 5.0s.
-        # The request takes ~0.4s to compute, so it should succeed.
+        # Hold the real response beyond the connect deadline and observe liveness.
         t0 = time.perf_counter()
-        res = query_translation_server("Haus", "de", "en", server_url=url, timeout=5.0, connect_timeout=0.2)
+        worker = Worker(lambda: query_translation_server("Haus", "de", "en", server_url=url, timeout=5.0, connect_timeout=0.2))
+        assert server.entered.wait(2), 'Request did not reach the response boundary'
+        worker.thread.join(timeout=0.35)
+        assert worker.thread.is_alive(), 'Connect deadline incorrectly terminated a pending response'
+        server.release.set()
+        res = worker.result()
         duration = time.perf_counter() - t0
         assert res is not None
         assert res.get("status") == "success"
         assert res.get("translated_text") == "Slow House"
         assert duration >= 0.35
     finally:
-        server.shutdown()
-        server.server_close()
+        server.release.set()
+        try:
+            if worker is not None:
+                worker.result()
+        finally:
+            server.server_close()
 
 
 def test_microservice_session_transparent_reconnect_on_dropped_socket():

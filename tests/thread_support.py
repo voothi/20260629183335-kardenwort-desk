@@ -4,9 +4,30 @@ from http.client import HTTPConnection
 import json
 import threading
 import time
+import urllib.error
+import urllib.request
 from urllib.parse import urlparse
 
 from kardenwort_events import EventDispatcher
+
+
+def wait_for_http(url, running, timeout=5):
+    """Observe an owned listener's readiness; preserve unexpected HTTP failures."""
+    deadline = time.monotonic() + timeout
+    last_error = None
+    while True:
+        remaining = deadline-time.monotonic()
+        if remaining <= 0:
+            break
+        assert running(), 'Owned server exited before becoming ready'
+        try:
+            with urllib.request.urlopen(url, timeout=min(.25, remaining)) as response:
+                return response.read()
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, TimeoutError) as error:
+            last_error = error
+    raise TimeoutError('Owned HTTP listener did not become ready') from last_error
 
 
 class Worker:

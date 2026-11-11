@@ -5,6 +5,7 @@ import urllib.request
 import urllib.error
 import subprocess
 import unittest
+from tests.thread_support import wait_for_http
 from pathlib import Path
 
 DESK_DIR = Path(__file__).resolve().parent.parent
@@ -78,10 +79,10 @@ class TestHTTPServerRunning(unittest.TestCase):
             f.write(running_content)
 
         cls.server_proc = subprocess.Popen(
-            [PYTHON_EXE, str(DESK_DIR / "kardenwort_desk.py"), "--config", str(cls.running_config), "server", "--port", str(TEST_PORT)],
+            [PYTHON_EXE, str(DESK_DIR / "kardenwort_desk.py"), "--config", str(cls.running_config), "server", "--port", str(TEST_PORT), "--no-sidecars"],
             cwd=str(DESK_DIR)
         )
-        time.sleep(1.2)
+        wait_for_http(f'http://127.0.0.1:{TEST_PORT}/api/v1/health', lambda: cls.server_proc.poll() is None)
 
     @classmethod
     def tearDownClass(cls):

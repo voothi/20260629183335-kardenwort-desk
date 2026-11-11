@@ -1,13 +1,13 @@
+from tests.browser_test_server import create_browser_test_server
+from tests.controller_test_support import token_service, translation_service, DeterministicTranslationHandler
 import os
 import sys
 import json
 import time
-import socket
 import threading
 import urllib.request
 import urllib.error
 from pathlib import Path
-from http.server import ThreadingHTTPServer
 import pytest
 
 import kardenwort_desk
@@ -19,77 +19,80 @@ from kardenwort_controller import (
 )
 
 
-def get_free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def admin_controller_server(tmp_path_factory):
-    test_dir = tmp_path_factory.mktemp("kardenwort_admin_test")
-    desk_dir = Path(__file__).resolve().parent.parent
-    config, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
+    with token_service() as tokenizer, translation_service(DeterministicTranslationHandler) as translator:
+        test_dir = tmp_path_factory.mktemp("kardenwort_admin_test")
+        desk_dir = Path(__file__).resolve().parent.parent
+        config, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
+        config.set("services", "spacy_server_url", f"http://127.0.0.1:{tokenizer.server_port}")
+        config.read_dict({
+            "services": {"translation_server_url": f"http://127.0.0.1:{translator.server_port}"},
+            "pipeline": {"text_provider_chain": "google", "lemma_provider_chain": "google",
+                         "failover_strategy": "strict", "fast_connectivity_check_ips": ""},
+        })
 
-    # Point db to isolated test db
-    test_db_path = test_dir / "kardenwort_test.db"
-    resolved_paths["sqlite_db_path"] = str(test_db_path)
-    resolved_paths["db_path"] = str(test_db_path)
-    if "storage" not in config:
-        config.add_section("storage")
-    config["storage"]["sqlite_db_path"] = str(test_db_path)
-    if "db" not in config:
-        config.add_section("db")
-    config["db"]["path"] = str(test_db_path)
+        # Point db to isolated test db
+        test_db_path = test_dir / "kardenwort_test.db"
+        resolved_paths["sqlite_db_path"] = str(test_db_path)
+        resolved_paths["db_path"] = str(test_db_path)
+        if "storage" not in config:
+            config.add_section("storage")
+        config["storage"]["sqlite_db_path"] = str(test_db_path)
+        if "db" not in config:
+            config.add_section("db")
+        config["db"]["path"] = str(test_db_path)
 
-    # Initialize DB & migrations
-    db = KardenwortDB(config=config, resolved_paths=resolved_paths)
-    db.run_migrations()
+        # Initialize DB & migrations
+        db = KardenwortDB(config=config, resolved_paths=resolved_paths)
+        db.run_migrations()
 
-    # Pre-populate sample session & projects
-    sess_zid = "20260821200001"
-    db.insert_session({
-        "zid": sess_zid,
-        "raw_text": "Hallo Welt",
-        "clean_text": "Hallo Welt",
-        "source_language": "de",
-        "target_language": "en",
-        "text_mode": "single",
-        "slug": "sample-session"
-    })
+        # Pre-populate sample session & projects
+        sess_zid = "20260821200001"
+        db.insert_session({
+            "zid": sess_zid,
+            "raw_text": "Hallo Welt",
+            "clean_text": "Hallo Welt",
+            "source_language": "de",
+            "target_language": "en",
+            "text_mode": "single",
+            "slug": "sample-session"
+        })
 
-    root_proj_id = db.create_project(title="Test Book", slug="test-book", description="A test book")
-    child_proj_id = db.create_project(title="Chapter 1", slug="chapter-1", parent_id=root_proj_id)
-    db.link_session_to_project(child_proj_id, sess_zid)
+        root_proj_id = db.create_project(title="Test Book", slug="test-book", description="A test book")
+        child_proj_id = db.create_project(title="Chapter 1", slug="chapter-1", parent_id=root_proj_id)
+        db.link_session_to_project(child_proj_id, sess_zid)
 
-    port = get_free_port()
-    server = ThreadingHTTPServer(('127.0.0.1', port), ControllerRequestHandler)
-    server.allow_reuse_address = True
-    server.daemon_threads = True
-    server.disable_nagle_algorithm = True
+        server = create_browser_test_server(ControllerRequestHandler)
+        port = server.server_port
+        server.allow_reuse_address = True
+        server.daemon_threads = False
+        server.disable_nagle_algorithm = True
 
-    server.config = config
-    server.resolved_paths = resolved_paths
-    server.goldendict = goldendict
-    server.api_key = "admin-secret-token"
-    server.seq_counter = 0
-    server.seq_lock = threading.Lock()
-    server.start_time = time.time()
-    server.server_port = port
+        server.config = config
+        server.resolved_paths = resolved_paths
+        server.goldendict = goldendict
+        server.api_key = "admin-secret-token"
+        config.read_dict({"server": {"api_key": server.api_key, "port": str(port), "controller_port": str(port)}})
+        server.seq_counter = 0
+        server.seq_lock = threading.Lock()
+        server.start_time = time.time()
+        server.server_port = port
 
-    server.arbiter = SessionArbiter(config, resolved_paths)
-    server.arbiter.goldendict = goldendict
-    server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
+        server.arbiter = SessionArbiter(config, resolved_paths)
+        server.arbiter.goldendict = goldendict
+        server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
 
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    time.sleep(0.1)
+        server.start()
 
-    server_url = f"http://127.0.0.1:{port}"
-    yield server_url, server, db, root_proj_id, child_proj_id, sess_zid
+        server_url = f"http://127.0.0.1:{port}"
+        yield server_url, server, db, root_proj_id, child_proj_id, sess_zid
 
-    server.shutdown()
-    server.server_close()
+        server.shutdown()
+        server.server_close()
+        server.arbiter.enrichment_queue.shutdown(wait=True)
 
 
 def make_admin_request(url, path, method="GET", body=None, token="admin-secret-token", timeout=15.0):
@@ -448,31 +451,43 @@ def test_admin_api_batch_delete_sessions(admin_controller_server):
     assert resp["total_count"] == 0
 
 
-def test_admin_telemetry_non_blocking_during_sidecar_latency(admin_controller_server, monkeypatch):
+def test_admin_telemetry_non_blocking_during_sidecar_latency(admin_controller_server):
     """
     Assert that /api/v1/admin/telemetry responds instantly (< 100ms) even if sidecars
     experience heavy latency or blocking socket probes, strictly reading in-memory supervisor state.
     """
     url, server, db, _, _, _ = admin_controller_server
 
-    # Monkeypatch supervisor probe_health to simulate a blocking/slow sidecar health probe
-    def slow_probe_health(svc, timeout=1.5):
-        time.sleep(1.0)
-        return False
+    from http.server import BaseHTTPRequestHandler
+    probes = []
 
-    if hasattr(server, 'supervisor'):
-        monkeypatch.setattr(server.supervisor, "probe_health", slow_probe_health)
+    class ProbeHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            probes.append(self.path)
+            self.send_response(503)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
 
-    start = time.perf_counter()
-    status, resp = make_admin_request(url, "/api/v1/admin/telemetry")
-    duration = time.perf_counter() - start
+    probe = create_browser_test_server(ProbeHandler)
+    try:
+        probe.start()
+        for service in server.supervisor.services.values():
+            service.host = '127.0.0.1'
+            service.port = probe.server_port
+        start = time.perf_counter()
+        status, resp = make_admin_request(url, "/api/v1/admin/telemetry")
+        duration = time.perf_counter() - start
 
-    assert status == 200
-    assert resp["ok"] is True
-    assert "database" in resp
-    assert "sidecars" in resp
-    # Must respond sub-200ms without being blocked by probe_health
-    assert duration < 0.2, f"Admin telemetry took {duration:.3f}s, expected < 0.2s"
+        assert status == 200
+        assert resp["ok"] is True
+        assert "database" in resp
+        assert "sidecars" in resp
+        # Must respond sub-200ms without being blocked by probe_health
+        assert duration < 0.2, f"Admin telemetry took {duration:.3f}s, expected < 0.2s"
+
+    finally:
+        probe.server_close()
+    assert probes == [], 'Telemetry must consume cached health without probing sidecars'
 
 
 def test_admin_projects_batch_link_endpoint(admin_controller_server):
