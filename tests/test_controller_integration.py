@@ -1,3 +1,4 @@
+from kardenwort_controller import _controller_runtime
 import json
 import sys
 import threading
@@ -30,48 +31,42 @@ def running_controller(tmp_path, request):
 
         adapter = SqliteStorageAdapter(config=config, resolved_paths=resolved_paths, db_path=str(db_file))
 
-        server = create_browser_test_server(ControllerRequestHandler)
-        port = server.server_port
-        server.allow_reuse_address = True
-        server.daemon_threads = False
-        server.disable_nagle_algorithm = True
+        with _controller_runtime(create_browser_test_server(ControllerRequestHandler)) as server:
+            port = server.server_port
+            server.allow_reuse_address = True
+            server.daemon_threads = False
+            server.disable_nagle_algorithm = True
 
-        server.config = config
-        server.resolved_paths = resolved_paths
-        server.goldendict = goldendict
-        server.api_key = "test-controller-api-key"
-        server.seq_counter = 0
-        server.seq_lock = threading.Lock()
-        server.start_time = time.time()
-        server.server_port = port
-        config.set('server','port',str(port))
-        config.set('server','controller_port',str(port))
+            server.config = config
+            server.resolved_paths = resolved_paths
+            server.goldendict = goldendict
+            server.api_key = "test-controller-api-key"
+            server.seq_counter = 0
+            server.seq_lock = threading.Lock()
+            server.start_time = time.time()
+            server.server_port = port
+            config.set('server','port',str(port))
+            config.set('server','controller_port',str(port))
 
-        server.arbiter = SessionArbiter(config, resolved_paths)
-        server.arbiter.goldendict = goldendict
-        server.arbiter.storage_adapter = adapter
+            server.arbiter = SessionArbiter(config, resolved_paths)
+            server.arbiter.goldendict = goldendict
+            server.arbiter.storage_adapter = adapter
 
-        server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
+            server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
 
-        from kardenwort_state_runtime import refresh_preferences
-        refresh_preferences(config, resolved_paths)
-        server.ui_cfg = kardenwort_desk.resolve_ui_config(config)
+            from kardenwort_state_runtime import refresh_preferences
+            refresh_preferences(config, resolved_paths)
+            server.ui_cfg = kardenwort_desk.resolve_ui_config(config)
 
-        server_thread = server.start()
-        clients = owned_clients(request)
+            server_thread = server.start()
+            clients = owned_clients(request)
 
-        server_url = f"http://127.0.0.1:{port}"
-        yield server_url, server, adapter
-
-        try:
-            if clients is not None:
-                clients.close()
-        finally:
+            server_url = f"http://127.0.0.1:{port}"
             try:
-                server.server_close()
+                yield server_url, server, adapter
             finally:
-                if server.resources_stopped():
-                    server.arbiter.enrichment_queue.shutdown(wait=True)
+                if clients is not None:
+                    clients.close()
 
 
 def test_retext_payload_structure_and_multidiv_separation(running_controller, monkeypatch):

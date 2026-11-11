@@ -299,3 +299,29 @@ def test_owned_shutdown_tolerates_real_peer_reset():
         client.close()
         release.set()
         server.server_close()
+
+
+def test_owned_listener_tolerates_peer_reset_before_request_completion():
+    finished = threading.Event()
+
+    class PartialRequestHandler(BaseHTTPRequestHandler):
+        def finish(self):
+            try:
+                super().finish()
+            finally:
+                finished.set()
+
+    server = create_browser_test_server(PartialRequestHandler)
+    server.start()
+    client = socket.create_connection(server.server_address, timeout=3)
+    try:
+        client.sendall(b'GET /')
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('hh', 1, 0))
+        client.close()
+        assert finished.wait(3), 'Peer reset did not finish the partial request'
+    finally:
+        client.close()
+        server.server_close()
+    assert_drained(server)
+    assert not server.errors
+    assert len(server.expected_disconnects) == 1

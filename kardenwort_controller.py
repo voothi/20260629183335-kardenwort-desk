@@ -8,6 +8,7 @@ from kardenwort_sqlite_preferences import PreferenceConflict
 from kardenwort_state_runtime import refresh_preferences, preference_store
 from kardenwort_audio import AudioError
 from kardenwort_audio_runtime import execute_audio
+from kardenwort_controller_lifetime import ControllerHTTPServer, run_cleanup, stop_owned_process
 import os
 import re
 import json
@@ -28,7 +29,7 @@ import concurrent.futures
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple, Union
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler
 from b64util import encode
 
 # Import core business logic primitives from kardenwort_desk
@@ -84,6 +85,7 @@ from kardenwort_desk import (
     safe_write_update_js,
     get_session_active_providers,
     register_failover_callback,
+    unregister_failover_callback,
     record_session_active_provider,
     record_provider_failover,
     is_network_online_multi,
@@ -335,14 +337,15 @@ class WindowsJobObject:
         return False
 
     def close(self):
-        if sys.platform == "win32" and self.job_handle:
-            try:
-                import ctypes
-                kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-                kernel32.CloseHandle(self.job_handle)
-                self.job_handle = None
-            except Exception:
-                pass
+        if sys.platform != "win32" or not self.job_handle:
+            return
+        import ctypes
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
+        if not kernel32.CloseHandle(self.job_handle):
+            raise ctypes.WinError(ctypes.get_last_error())
+        self.job_handle = None
 
 
 # ---------------------------------------------------------------------------
@@ -381,10 +384,17 @@ class ProcessSupervisor:
         self.enabled = enabled
         self.job = WindowsJobObject()
         self.services: Dict[str, SidecarService] = {}
-        self._running = False
+        self._monitor_stop = threading.Event()
+        self._monitor_error = None
         self._monitor_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
-        self._setup_service_definitions()
+        try:
+            self._setup_service_definitions()
+        except BaseException as error:
+            errors = run_cleanup([self.job.close])
+            if errors:
+                raise BaseExceptionGroup('Supervisor initialization failed', [error, *errors])
+            raise
 
     def _setup_service_definitions(self):
         desk_dir = Path(__file__).resolve().parent
@@ -573,128 +583,140 @@ class ProcessSupervisor:
 
     def spawn_service(self, service: SidecarService) -> bool:
         with self._lock:
+            if self._monitor_stop.is_set():
+                return False
             if self.probe_health(service, timeout=0.5):
-                logger.info(f"Sidecar '{service.name}' on port {service.port} is already running externally.")
-                service.managed_by_supervisor = False
+                return self._reuse_healthy_service(service)
+            if service.managed_by_supervisor and service.process is not None:
+                stop_owned_process(service.process)
+            return self._launch_service(service)
+
+    def _reuse_healthy_service(self, service):
+        service.managed_by_supervisor = bool(service.managed_by_supervisor and service.process is not None
+                                             and service.process.poll() is None)
+        owner = 'managed' if service.managed_by_supervisor else 'external'
+        logger.info(f"Sidecar '{service.name}' on port {service.port} is already running ({owner}).")
+        return True
+
+    @staticmethod
+    def _service_script_available(cmd):
+        script = Path(cmd[1]) if len(cmd) > 1 else None
+        return not script or script.exists() or (len(cmd) > 2 and cmd[1] == '-m')
+
+    def _launch_service(self, service):
+        if not self._service_script_available(service.launch_cmd):
+            logger.warning(f"Cannot launch sidecar '{service.name}': script does not exist.")
+            return False
+        try:
+            self._create_service_process(service)
+            return self._await_service_health(service)
+        except Exception as error:
+            logger.error(f"Failed to spawn sidecar '{service.name}': {error}")
+            return False
+
+    def _create_service_process(self, service):
+        creationflags = 0x08000000 | 0x00000200 if sys.platform == 'win32' else 0
+        env = os.environ.copy()
+        env['PYTHONIOENCODING'] = 'utf-8'
+        proc = subprocess.Popen(service.launch_cmd,
+            cwd=str(service.cwd) if service.cwd else None,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=creationflags, close_fds=True, env=env)
+        service.process = proc
+        service.managed_by_supervisor = True
+        service.spawn_time = time.time()
+        service.consecutive_failures = 0
+        self.job.assign_process(proc)
+        logger.info(f"Spawned sidecar '{service.name}' (PID: {proc.pid}) on port {service.port}")
+
+    def _await_service_health(self, service):
+        deadline = time.monotonic() + 15.0
+        while not self._monitor_stop.is_set() and time.monotonic() < deadline:
+            if service.process.poll() is not None:
+                logger.warning(f"Sidecar '{service.name}' exited with code {service.process.returncode}.")
+                return False
+            if self.probe_health(service, timeout=0.5):
+                logger.info(f"Sidecar '{service.name}' is healthy on port {service.port}")
                 return True
-
-            if service.process and service.process.poll() is None:
-                try:
-                    service.process.terminate()
-                    service.process.wait(timeout=1.0)
-                except Exception:
-                    pass
-
-            cmd = service.launch_cmd
-            script_path = Path(cmd[1]) if len(cmd) > 1 else None
-            if script_path and not script_path.exists() and not (len(cmd) > 2 and cmd[1] == '-m'):
-                logger.warning(f"Cannot launch sidecar '{service.name}': script {script_path} does not exist.")
-                return False
-
-            creationflags = 0
-            if sys.platform == "win32":
-                creationflags = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-
-            env = os.environ.copy()
-            env["PYTHONIOENCODING"] = "utf-8"
-
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    cwd=str(service.cwd) if service.cwd else None,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=creationflags,
-                    close_fds=True,
-                    env=env
-                )
-                service.process = proc
-                service.managed_by_supervisor = True
-                service.spawn_time = time.time()
-                service.consecutive_failures = 0
-                self.job.assign_process(proc)
-                logger.info(f"Spawned sidecar '{service.name}' (PID: {proc.pid}) on port {service.port}")
-
-                # Wait up to 15 seconds for initial health probe (accommodates heavy model loading)
-                t_end = time.time() + 15.0
-                while time.time() < t_end:
-                    if proc.poll() is not None:
-                        logger.warning(f"Sidecar '{service.name}' process exited unexpectedly with code {proc.poll()}.")
-                        return False
-                    if self.probe_health(service, timeout=0.5):
-                        logger.info(f"Sidecar '{service.name}' is healthy on port {service.port}")
-                        return True
-                    time.sleep(0.3)
-                logger.warning(f"Sidecar '{service.name}' spawned but health probe did not respond within 15s (process is still running with PID {proc.pid}).")
-                return False
-            except Exception as e:
-                logger.error(f"Failed to spawn sidecar '{service.name}': {e}")
-                return False
+            self._monitor_stop.wait(0.3)
+        if not self._monitor_stop.is_set():
+            logger.warning(f"Sidecar '{service.name}' health probe did not respond within 15s.")
+        return False
 
     def start(self):
         if not self.enabled:
             logger.info("Process supervisor is disabled.")
             return
 
-        self._running = True
+        self._monitor_stop.clear()
         logger.info("Starting ProcessSupervisor sidecar services...")
         for svc in self.services.values():
             self.spawn_service(svc)
 
-        self._monitor_thread = threading.Thread(target=self._supervision_loop, daemon=True, name="SupervisorWatchdog")
+        self._start_monitor()
+
+    def _start_monitor(self):
+        if self._monitor_thread is not None and self._monitor_thread.is_alive():
+            raise RuntimeError('Supervisor watchdog is already running')
+        self._monitor_stop.clear()
+        self._monitor_error = None
+        self._monitor_thread = threading.Thread(target=self._supervision_loop, name="SupervisorWatchdog", daemon=False)
         self._monitor_thread.start()
 
     def _supervision_loop(self):
-        while self._running:
-            time.sleep(5.0)
-            if not self._running:
-                break
-            for svc in list(self.services.values()):
-                healthy = self.probe_health(svc, timeout=1.5)
-                if healthy:
-                    svc.consecutive_failures = 0
-                    continue
-                if not svc.managed_by_supervisor:
-                    continue
+        try:
+            while not self._monitor_stop.wait(5.0):
+                for svc in list(self.services.values()):
+                    if self._monitor_stop.is_set():
+                        return
+                    self._supervise_service(svc)
+        except BaseException as error:
+            self._monitor_error = error
 
-                # If process exited/crashed, restart immediately
-                if svc.process is None or svc.process.poll() is not None:
-                    exit_code = svc.process.poll() if svc.process else 'None'
-                    logger.warning(f"Managed sidecar '{svc.name}' process exited (exit code: {exit_code}). Restarting...")
-                    svc.restart_count += 1
-                    svc.consecutive_failures = 0
-                    self.spawn_service(svc)
-                    continue
+    def _supervise_service(self, svc):
+        if self.probe_health(svc, timeout=1.5):
+            svc.consecutive_failures = 0
+            return
+        if not svc.managed_by_supervisor:
+            return
+        if svc.process is None or svc.process.poll() is not None:
+            exit_code = getattr(svc.process, 'returncode', None)
+            logger.warning(f"Managed sidecar '{svc.name}' process exited (exit code: {exit_code}). Restarting...")
+            svc.restart_count += 1
+            svc.consecutive_failures = 0
+            self.spawn_service(svc)
+            return
+        if time.time() - getattr(svc, 'spawn_time', 0.0) < 20.0:
+            return
+        svc.consecutive_failures = getattr(svc, 'consecutive_failures', 0) + 1
+        if svc.consecutive_failures >= 3:
+            logger.warning(f"Health probe failed {svc.consecutive_failures} consecutive times for managed sidecar '{svc.name}' on port {svc.port}. Restarting...")
+            svc.restart_count += 1
+            svc.consecutive_failures = 0
+            self.spawn_service(svc)
 
-                # If process was spawned recently, give it a grace period to finish heavy initialization
-                if time.time() - getattr(svc, 'spawn_time', 0.0) < 20.0:
-                    continue
+    def _join_monitor(self):
+        if self._monitor_thread is not None:
+            self._monitor_thread.join(5)
+            if self._monitor_thread.is_alive():
+                raise TimeoutError('Supervisor watchdog did not terminate')
+        if self._monitor_error is not None:
+            raise self._monitor_error
 
-                # Require 3 consecutive probe failures before killing a running process
-                svc.consecutive_failures = getattr(svc, 'consecutive_failures', 0) + 1
-                if svc.consecutive_failures >= 3:
-                    logger.warning(f"Health probe failed {svc.consecutive_failures} consecutive times for managed sidecar '{svc.name}' on port {svc.port}. Restarting...")
-                    svc.restart_count += 1
-                    svc.consecutive_failures = 0
-                    self.spawn_service(svc)
+    def _stop_services(self):
+        with self._lock:
+            processes = [svc.process for svc in self.services.values()
+                         if svc.managed_by_supervisor and svc.process is not None]
+        errors = run_cleanup([lambda process=process: stop_owned_process(process) for process in processes])
+        if errors:
+            raise BaseExceptionGroup('Managed sidecar disposal failed', errors)
 
     def stop(self):
-        self._running = False
+        self._monitor_stop.set()
         logger.info("Stopping ProcessSupervisor and terminating managed sidecars...")
-        with self._lock:
-            for svc in self.services.values():
-                if svc.managed_by_supervisor and svc.process:
-                    try:
-                        if svc.process.poll() is None:
-                            svc.process.terminate()
-                            svc.process.wait(timeout=1.5)
-                    except Exception:
-                        try:
-                            svc.process.kill()
-                        except Exception:
-                            pass
-            self.job.close()
+        errors = run_cleanup([self._join_monitor, self._stop_services, self.job.close])
+        if errors:
+            raise BaseExceptionGroup('Supervisor disposal failed', errors)
 
     def __enter__(self):
         self.start()
@@ -808,6 +830,7 @@ class EnrichmentQueue:
         self._lemma_trans_cache: Dict[Tuple[str, str, str], str] = {}
         self._inflight_trans: Dict[Tuple[str, str, str], concurrent.futures.Future] = {}
         self._active_progressive_sessions: Dict[str, concurrent.futures.Future] = {}
+        self._progressive_failures = []
         self._lock = threading.Lock()
         self._pacing_lock = threading.Lock()
         self._last_request_time = 0.0
@@ -1174,7 +1197,16 @@ class EnrichmentQueue:
                 trace_id,
             )
             self._active_progressive_sessions[session_zid] = fut
-            return {"status": "queued", "session_zid": session_zid}
+        fut.add_done_callback(lambda completed: self._finish_progressive_task(session_zid, completed))
+        return {"status": "queued", "session_zid": session_zid}
+
+    def _finish_progressive_task(self, session_zid, future):
+        error = None if future.cancelled() else future.exception()
+        with self._lock:
+            if error is not None:
+                self._progressive_failures.append(error)
+            if self._active_progressive_sessions.get(session_zid) is future:
+                del self._active_progressive_sessions[session_zid]
 
     def _execute_progressive_task(
         self,
@@ -1203,6 +1235,7 @@ class EnrichmentQueue:
         sess_lang = language
         sess_target = target_lang
         tsv_path = None
+        active_text_prov = None
 
         if is_sqlite and hasattr(storage_adapter, 'db'):
             try:
@@ -1261,8 +1294,7 @@ class EnrichmentQueue:
                         }
 
             if not session_data:
-                logger.warning(f"Progressive task could not find session {session_zid}")
-                return
+                raise StructuredError(ErrorCode.NOT_FOUND, f"Progressive task could not find session {session_zid}")
 
             headers = session_data["headers"]
             data_rows = session_data["data_rows"]
@@ -1639,10 +1671,6 @@ class EnrichmentQueue:
                 "details": {},
             }
         finally:
-            with self._lock:
-                if session_zid in self._active_progressive_sessions:
-                    del self._active_progressive_sessions[session_zid]
-
             if is_sqlite and hasattr(storage_adapter, 'db'):
                 try:
                     storage_adapter.db.set_worker_status(
@@ -1716,9 +1744,17 @@ class EnrichmentQueue:
             }
 
     def shutdown(self, wait: bool = True):
-        self._executor.shutdown(wait=wait)
-        self._translation_executor.shutdown(wait=wait)
-        self._progressive_executor.shutdown(wait=wait)
+        with self._lock:
+            tasks = set(self._inflight_lemmas.values()) | set(self._inflight_trans.values()) | set(self._active_progressive_sessions.values())
+        errors = run_cleanup([lambda executor=executor: executor.shutdown(wait=wait)
+            for executor in (self._executor, self._translation_executor, self._progressive_executor)])
+        if wait:
+            errors.extend(run_cleanup([lambda task=task: task.result(timeout=0)
+                                       for task in tasks if not task.cancelled()]))
+            with self._lock:
+                errors.extend(self._progressive_failures)
+        if errors:
+            raise BaseExceptionGroup('Controller queue disposal failed', list({id(error): error for error in errors}.values()))
 
 
 def to_one_based_sentence_map(raw, single_unit=False) -> Tuple[Dict[int, str], Dict[int, str]]:
@@ -3056,11 +3092,6 @@ def generate_server_zid(server) -> str:
     return f"{now:%Y%m%d%H%M%S}-{seq:04d}"
 
 
-class ControllerHTTPServer(ThreadingHTTPServer):
-    def service_actions(self):
-        EventDispatcher.get_instance().prune_polling_clients()
-
-
 class ControllerRequestHandler(BaseHTTPRequestHandler):
     """
     Central Controller daemon request handler supporting REST API, process supervision,
@@ -3281,7 +3312,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._send_error_json(500, ErrorCode.SERVER_ERROR, f"Internal server error: {e}")
 
     def _event_dispatcher(self):
-        return EventDispatcher.get_instance()
+        return getattr(self.server, 'streams', None) or EventDispatcher.get_instance()
 
     def _handle_sse_events(self, zid: str):
         """Streams Server-Sent Events (SSE) for the specified session ZID."""
@@ -3298,7 +3329,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             init_data = json.dumps({"type": "connected", "session_zid": zid, "time": time.time()})
             self.wfile.write(f"data: {init_data}\n\n".encode('utf-8'))
             self.wfile.flush()
-            while True:
+            stopping = getattr(dispatcher, 'stopping', None)
+            while stopping is None or not stopping.is_set():
                 try:
                     event = q.get(timeout=10.0)
                     msg = f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -5679,17 +5711,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             req_zid = generate_server_zid(self.server)
             self._send_json(200, {"zid": req_zid, "message": "Shutting down controller and sidecars."})
 
-            def shutdown_server():
-                time.sleep(0.1)
-                try:
-                    if hasattr(self.server, 'supervisor'):
-                        self.server.supervisor.stop()
-                    self.server.shutdown()
-                    self.server.server_close()
-                except Exception as e:
-                    logger.error(f"Error during controller shutdown: {e}")
-
-            threading.Thread(target=shutdown_server, daemon=True).start()
+            self.server.request_shutdown()
             return
 
         raise StructuredError(ErrorCode.NOT_FOUND, f"Unknown API endpoint: {path}")
@@ -5699,66 +5721,82 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 # Controller Entrypoint & Subcommand
 # ---------------------------------------------------------------------------
 def run_controller(args=None):
-    config_path = getattr(args, 'config', None) if args else None
+    config_path = getattr(args, 'config', None)
     config, resolved_paths, goldendict, _wordfill = load_config(config_path)
 
     enabled = goldendict.get('server_enabled', True)
     if not enabled:
         raise StructuredError(ErrorCode.CONFIGURATION_ERROR, "Controller is disabled in config.ini ([server] enabled = false)")
 
-    host = getattr(args, 'host', None) if args else None
-    if not host:
-        host = goldendict.get('server_host', '127.0.0.1')
+    host, port = _controller_binding(args, config, goldendict)
 
-    port = getattr(args, 'port', None) if args else None
-    if not port:
+    server = ControllerHTTPServer((host, port), ControllerRequestHandler)
+    with _controller_runtime(server):
+        _initialize_controller(server, config, resolved_paths, goldendict, _wordfill, args)
+        startup_zid = generate_unique_zid()
+        logger.info(f"Kardenwort Controller Daemon started on {host}:{server.server_port} (ZID: {startup_zid})")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            logger.info("Controller stopped by KeyboardInterrupt.")
+
+
+def _controller_binding(args, config, goldendict):
+    host = getattr(args, 'host', None) or goldendict.get('server_host', '127.0.0.1')
+    port = getattr(args, 'port', None)
+    if port is None:
         port = config.getint('server', 'controller_port', fallback=config.getint('server', 'port', fallback=goldendict.get('server_port', 18335)))
-
     if host not in ('127.0.0.1', 'localhost', '::1'):
         raise StructuredError(ErrorCode.CONFIGURATION_ERROR, f"Controller host must be loopback (127.0.0.1). Specified: {host}")
+    return host, port
 
-    ThreadingHTTPServer.request_queue_size = 64
-    server = ControllerHTTPServer((host, port), ControllerRequestHandler)
-    server.allow_reuse_address = True
-    server.daemon_threads = True
+
+def _initialize_controller(server, config, resolved_paths, goldendict, wordfill, args):
     server.disable_nagle_algorithm = True
-
     server.config = config
     server.resolved_paths = resolved_paths
     server.goldendict = goldendict
-    server.wordfill_cfg = _wordfill
+    server.wordfill_cfg = wordfill
     refresh_preferences(config, resolved_paths)
     server.ui_cfg = resolve_ui_config(config)
     server.api_key = goldendict.get('server_api_key', '')
     server.seq_counter = 0
     server.seq_lock = threading.Lock()
     server.start_time = time.time()
-    server.server_port = port
-
-    # Initialize in-memory SessionArbiter
-    server.arbiter = SessionArbiter(config, resolved_paths, wordfill_cfg=_wordfill)
+    server.arbiter = SessionArbiter(config, resolved_paths, wordfill_cfg=wordfill)
     server.arbiter.goldendict = goldendict
-
-    # Initialize & start sidecar supervisor
-    enable_supervisor = not (getattr(args, 'no_sidecars', False) if args else False)
+    enable_supervisor = not getattr(args, 'no_sidecars', False)
     server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=enable_supervisor)
     if enable_supervisor:
         server.supervisor.start()
 
-    startup_zid = generate_unique_zid()
-    logger.info(f"Kardenwort Controller Daemon started on {host}:{port} (ZID: {startup_zid})")
 
+def _controller_cleanup(server):
+    actions = [server.server_close, server.finish_shutdown]
+    arbiter = getattr(server, 'arbiter', None)
+    if arbiter is not None:
+        actions.extend([arbiter.enrichment_queue.shutdown,
+                        lambda: unregister_failover_callback(arbiter._on_global_failover)])
+    supervisor = getattr(server, 'supervisor', None)
+    if supervisor is not None:
+        actions.append(supervisor.stop)
+    return run_cleanup(actions)
+
+
+@contextmanager
+def _controller_runtime(server):
+    failure = None
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        logger.info("Controller stopped by KeyboardInterrupt.")
+        yield server
+    except BaseException as error:
+        failure = error
+        raise
     finally:
-        try:
-            if hasattr(server, 'supervisor'):
-                server.supervisor.stop()
-            server.server_close()
-        except Exception:
-            pass
+        errors = _controller_cleanup(server)
+        if errors:
+            if failure is not None:
+                errors.insert(0, failure)
+            raise BaseExceptionGroup('Controller lifecycle failed', errors)
 
 
 if __name__ == "__main__":

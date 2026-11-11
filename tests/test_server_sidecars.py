@@ -1,5 +1,5 @@
 from tests.browser_test_server import create_browser_test_server, _BrowserTestHTTPServer
-from tests.thread_support import Worker, wait_for_http
+from tests.thread_support import Worker, wait_for_http, finish_workers
 import sys
 import os
 import json
@@ -11,7 +11,6 @@ import urllib.error
 import configparser
 import pytest
 from pathlib import Path
-from http.server import ThreadingHTTPServer
 
 import kardenwort_desk
 from kardenwort_controller import (
@@ -25,10 +24,6 @@ from http_server import (
 )
 
 
-def get_free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +118,7 @@ def test_http_server_health_with_supervisor():
 # ---------------------------------------------------------------------------
 # 3. Shutdown & Clean Teardown Lifecycle Tests
 # ---------------------------------------------------------------------------
-def test_http_server_shutdown_lifecycle():
+def test_http_server_shutdown_lifecycle(monkeypatch):
     desk_dir = Path(__file__).resolve().parent.parent
     config, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
 
@@ -141,13 +136,16 @@ def test_http_server_shutdown_lifecycle():
     server.seq_lock = threading.Lock()
 
     stopped_flag = [False]
-    class MockSupervisor:
-        def get_service_status(self):
-            return {"mock": {"port": 1234, "healthy": True}}
-        def stop(self):
-            stopped_flag[0] = True
+    server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
+    original_close = WindowsJobObject.close
 
-    server.supervisor = MockSupervisor()
+    def observed_close(job):
+        result = original_close(job)
+        if job is server.supervisor.job:
+            stopped_flag[0] = True
+        return result
+
+    monkeypatch.setattr(WindowsJobObject, 'close', observed_close)
 
     server_thread = server.start()
 
@@ -326,12 +324,11 @@ def test_simulated_swarm_concurrent_translation_requests():
     from translate_server import TranslationHTTPServer, TranslationRequestHandler
     from unittest.mock import patch
 
-    server = TranslationHTTPServer(("127.0.0.1", 0), TranslationRequestHandler,
-                                   google_delay=0.01, google_concurrency=2,
-                                   cache_size=1000, enable_cache=True)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    from tests.controller_test_support import OwnedTranslationServer
+    server = create_browser_test_server(TranslationRequestHandler, OwnedTranslationServer,
+        google_delay=0.01, google_concurrency=2, cache_size=1000, enable_cache=True)
+    port = server.server_port
+    server.start()
 
     server_url = f"http://127.0.0.1:{port}"
 
@@ -364,11 +361,8 @@ def test_simulated_swarm_concurrent_translation_requests():
                 except Exception as e:
                     errors.append(e)
 
-            threads = [threading.Thread(target=worker_task, args=(i,)) for i in range(num_requests)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join(timeout=5.0)
+            workers = [Worker(lambda index=index: worker_task(index)) for index in range(num_requests)]
+            finish_workers(workers)
 
         assert len(errors) == 0
         assert len(results) == num_requests
@@ -385,18 +379,14 @@ def test_simulated_swarm_concurrent_translation_requests():
 # ---------------------------------------------------------------------------
 # 7. Unified Controller Delegation & Session Status Test (Task 3.2)
 # ---------------------------------------------------------------------------
-def test_cmd_server_launches_supervisor_and_serves_session_endpoints():
+def test_cmd_server_launches_supervisor_and_serves_session_endpoints(tmp_path, monkeypatch):
     """
     Verify cmd_server starts the unified controller daemon with ProcessSupervisor,
     registers /session/status and /session/queue/status, and shuts down cleanly.
     """
-    port = get_free_port()
-    args = DummyArgs(port=port, no_sidecars=True)
-
-    server_worker = Worker(lambda: cmd_server(args))
-    server_thread = server_worker.thread
-
-    try:
+    from tests.test_controller_lifetime import real_controller
+    with real_controller(tmp_path, monkeypatch, entrypoint=cmd_server) as (server, server_worker, port):
+        server_thread = server_worker.thread
         wait_for_http(f"http://127.0.0.1:{port}/api/v1/health", server_thread.is_alive)
         # 1. Health probe includes status, services map, and controller info
         health_req = urllib.request.Request(f"http://127.0.0.1:{port}/api/v1/health")
@@ -419,9 +409,7 @@ def test_cmd_server_launches_supervisor_and_serves_session_endpoints():
             assert qdata.get("status") == "success"
 
         # 3. Session status query is active (returns 404 for unknown ZID rather than unknown route)
-        desk_dir = Path(__file__).resolve().parent.parent
-        cfg, _, _, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
-        api_token = cfg.get("server", "api_key", fallback="")
+        api_token = server.api_key
         non_existent_zid = f"999999{kardenwort_desk.generate_unique_zid()[6:]}"
         status_req = urllib.request.Request(f"http://127.0.0.1:{port}/session/status?zid={non_existent_zid}",
                                           headers={"X-API-Token": api_token})
@@ -439,18 +427,4 @@ def test_cmd_server_launches_supervisor_and_serves_session_endpoints():
             assert resp.status == 200
 
         server_worker.result(timeout=3.0)
-    except Exception:
-        # Fallback shutdown attempt
-        try:
-            shut_req = urllib.request.Request(
-                f"http://127.0.0.1:{port}/api/v1/shutdown",
-                data=json.dumps({}).encode('utf-8'),
-                headers={"Content-Type": "application/json"}
-            )
-            urllib.request.urlopen(shut_req, timeout=1.0)
-        except Exception:
-            pass
-        raise
-
-
 

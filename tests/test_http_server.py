@@ -1,10 +1,13 @@
 import os
 import json
-import time
 import urllib.request
 import urllib.error
 import subprocess
 import unittest
+from contextlib import ExitStack
+import tempfile
+from tests.controller_test_support import owned_configuration, translation_service, token_service, DeterministicTranslationHandler
+from kardenwort_controller_lifetime import stop_owned_process
 from tests.thread_support import wait_for_http
 from pathlib import Path
 
@@ -17,21 +20,19 @@ TEST_TOKEN = "test-secret-token-12345"
 class TestHTTPServer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.disabled_config = DESK_DIR / ".test_disabled_config.ini"
-        with open(DESK_DIR / "config.ini", "r", encoding="utf-8") as f:
-            base_cfg = f.read()
-        import re
-        disabled_content = re.sub(r'enabled\s*=\s*true', 'enabled = false', base_cfg, flags=re.IGNORECASE)
-        with open(cls.disabled_config, "w", encoding="utf-8") as f:
-            f.write(disabled_content)
-
-    @classmethod
-    def tearDownClass(cls):
-        if cls.disabled_config.exists():
-            try:
-                os.remove(cls.disabled_config)
-            except OSError:
-                pass
+        resources = ExitStack()
+        cls.addClassCleanup(resources.close)
+        owner = Path(resources.enter_context(tempfile.TemporaryDirectory()))
+        config, paths, _ = owned_configuration(owner, '', 'sqlite')
+        config.set('settings', 'anki_mapping_file', str(paths['anki_mapping_file']))
+        config.set('server', 'enabled', 'true')
+        cls.enabled_config = owner / 'enabled.ini'
+        with cls.enabled_config.open('w', encoding='utf-8') as stream:
+            config.write(stream)
+        config.set('server', 'enabled', 'false')
+        cls.disabled_config = owner / 'disabled.ini'
+        with cls.disabled_config.open('w', encoding='utf-8') as stream:
+            config.write(stream)
 
     def test_01_server_disabled_exit(self):
         """Verify server subcommand exits with non-zero code when enabled = false."""
@@ -47,7 +48,7 @@ class TestHTTPServer(unittest.TestCase):
     def test_02_server_non_loopback_rejected(self):
         """Verify server refuses to bind to non-loopback host."""
         proc = subprocess.run(
-            [PYTHON_EXE, str(DESK_DIR / "kardenwort_desk.py"), "server", "--host", "192.168.1.1"],
+            [PYTHON_EXE, str(DESK_DIR / "kardenwort_desk.py"), "--config", str(self.enabled_config), "server", "--host", "192.168.1.1"],
             cwd=str(DESK_DIR),
             capture_output=True,
             text=True
@@ -59,45 +60,30 @@ class TestHTTPServer(unittest.TestCase):
 class TestHTTPServerRunning(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        import tempfile
+        resources = ExitStack()
+        cls.addClassCleanup(resources.close)
         cls.test_dir = tempfile.TemporaryDirectory()
-        test_dir_p = Path(cls.test_dir.name)
-        test_db_p = (test_dir_p / "test_kardenwort.db").resolve()
-        test_res_p = (test_dir_p / "results").resolve()
-        test_res_p.mkdir(parents=True, exist_ok=True)
-
-        cls.running_config = DESK_DIR / ".test_running_config.ini"
-        with open(DESK_DIR / "config.ini", "r", encoding="utf-8") as f:
-            base_cfg = f.read()
-        import re
-        running_content = re.sub(r'enabled\s*=\s*false', 'enabled = true', base_cfg, flags=re.IGNORECASE)
-        running_content = re.sub(r'api_key\s*=.*', f'api_key = {TEST_TOKEN}', running_content)
-        running_content = re.sub(r'port\s*=.*', f'port = {TEST_PORT}', running_content)
-        running_content = re.sub(r'sqlite_db_path\s*=.*', f'sqlite_db_path = {test_db_p.as_posix()}', running_content)
-        running_content = re.sub(r'results_dir\s*=.*', f'results_dir = {test_res_p.as_posix()}', running_content)
-        with open(cls.running_config, "w", encoding="utf-8") as f:
-            f.write(running_content)
-
+        owner = Path(resources.enter_context(cls.test_dir))
+        translator = resources.enter_context(translation_service(DeterministicTranslationHandler))
+        tokenizer = resources.enter_context(token_service())
+        config, paths, _ = owned_configuration(owner, f'http://127.0.0.1:{translator.server_port}', 'sqlite')
+        config.read_dict({
+            'settings': {'anki_mapping_file': str(paths['anki_mapping_file'])},
+            'server': {'enabled': 'true', 'api_key': TEST_TOKEN, 'port': str(TEST_PORT), 'controller_port': str(TEST_PORT)},
+            'storage': {'sqlite_db_path': str(owner / 'test_kardenwort.db')},
+            'services': {'spacy_server_url': f'http://127.0.0.1:{tokenizer.server_port}'},
+            'goldendict': {'run_intellifiller': 'false'},
+            'wordfill': {'enabled': 'false'},
+            'triggers': {'run_lemma_enrichment': 'manual'}})
+        cls.running_config = owner / 'running.ini'
+        with cls.running_config.open('w', encoding='utf-8') as stream:
+            config.write(stream)
         cls.server_proc = subprocess.Popen(
-            [PYTHON_EXE, str(DESK_DIR / "kardenwort_desk.py"), "--config", str(cls.running_config), "server", "--port", str(TEST_PORT), "--no-sidecars"],
-            cwd=str(DESK_DIR)
-        )
+            [PYTHON_EXE, str(DESK_DIR / "kardenwort_desk.py"), "--config", str(cls.running_config),
+             "server", "--port", str(TEST_PORT), "--no-sidecars"], cwd=str(DESK_DIR),
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        resources.callback(stop_owned_process, cls.server_proc)
         wait_for_http(f'http://127.0.0.1:{TEST_PORT}/api/v1/health', lambda: cls.server_proc.poll() is None)
-
-    @classmethod
-    def tearDownClass(cls):
-        try:
-            cls.server_proc.terminate()
-            cls.server_proc.wait(timeout=2)
-        except Exception:
-            pass
-        if cls.running_config.exists():
-            try:
-                os.remove(cls.running_config)
-            except OSError:
-                pass
-        if hasattr(cls, 'test_dir'):
-            cls.test_dir.cleanup()
 
     def test_03_health_endpoint(self):
         url = f"http://127.0.0.1:{TEST_PORT}/api/v1/health"

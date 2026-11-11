@@ -131,7 +131,8 @@
             indicator = document.createElement('span');
             indicator.id = 'sse-status-indicator';
             indicator.className = 'kw-sse-status';
-            (header || document.body).appendChild(indicator);
+            var tabs = document.querySelector('.kw-workspace-tab-bar .kw-tab-track');
+            (header || (tabs && tabs.parentNode) || document.body).appendChild(indicator);
         }
 
         if (indicator) {

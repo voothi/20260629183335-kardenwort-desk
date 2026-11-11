@@ -1,3 +1,4 @@
+from kardenwort_controller import _controller_runtime
 from tests.browser_test_server import create_browser_test_server
 import json
 import queue
@@ -24,32 +25,30 @@ def controller_server():
     desk_dir = Path(__file__).resolve().parent.parent
     config, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
 
-    server = create_browser_test_server(ControllerRequestHandler)
-    port = server.server_port
-    server.allow_reuse_address = True
-    server.daemon_threads = False
-    server.disable_nagle_algorithm = True
+    with _controller_runtime(create_browser_test_server(ControllerRequestHandler)) as server:
+        port = server.server_port
+        server.allow_reuse_address = True
+        server.daemon_threads = False
+        server.disable_nagle_algorithm = True
 
-    server.config = config
-    server.resolved_paths = resolved_paths
-    server.goldendict = goldendict
-    server.api_key = "test-api-key"
-    server.server_port = port
-    server.seq_counter = 0
-    server.seq_lock = threading.Lock()
-    server.start_time = time.time()
+        server.config = config
+        server.resolved_paths = resolved_paths
+        server.goldendict = goldendict
+        server.api_key = "test-api-key"
+        server.server_port = port
+        server.seq_counter = 0
+        server.seq_lock = threading.Lock()
+        server.start_time = time.time()
 
-    server.arbiter = SessionArbiter(config, resolved_paths)
-    server.arbiter.goldendict = goldendict
-    server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
+        server.arbiter = SessionArbiter(config, resolved_paths)
+        server.arbiter.goldendict = goldendict
+        server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
 
-    server.start()
+        server.start()
 
-    server_url = f"http://127.0.0.1:{port}"
-    yield server_url, server
+        server_url = f"http://127.0.0.1:{port}"
+        yield server_url, server
 
-    server.shutdown()
-    server.server_close()
 
 
 def test_session_arbiter_delegates_to_event_dispatcher():

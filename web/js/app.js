@@ -9127,7 +9127,7 @@
         function projectRecoveryRetry(indicator, status, header) {
             indicator.hidden = !header && status !== 'failed';
             if (status === 'failed') {
-                if (!header) indicator.textContent = 'Sync failed - retry';
+                if (!header) indicator.textContent = indicator.parentNode.classList.contains('kw-workspace-tab-bar') ? '!' : 'Sync failed - retry';
                 indicator.setAttribute('role', 'button');
                 indicator.setAttribute('tabindex', '0');
                 indicator.setAttribute('aria-label', 'Retry session synchronization');
@@ -9149,7 +9149,8 @@
                 indicator = document.createElement('span');
                 indicator.id = 'sse-status-indicator';
                 indicator.className = 'kw-sse-status';
-                (header || document.body).appendChild(indicator);
+                var tabs = document.querySelector('.kw-workspace-tab-bar .kw-tab-track');
+                (header || (tabs && tabs.parentNode) || document.body).appendChild(indicator);
             }
             if (status) {
                 indicator.setAttribute('data-sync', status);

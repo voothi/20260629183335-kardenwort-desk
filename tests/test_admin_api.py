@@ -1,3 +1,4 @@
+from kardenwort_controller import _controller_runtime
 from tests.browser_test_server import create_browser_test_server
 from tests.controller_test_support import token_service, translation_service, DeterministicTranslationHandler
 import os
@@ -65,34 +66,31 @@ def admin_controller_server(tmp_path_factory):
         child_proj_id = db.create_project(title="Chapter 1", slug="chapter-1", parent_id=root_proj_id)
         db.link_session_to_project(child_proj_id, sess_zid)
 
-        server = create_browser_test_server(ControllerRequestHandler)
-        port = server.server_port
-        server.allow_reuse_address = True
-        server.daemon_threads = False
-        server.disable_nagle_algorithm = True
+        with _controller_runtime(create_browser_test_server(ControllerRequestHandler)) as server:
+            port = server.server_port
+            server.allow_reuse_address = True
+            server.daemon_threads = False
+            server.disable_nagle_algorithm = True
 
-        server.config = config
-        server.resolved_paths = resolved_paths
-        server.goldendict = goldendict
-        server.api_key = "admin-secret-token"
-        config.read_dict({"server": {"api_key": server.api_key, "port": str(port), "controller_port": str(port)}})
-        server.seq_counter = 0
-        server.seq_lock = threading.Lock()
-        server.start_time = time.time()
-        server.server_port = port
+            server.config = config
+            server.resolved_paths = resolved_paths
+            server.goldendict = goldendict
+            server.api_key = "admin-secret-token"
+            config.read_dict({"server": {"api_key": server.api_key, "port": str(port), "controller_port": str(port)}})
+            server.seq_counter = 0
+            server.seq_lock = threading.Lock()
+            server.start_time = time.time()
+            server.server_port = port
 
-        server.arbiter = SessionArbiter(config, resolved_paths)
-        server.arbiter.goldendict = goldendict
-        server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
+            server.arbiter = SessionArbiter(config, resolved_paths)
+            server.arbiter.goldendict = goldendict
+            server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
 
-        server.start()
+            server.start()
 
-        server_url = f"http://127.0.0.1:{port}"
-        yield server_url, server, db, root_proj_id, child_proj_id, sess_zid
+            server_url = f"http://127.0.0.1:{port}"
+            yield server_url, server, db, root_proj_id, child_proj_id, sess_zid
 
-        server.shutdown()
-        server.server_close()
-        server.arbiter.enrichment_queue.shutdown(wait=True)
 
 
 def make_admin_request(url, path, method="GET", body=None, token="admin-secret-token", timeout=15.0):

@@ -98,10 +98,27 @@ body > #sse-status-indicator[data-sync="failed"] {
     top: 16px;
     right: 16px;
     z-index: 1000;
+}
+
+#sse-status-indicator[data-sync="failed"] {
     background: var(--bg-secondary);
     color: var(--text-main);
     border-color: var(--status-error, #f85149);
     cursor: pointer;
+}
+
+.kw-workspace-tab-bar > #sse-status-indicator {
+    flex: 0 0 24px;
+    box-sizing: border-box;
+    width: 24px;
+    height: 26px;
+    padding: 0;
+    justify-content: center;
+}
+
+.kw-workspace-tab-bar > #sse-status-indicator[hidden] {
+    display: inline-flex;
+    visibility: hidden;
 }
 
 .section,
@@ -1126,6 +1143,10 @@ body.theme-compact .kw-action-toolbar button:hover:not(:disabled),
     flex-direction: column;
     gap: 8px;
     pointer-events: none;
+}
+
+body.has-dock-bottom .kw-toast-container {
+    bottom: 95px;
 }
 
 .kw-toast {

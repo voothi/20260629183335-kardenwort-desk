@@ -8,7 +8,7 @@ import time
 import pytest
 
 import kardenwort_desk as desk
-from kardenwort_controller import ControllerRequestHandler, ProcessSupervisor, SessionArbiter
+from kardenwort_controller import ControllerRequestHandler, ProcessSupervisor, SessionArbiter, _controller_runtime
 from tests.browser_test_server import _BrowserTestHTTPServer, create_browser_test_server
 from tests.test_spacy_service import MockSpacyRequestHandler
 
@@ -96,9 +96,7 @@ def owned_configuration(owner, translation_url, backend):
 def controller_lifetime(owner, translator, backend='sqlite'):
     config, paths, goldendict = owned_configuration(
         owner, f'http://127.0.0.1:{translator.server_port}', backend)
-    server = create_browser_test_server(ControllerRequestHandler)
-    arbiter = None
-    try:
+    with _controller_runtime(create_browser_test_server(ControllerRequestHandler)) as server:
         server.config, server.resolved_paths, server.goldendict = config, paths, goldendict
         server.api_key = 'test-controller-api-key'
         config.set('server', 'api_key', server.api_key)
@@ -112,13 +110,6 @@ def controller_lifetime(owner, translator, backend='sqlite'):
         server.translation_service = translator
         server.start()
         yield f'http://127.0.0.1:{server.server_port}', server
-    finally:
-        try:
-            server.server_close()
-        finally:
-            if arbiter is not None and server.resources_stopped():
-                arbiter.enrichment_queue.shutdown(wait=True)
-                desk.unregister_failover_callback(arbiter._on_global_failover)
 
 
 @pytest.fixture

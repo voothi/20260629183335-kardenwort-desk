@@ -1,3 +1,5 @@
+from tests.controller_test_support import OwnedTranslationServer
+from kardenwort_controller import _controller_runtime
 from tests.browser_test_server import create_browser_test_server
 import sys
 import time
@@ -33,10 +35,9 @@ from translate_server import TranslationHTTPServer, TranslationRequestHandler
 
 @pytest.fixture(scope="module")
 def warm_argos_test_server():
-    server = TranslationHTTPServer(("127.0.0.1", 0), TranslationRequestHandler)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    server = create_browser_test_server(TranslationRequestHandler, OwnedTranslationServer)
+    port = server.server_port
+    server.start()
 
     server_url = f"http://127.0.0.1:{port}"
     yield server_url
@@ -141,32 +142,31 @@ def test_controller_health_endpoint_aggregates_argos_warmup(warm_argos_test_serv
     desk_dir = Path(__file__).resolve().parent.parent
     cfg, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
 
-    ctrl_server = create_browser_test_server(ControllerRequestHandler)
-    ctrl_server.allow_reuse_address = True
-    ctrl_server.daemon_threads = False
-    ctrl_server.config = cfg
-    ctrl_server.resolved_paths = resolved_paths
-    ctrl_server.goldendict = goldendict
-    ctrl_server.api_key = "test-warm-key"
-    ctrl_server.seq_counter = 0
-    ctrl_server.seq_lock = threading.Lock()
-    ctrl_port = ctrl_server.server_address[1]
+    with _controller_runtime(create_browser_test_server(ControllerRequestHandler)) as ctrl_server:
+        ctrl_server.allow_reuse_address = True
+        ctrl_server.daemon_threads = False
+        ctrl_server.config = cfg
+        ctrl_server.resolved_paths = resolved_paths
+        ctrl_server.goldendict = goldendict
+        ctrl_server.api_key = "test-warm-key"
+        ctrl_server.seq_counter = 0
+        ctrl_server.seq_lock = threading.Lock()
+        ctrl_port = ctrl_server.server_address[1]
 
-    # Create supervisor configured with the running test translation server port
-    supervisor = ProcessSupervisor(cfg, resolved_paths, enabled=False)
-    # Point supervisor's translation service to our active test server
-    supervisor.services["translation"].port = port
-    supervisor.services["translation"].host = "127.0.0.1"
+        # Create supervisor configured with the running test translation server port
+        supervisor = ProcessSupervisor(cfg, resolved_paths, enabled=False)
+        # Point supervisor's translation service to our active test server
+        supervisor.services["translation"].port = port
+        supervisor.services["translation"].host = "127.0.0.1"
 
-    # Probe the test server to populate health_data
-    probed = supervisor.probe_health(supervisor.services["translation"], timeout=2.0)
-    assert probed is True
-    assert supervisor.services["translation"].is_healthy is True
+        # Probe the test server to populate health_data
+        probed = supervisor.probe_health(supervisor.services["translation"], timeout=2.0)
+        assert probed is True
+        assert supervisor.services["translation"].is_healthy is True
 
-    ctrl_server.supervisor = supervisor
-    ctrl_server.start()
+        ctrl_server.supervisor = supervisor
+        ctrl_server.start()
 
-    try:
         url = f"http://127.0.0.1:{ctrl_port}/api/v1/health"
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=3.0) as resp:
@@ -182,6 +182,3 @@ def test_controller_health_endpoint_aggregates_argos_warmup(warm_argos_test_serv
             assert data["services"]["translation"]["argos"] in ("warm", "warming", "available")
             assert "models" in data
             assert data["models"]["argos"] in ("warm", "warming", "available")
-    finally:
-        ctrl_server.shutdown()
-        ctrl_server.server_close()

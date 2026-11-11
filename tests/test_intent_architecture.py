@@ -31,7 +31,19 @@ def test_repaired_sqlite_connection_and_migration_boundaries_meet_ceiling():
     assert max(measured.values()) <= 7, measured
 
 
-@pytest.mark.parametrize('name', ['kardenwort_alignment', 'kardenwort_delivery', 'kardenwort_events', 'kardenwort_configuration', 'kardenwort_grammar', 'kardenwort_theme', 'kardenwort_assets', 'kardenwort_render_preparation'])
+def test_controller_lifetime_slice_and_supervisor_functions_meet_ceiling():
+    tree = ast.parse((ROOT / 'kardenwort_controller.py').read_text(encoding='utf-8'))
+    names = {'run_controller', '_controller_binding', '_initialize_controller', '_controller_cleanup',
+             '_controller_runtime', '_start_monitor', '_supervision_loop', '_supervise_service',
+             'spawn_service', '_reuse_healthy_service', '_service_script_available', '_launch_service',
+             '_create_service_process', '_await_service_health',
+             '_join_monitor', '_stop_services', '_finish_progressive_task', 'stop', 'shutdown', 'close'}
+    measured = {node.name: complexity(node) for node in functions(tree) if node.name in names}
+    assert set(measured) == names
+    assert max(measured.values()) <= 7, measured
+
+
+@pytest.mark.parametrize('name', ['kardenwort_alignment', 'kardenwort_delivery', 'kardenwort_events', 'kardenwort_configuration', 'kardenwort_grammar', 'kardenwort_theme', 'kardenwort_assets', 'kardenwort_render_preparation', 'kardenwort_controller_lifetime'])
 def test_new_boundaries_have_no_backwards_shell_imports(name):
     tree = ast.parse((ROOT / (name + '.py')).read_text(encoding='utf-8'))
     imports = set()
@@ -45,7 +57,7 @@ def test_new_boundaries_have_no_backwards_shell_imports(name):
         assert not imports
 
 
-@pytest.mark.parametrize('name', ['kardenwort_alignment', 'kardenwort_delivery', 'kardenwort_events', 'kardenwort_configuration', 'kardenwort_grammar', 'kardenwort_theme', 'kardenwort_assets', 'kardenwort_render_preparation'])
+@pytest.mark.parametrize('name', ['kardenwort_alignment', 'kardenwort_delivery', 'kardenwort_events', 'kardenwort_configuration', 'kardenwort_grammar', 'kardenwort_theme', 'kardenwort_assets', 'kardenwort_render_preparation', 'kardenwort_controller_lifetime'])
 def test_new_boundary_complexity_ceiling(name):
     tree = ast.parse((ROOT / (name + '.py')).read_text(encoding='utf-8'))
     violations = {node.name: complexity(node) for node in functions(tree) if complexity(node) > 7}

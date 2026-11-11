@@ -1,3 +1,4 @@
+from kardenwort_controller import _controller_runtime
 from tests.browser_test_server import create_browser_test_server
 import os
 import sys
@@ -113,32 +114,30 @@ def tsv_test_controller_server(tmp_path_factory):
     ]
     db.save_session_bundle(session_data, sentences_data, words_data)
 
-    server = create_browser_test_server(ControllerRequestHandler)
-    port = server.server_port
-    server.allow_reuse_address = True
-    server.daemon_threads = False
-    server.disable_nagle_algorithm = True
+    with _controller_runtime(create_browser_test_server(ControllerRequestHandler)) as server:
+        port = server.server_port
+        server.allow_reuse_address = True
+        server.daemon_threads = False
+        server.disable_nagle_algorithm = True
 
-    server.config = config
-    server.resolved_paths = resolved_paths
-    server.goldendict = goldendict
-    server.api_key = "admin-test-token"
-    server.seq_counter = 0
-    server.seq_lock = threading.Lock()
-    server.start_time = time.time()
-    server.server_port = port
+        server.config = config
+        server.resolved_paths = resolved_paths
+        server.goldendict = goldendict
+        server.api_key = "admin-test-token"
+        server.seq_counter = 0
+        server.seq_lock = threading.Lock()
+        server.start_time = time.time()
+        server.server_port = port
 
-    server.arbiter = SessionArbiter(config, resolved_paths)
-    server.arbiter.goldendict = goldendict
-    server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
+        server.arbiter = SessionArbiter(config, resolved_paths)
+        server.arbiter.goldendict = goldendict
+        server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=False)
 
-    server.start()
+        server.start()
 
-    server_url = f"http://127.0.0.1:{port}"
-    yield server_url, server, db, sample_zid
+        server_url = f"http://127.0.0.1:{port}"
+        yield server_url, server, db, sample_zid
 
-    server.shutdown()
-    server.server_close()
 
 
 def make_request(url, path, method="GET", body=None, token="admin-test-token", raw_body=None, content_type="application/json"):

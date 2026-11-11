@@ -68,11 +68,8 @@ def transport_frame(trace):
             or frame.filename.endswith('socketserver.py') and frame.name == 'write')
 
 
-def idle_peer_close(error, trace):
-    if not isinstance(error, ConnectionAbortedError):
-        return False
-    return any(frame.name == 'handle_one_request' and 'self.rfile.readline' in (frame.line or '')
-               for frame in traceback.extract_tb(trace))
+def peer_transport_close(error, trace):
+    return isinstance(error, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)) and transport_frame(trace)
 
 
 def shutdown_transport_error(error, trace):
@@ -131,7 +128,7 @@ class _BrowserTestHTTPServer(ThreadingHTTPServer):
         with self.lock:
             cancelled = request in self.cancelled_connections
             transport_close = cancelled and shutdown_transport_error(error, trace)
-            destination = self.expected_disconnects if idle_peer_close(error, trace) or transport_close else self.errors
+            destination = self.expected_disconnects if peer_transport_close(error, trace) or transport_close else self.errors
             destination.append(error)
 
     def serve_forever(self, poll_interval=.02):
@@ -148,6 +145,31 @@ class _BrowserTestHTTPServer(ThreadingHTTPServer):
         assert self.serving.wait(CLEANUP_SECONDS), 'Owned HTTP listener did not start'
         return thread
 
+    def request_shutdown(self):
+        def stop():
+            try:
+                if getattr(self, 'supervisor', None) is not None:
+                    self.supervisor.stop()
+                self.shutdown()
+                self.server_close()
+            except BaseException as error:
+                self.shutdown_error = error
+        with self.lock:
+            if getattr(self, 'shutdown_worker', None) is not None:
+                return
+            self.shutdown_error = None
+            self.shutdown_worker = threading.Thread(target=stop)
+            self.shutdown_worker.start()
+
+    def finish_shutdown(self):
+        worker = getattr(self, 'shutdown_worker', None)
+        if worker is None or worker is threading.current_thread():
+            return
+        worker.join(CLEANUP_SECONDS)
+        assert not worker.is_alive(), 'Owned shutdown worker did not terminate'
+        if self.shutdown_error is not None:
+            raise self.shutdown_error
+
     def cancel_connection(self, connection):
         with self.lock:
             self.cancelled_connections.add(connection)
@@ -162,6 +184,7 @@ class _BrowserTestHTTPServer(ThreadingHTTPServer):
 
     def server_close(self):
         if self.closed:
+            self.finish_shutdown()
             return
         self.closed = True
         deadline = monotonic() + CLEANUP_SECONDS
@@ -179,6 +202,7 @@ class _BrowserTestHTTPServer(ThreadingHTTPServer):
         super().server_close()
         self.check_closed(deadline)
         self.closed_event.set()
+        self.finish_shutdown()
 
     def check_closed(self, deadline):
         live = [worker.name for worker in self.workers if worker.is_alive()]

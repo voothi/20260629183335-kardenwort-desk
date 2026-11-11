@@ -14,13 +14,14 @@ import kardenwort_desk
 from tests.test_controller_integration import running_controller  # noqa: F401
 
 
-def audit_html(tmp_path, module=kardenwort_desk, theme="dark", container=False):
+def audit_html(tmp_path, module=kardenwort_desk, theme="dark", container=False, dock="top"):
     config, paths, _, _ = module.load_config()
     config.set("storage", "backend", "tsv")
     config.set("server", "api_key", "test-controller-api-key")
     paths["storage_backend"] = "tsv"
     config.set("sentences_mode", "enabled", "true" if container else "false")
     config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "tab_bar_position", dock)
     config.set("rendering", "filter_selected_only", "false")
     config.set("rendering", "highlight_same_lemma", "false")
     config.set("rendering", "auto_save_on_edit", "false")

@@ -12574,6 +12574,7 @@ html, body {{
             '<button type="button" class="kw-tab-nav kw-tab-nav-prev" id="kw-tab-prev" title="Scroll Left (Shift+Wheel)">&lt;</button>'
             f'<div class="kw-tab-track" id="kw-tab-track">{"".join(chips)}</div>'
             '<button type="button" class="kw-tab-nav kw-tab-nav-next" id="kw-tab-next" title="Scroll Right (Shift+Wheel)">&gt;</button>'
+            '<span id="sse-status-indicator" class="kw-sse-status" aria-live="polite" hidden></span>'
             '</div>'
         )
     else:
