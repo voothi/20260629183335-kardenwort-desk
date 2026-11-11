@@ -2,6 +2,7 @@ import pytest
 from pathlib import Path
 import json
 import re
+import os
 import kardenwort_desk
 
 def get_base_html():
@@ -135,7 +136,8 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
     return cfg_inject + js
 
 def extract_mvp_js():
-    ahk_path = Path(__file__).parents[2] / "20240411110510-autohotkey" / "kardenwort-window" / "kardenwort-window.ahk"
+    native = Path(os.environ.get('KARDENWORT_NATIVE_REPO', Path(__file__).parents[2] / '20240411110510-autohotkey'))
+    ahk_path = native / 'kardenwort-window' / 'kardenwort-window.ahk'
     if not ahk_path.exists():
         return ""
     ahk_content = ahk_path.read_text(encoding="utf-8")
@@ -562,6 +564,7 @@ def test_pending_stub_preservation_and_smooth_update(page, tmp_path):
 
 
 def test_progressive_skeleton_auto_resolution_polling(page, tmp_path):
+    from tests.render_test_support import seed_render_tsv
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
     tsv_file = tmp_path / "20260826235959-skel.de.tsv"
     tsv_file.write_text(
@@ -570,6 +573,7 @@ def test_progressive_skeleton_auto_resolution_polling(page, tmp_path):
         "Haus\tHaus\tдом\t1\tDas Haus\tДом\t\n",
         encoding="utf-8"
     )
+    seed_render_tsv(config,resolved_paths,tsv_file,'20260826235959','Das Haus','de')
     html_page = kardenwort_desk.run_render_flow(
         text="Das Haus",
         language="de",
@@ -1172,6 +1176,7 @@ def test_german_contraction_deduplicated_merged_row_audio_playback(page):
 
 
 def test_render_flow_ordered_manifest_rows(tmp_path):
+    from tests.render_test_support import seed_render_tsv
     import configparser
     import kardenwort_desk
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
@@ -1185,6 +1190,9 @@ def test_render_flow_ordered_manifest_rows(tmp_path):
     tsv_file = tmp_path / "20260816005700-test-ordered.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config,resolved_paths,tsv_file,'20260816005700',source_text,'en')
+    config.set('pipeline','progressive_text_translation','false')
+    config.set('rendering','display_mode','monolithic')
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",

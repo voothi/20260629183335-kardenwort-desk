@@ -1,5 +1,6 @@
 import sys
 import kardenwort_reword as reword
+from kardenwort_alignment import display_sentence_text
 from kardenwort_theme import resolve_theme_colors, theme_style
 
 import argparse
@@ -10627,13 +10628,13 @@ html, body {{
             )
 
     if is_mismatch:
-        working_tsv_path = str(extract_zid(tsv_path) or zid) if is_sqlite else (Path(tsv_path) if tsv_path else results_dir / f"{zid}-{slug}.{language}.tsv")
+        working_tsv_path = str(extract_zid(tsv_path) if tsv_path else zid) if is_sqlite else (Path(tsv_path) if tsv_path else results_dir / f"{zid}-{slug}.{language}.tsv")
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file']) if (resolved_paths and 'anki_mapping_file' in resolved_paths) else {}
         comments = []
         headers = ["WordSource", "WordDestination", "WordSourceInflectedForm", "WordSourceIPA", "WordSourceMorphologyAI", "DeskSelected"]
         data_rows = []
     elif (tsv_path and (Path(tsv_path).exists() or is_sqlite)) or (is_sqlite and session_exists_in_storage):
-        working_tsv_path = str(extract_zid(tsv_path) or zid) if is_sqlite else (Path(tsv_path) if tsv_path else results_dir / f"{zid}-{slug}.{language}.tsv")
+        working_tsv_path = str(extract_zid(tsv_path) if tsv_path else zid) if is_sqlite else (Path(tsv_path) if tsv_path else results_dir / f"{zid}-{slug}.{language}.tsv")
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
     elif cached_session_bundle and cached_session_bundle.get("session"):
@@ -12622,10 +12623,7 @@ html, body {{
     clean_sentence_trans = ""
     if not is_mismatch:
         if isinstance(sentence_translations, dict):
-            clean_sentence_trans = " ".join(
-                t.strip() for t in sentence_translations.values()
-                if t and t.strip() and t.strip() != "[FAILED]" and not t.strip().startswith("[Error")
-            )
+            clean_sentence_trans = display_sentence_text(sentence_translations)
         elif sentence_translations:
             st = str(sentence_translations).strip()
             if st != "[FAILED]" and not st.startswith("[Error"):

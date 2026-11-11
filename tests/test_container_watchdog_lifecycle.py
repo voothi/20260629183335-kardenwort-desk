@@ -129,7 +129,7 @@ def test_incident_reproduction_container_starts_watchdog_from_sibling_skeletons(
     assert page.evaluate("window.__sseConnectCount") == 1
 
     # Status request dispatched within 2 seconds
-    page.wait_for_timeout(500)
+    page.wait_for_function('window.__statusQueries.length >= 1', timeout=2000)
     assert page.evaluate("window.__statusQueries.length >= 1") is True
     assert page.evaluate("window.__statusQueries[0].url.indexOf('/session/status') !== -1") is True
 
@@ -378,7 +378,7 @@ def test_probe_zero_pending_container_page(page):
     }""")
     page.evaluate(extract_desk_js())
 
-    page.wait_for_timeout(300)
+    page.wait_for_function('window.__probeCalls === 1 && !window._kwSkeletonPollTimer', timeout=2000)
     assert page.evaluate("window.__probeCalls") == 1
     assert page.evaluate("!window._kwSkeletonPollTimer") is True
 
@@ -402,7 +402,7 @@ def test_probe_zero_pending_container_page(page):
     }""")
     page.evaluate(extract_desk_js())
 
-    page.wait_for_timeout(300)
+    page.wait_for_function('window.__probeCalls >= 1 && window._kwSkeletonPollTimer !== null', timeout=2000)
     assert page.evaluate("window.__probeCalls >= 1") is True
     assert page.evaluate("window._kwSkeletonPollTimer !== null") is True
 

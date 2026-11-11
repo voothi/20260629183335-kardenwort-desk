@@ -1,10 +1,14 @@
 import pytest
+from tests.render_test_support import seed_render_tsv
+from tests.toolbar_test_support import component_page as page
+from tests.controller_test_support import controller_world
 import kardenwort_desk
 from kardenwort_desk import SEC_RENDERING
 
 
 def test_reword_delta_preserves_occurrence_filtered_view(page, tmp_path):
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({"rendering":{"display_mode":"monolithic"}, "pipeline":{"progressive_text_translation":"false"}})
     raw_sentence = (
         "Er fängt heute mit der Arbeit an, die ihm gefällt, "
         "weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde."
@@ -16,6 +20,7 @@ def test_reword_delta_preserves_occurrence_filtered_view(page, tmp_path):
     tsv_file = tmp_path / "20261004160000-test.de.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20261004160000', raw_sentence, 'de', text_mode='single')
     html_out = kardenwort_desk.run_render_flow(
         text=raw_sentence,
         language="de",
@@ -28,8 +33,9 @@ def test_reword_delta_preserves_occurrence_filtered_view(page, tmp_path):
         return_children=False,
     )
 
+    html_out = html_out.replace("<head>", '<head><script>window.API_TOKEN="secret-test-token-42";</script>')
     page.set_content(html_out)
-    page.wait_for_timeout(150)
+    page.wait_for_function("typeof window.receiveUpdate === 'function' && document.querySelector('#source-container span.word') !== null")
 
     # 1. Initially, row 0 has data-occ and displays the full set if nothing selected
     inf_cell = page.locator("tr[data-row-id='0'] td.col-inflected")
@@ -43,7 +49,6 @@ def test_reword_delta_preserves_occurrence_filtered_view(page, tmp_path):
         ];
         window.applyOccurrenceView();
     }""")
-    page.wait_for_timeout(50)
 
     # Table should now show occurrence-filtered text "das, der"
     assert inf_cell.inner_text().strip() == "das, der"
@@ -64,7 +69,6 @@ def test_reword_delta_preserves_occurrence_filtered_view(page, tmp_path):
             }
         });
     }""")
-    page.wait_for_timeout(50)
 
     # The visible cell text must STILL be the occurrence-filtered subset "das, der"
     assert inf_cell.inner_text().strip() == "das, der"
@@ -78,13 +82,13 @@ def test_reword_delta_preserves_occurrence_filtered_view(page, tmp_path):
         window.AppState.activeTokenSelections = [];
         window.applyOccurrenceView();
     }""")
-    page.wait_for_timeout(50)
 
     assert inf_cell.inner_text().strip() == "das, den, der, die"
 
 
 def test_reword_delta_preserves_active_bookmarks(page, tmp_path):
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({"rendering":{"display_mode":"monolithic"}, "pipeline":{"progressive_text_translation":"false"}})
     if not config.has_section(SEC_RENDERING):
         config.add_section(SEC_RENDERING)
     config.set(SEC_RENDERING, "hover_highlight", "true")
@@ -99,6 +103,7 @@ def test_reword_delta_preserves_active_bookmarks(page, tmp_path):
     tsv_file = tmp_path / "20261004160001-test.de.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20261004160001', raw_sentence, 'de', text_mode='single')
     html_out = kardenwort_desk.run_render_flow(
         text=raw_sentence,
         language="de",
@@ -112,12 +117,13 @@ def test_reword_delta_preserves_active_bookmarks(page, tmp_path):
         return_children=False,
     )
 
+    html_out = html_out.replace("<head>", '<head><script>window.API_TOKEN="secret-test-token-42";</script>')
     page.set_content(html_out)
-    page.wait_for_timeout(150)
+    page.wait_for_function("typeof window.receiveUpdate === 'function' && document.querySelector('#source-container span.word') !== null")
 
     first_src = page.locator("#source-container span.word").first
     first_src.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.querySelector('#source-container span.word').classList.contains('hl-mvp-pin')")
 
     # Pin a rainbow slot on first word
     assert "hl-mvp-pin" in (first_src.get_attribute("class") or "")
@@ -137,7 +143,6 @@ def test_reword_delta_preserves_active_bookmarks(page, tmp_path):
             }
         });
     }""")
-    page.wait_for_timeout(50)
 
     # Bookmarks should remain active and visible on first_src
     assert "hl-mvp-pin" in (first_src.get_attribute("class") or "")

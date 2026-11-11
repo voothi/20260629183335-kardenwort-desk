@@ -41,6 +41,16 @@ def normalize_sentence_result(raw, single_unit=False):
     return main, padded
 
 
+def failed_sentence_text(value):
+    return value.strip() == '[FAILED]' or value.strip().startswith('[Error')
+
+
+def display_sentence_text(entries):
+    present = {key: value for key, value in entries.items() if value not in (None, '')}
+    main = numeric_sentence_entries(present, ('FULL_TEXT', 'PADDED'))
+    return ' '.join(value.strip() for _, value in sorted(main.items()) if not failed_sentence_text(value))
+
+
 def validate_complete_alignment(main, records):
     identities = [record['sentence_index'] for record in records]
     if len(set(identities)) != len(identities) or set(main) != set(identities):

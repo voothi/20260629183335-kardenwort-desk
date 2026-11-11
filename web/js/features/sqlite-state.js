@@ -17,18 +17,28 @@
         var match = location.hash.match(/(?:^#|&)kw-client=([0-9a-f]{32})(?:&|$)/);
         var navigation = performance.getEntriesByType('navigation')[0];
         var reusable = match && navigation && (navigation.type === 'reload' || navigation.type === 'back_forward');
-        var id = reusable ? match[1] : crypto.randomUUID().replace(/-/g, '');
-        history.replaceState(null, '', location.pathname+location.search+'#kw-client='+id);
+        var id = reusable ? match[1] : randomClientId();
+        history.replaceState(null, '', '#kw-client='+id);
         return id;
+    }
+    function randomClientId() {
+        var bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        return Array.prototype.map.call(bytes, function(value) { return ('0'+value.toString(16)).slice(-2); }).join('');
     }
     function legacyKeys(zid) {
         return ['kw_active_tokens_'+zid, 'kw_active_card_'+zid];
     }
+    function hasLegacyStorageOrigin() {
+        return !(location.protocol === 'about:' && window.origin === 'null');
+    }
     function clearLegacy(zid) {
+        if (!hasLegacyStorageOrigin()) return;
         preferenceKeys.forEach(function(key) { localStorage.removeItem('kw_'+key); });
         legacyKeys(zid).forEach(function(key) { sessionStorage.removeItem(key); });
     }
     function readLegacy(zid) {
+        if (!hasLegacyStorageOrigin()) return {preferences: {}, view: null};
         var values = {}, keys = legacyKeys(zid);
         preferenceKeys.forEach(function(key) {
             var raw = localStorage.getItem('kw_'+key);

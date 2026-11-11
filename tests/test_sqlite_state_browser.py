@@ -191,3 +191,16 @@ def test_explicit_save_waits_for_view_commit_and_reports_failure(sqlite_page, st
 
 def rows_lemma():
     return payload(3)[0][0]
+
+
+def test_client_slot_uses_available_crypto_in_non_secure_document(page):
+    from pathlib import Path
+    import re
+    page.set_content('<html><body></body></html>')
+    assert page.evaluate('typeof crypto.randomUUID') == 'undefined'
+    page.add_script_tag(path=str(Path(__file__).resolve().parents[1]/'web/js/features/sqlite-state.js'))
+    page.evaluate("SqliteState.create({ui:{state_authority:'sqlite'}})")
+    first = page.evaluate('location.hash')
+    assert re.fullmatch(r'#kw-client=[0-9a-f]{32}',first)
+    page.evaluate("SqliteState.create({ui:{state_authority:'sqlite'}})")
+    assert page.evaluate('location.hash') != first

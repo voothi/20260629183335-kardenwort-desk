@@ -1,5 +1,6 @@
 import json
 import pytest
+from tests.render_test_support import seed_render_rows
 from pathlib import Path
 from kardenwort_desk import (
     run_render_flow,
@@ -9,10 +10,13 @@ from kardenwort_desk import (
 
 def get_modal_test_page_html(tmp_path: Path, mismatch_info=None, theme="dark", delivery_mode="multi_window") -> str:
     config, resolved, _, _ = load_config()
+    config.read_dict({'rendering': {'display_mode': 'monolithic'},
+                      'pipeline': {'progressive_text_translation': 'false'}})
     config.set("sentences_mode", "delivery_mode", delivery_mode)
     tsv_file = tmp_path / "20260827005722-test.en.tsv"
     tsv_file.write_text("# Headers\tLemma\tInflected\n# Data\tHaus\tHäuser\n", encoding="utf-8")
     
+    seed_render_rows(config, resolved, '20260827005722', 'Das ist ein deutsches Haus.', 'en', ['WordSource','WordDestination','SentenceSourceIndex','SentenceSource'], [['Haus','house','1','Das ist ein deutsches Haus.']], text_mode='single')
     html = run_render_flow(
         text="Das ist ein deutsches Haus.",
         language="en",
@@ -124,7 +128,7 @@ def test_language_modal_yes_click_action(page, tmp_path):
     page.set_content(html)
 
     page.locator("#kw-btn-lang-yes").click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("window.__fetches.some(call => call.url === '/api/v1/render')")
 
     fetches = page.evaluate("window.__fetches")
     render_fetches = [f for f in fetches if f["url"] == "/api/v1/render"]
@@ -153,7 +157,7 @@ def test_language_modal_no_click_action(page, tmp_path):
     page.set_content(html)
 
     page.locator("#kw-btn-lang-no").click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("window.__fetches.some(call => call.url === '/api/v1/render')")
 
     fetches = page.evaluate("window.__fetches")
     render_fetches = [f for f in fetches if f["url"] == "/api/v1/render"]
@@ -179,7 +183,7 @@ def test_language_modal_cancel_click_action(page, tmp_path):
     assert modal.is_visible()
 
     page.locator("#kw-btn-lang-cancel").click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.getElementById('kw-lang-modal').hidden || getComputedStyle(document.getElementById('kw-lang-modal')).display === 'none'")
 
     assert not modal.is_visible()
     fetches = page.evaluate("window.__fetches")
@@ -202,7 +206,7 @@ def test_language_modal_keyboard_shortcuts(page, tmp_path):
     page.set_content(html)
 
     page.keyboard.press("Enter")
-    page.wait_for_timeout(50)
+    page.wait_for_function("window.__fetches.some(call => call.url === '/api/v1/render')")
 
     fetches = page.evaluate("window.__fetches")
     render_fetches = [f for f in fetches if f["url"] == "/api/v1/render"]
@@ -215,7 +219,7 @@ def test_language_modal_keyboard_shortcuts(page, tmp_path):
     assert modal.is_visible()
 
     page.keyboard.press("Escape")
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.getElementById('kw-lang-modal').hidden || getComputedStyle(document.getElementById('kw-lang-modal')).display === 'none'")
     assert not modal.is_visible()
 
 
@@ -258,6 +262,7 @@ def test_language_modal_title_formatting_and_dynamic_update(page, tmp_path):
     }
 
     # 1. Single mode title formatting
+    seed_render_rows(config, resolved, '20260827005722', 'Das ist ein Haus.', 'en', ['WordSource','WordDestination','SentenceSourceIndex','SentenceSource'], [['Haus','house','1','Das ist ein Haus.']], text_mode='single')
     html_single = run_render_flow(
         text="Das ist ein Haus.",
         language="en",
@@ -270,14 +275,15 @@ def test_language_modal_title_formatting_and_dynamic_update(page, tmp_path):
         mismatch_info=mismatch,
     )
     page.set_content(inject_mock_fetch(html_single))
-    assert page.title() == "Kardenwort - en (single) - 20260827005722-test.en.tsv - Ready"
+    assert page.title() == "Kardenwort - en (single) - 20260827005722 - Ready"
 
     # Clicking Yes updates title immediately to German
     page.locator("#kw-btn-lang-yes").click()
-    page.wait_for_timeout(50)
-    assert page.title() == "Kardenwort - de (single) - 20260827005722-test.de.tsv - Ready"
+    page.wait_for_function("window.__fetches.some(call => call.url === '/api/v1/render')")
+    assert page.title() == "Kardenwort - de (single) - 20260827005722 - Ready"
 
     # 2. Multi mode title formatting
+    seed_render_rows(config, resolved, '20260827005723', 'Das ist ein Haus.\nUnd ein Garten.', 'en', ['WordSource','WordDestination','SentenceSourceIndex','SentenceSource'], [['Haus','house','1','Das ist ein Haus.\nUnd ein Garten.']], text_mode='multi')
     html_multi = run_render_flow(
         text="Das ist ein Haus.\nUnd ein Garten.",
         language="en",
@@ -290,12 +296,12 @@ def test_language_modal_title_formatting_and_dynamic_update(page, tmp_path):
         mismatch_info=mismatch,
     )
     page.set_content(inject_mock_fetch(html_multi))
-    assert page.title() == "Kardenwort - en (multi) - 20260827005722-test.en.tsv - Ready"
+    assert page.title() == "Kardenwort - en (multi) - 20260827005722 - Ready"
 
     # Clicking No updates title in expected language
     page.locator("#kw-btn-lang-no").click()
-    page.wait_for_timeout(50)
-    assert page.title() == "Kardenwort - en (multi) - 20260827005722-test.en.tsv - Ready"
+    page.wait_for_function("window.__fetches.some(call => call.url === '/api/v1/render')")
+    assert page.title() == "Kardenwort - en (multi) - 20260827005722 - Ready"
 
 
 def test_language_modal_button_state_during_inflight_request(page, tmp_path):
@@ -326,7 +332,7 @@ def test_language_modal_button_state_during_inflight_request(page, tmp_path):
     assert not btn_cancel.is_disabled()
 
     btn_yes.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.getElementById('kw-btn-lang-yes').disabled && document.getElementById('kw-btn-lang-no').disabled && document.getElementById('kw-btn-lang-cancel').disabled")
 
     # In-flight state: all buttons are disabled
     assert btn_yes.is_disabled()
@@ -385,7 +391,7 @@ def test_language_modal_multi_sentence_child_tab_spawning(page, tmp_path):
     page.set_content(html)
 
     page.locator("#kw-btn-lang-yes").click()
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.__spawnCalls.length === 1')
 
     spawn_calls = page.evaluate("window.__spawnCalls")
     assert len(spawn_calls) == 1
@@ -426,7 +432,7 @@ def test_language_modal_multi_sentence_child_tab_spawning(page, tmp_path):
     html_fallback = get_modal_test_page_html(tmp_path, mismatch_info=mismatch).replace("<head>", f"<head>\n{mock_fallback_script}")
     page.set_content(html_fallback)
     page.locator("#kw-btn-lang-yes").click()
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.__openedTabs.length === 2')
 
     opened = page.evaluate("window.__openedTabs")
     assert len(opened) == 2
@@ -482,7 +488,7 @@ def test_language_modal_reverse_ordered_child_tab_spawning(page, tmp_path):
     page.set_content(html)
 
     page.locator("#kw-btn-lang-yes").click()
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.__spawnCalls.length === 1')
 
     spawn_calls = page.evaluate("window.__spawnCalls")
     assert len(spawn_calls) == 1

@@ -2,6 +2,7 @@ import json
 import pytest
 from pathlib import Path
 import kardenwort_desk
+from tests.render_test_support import seed_render_tsv
 
 def get_desk_page_html(tmp_path, theme="dark", zid="20260912232500", text_mode="multi", filter_selected_only=False):
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
@@ -21,6 +22,7 @@ def get_desk_page_html(tmp_path, theme="dark", zid="20260912232500", text_mode="
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, 'Das Haus ist groß.\nDer Baum ist grün.', 'de', text_mode=text_mode)
     html = kardenwort_desk.run_render_flow(
         text="Das Haus ist groß.\nDer Baum ist grün.",
         language="de",
@@ -153,7 +155,7 @@ def test_selected_filter_persistence_request(page, tmp_path):
 
     # Toggle filter ON
     filter_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("window.__fetches.filter(call => call.url === '/api/v1/config').length === 1")
 
     fetches = page.evaluate("() => window.__fetches")
     config_fetches = [f for f in fetches if f.get("url") == "/api/v1/config"]
@@ -167,7 +169,7 @@ def test_selected_filter_persistence_request(page, tmp_path):
 
     # Toggle filter OFF
     filter_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("window.__fetches.filter(call => call.url === '/api/v1/config').length === 2")
 
     fetches = page.evaluate("() => window.__fetches")
     config_fetches = [f for f in fetches if f.get("url") == "/api/v1/config"]
@@ -201,7 +203,7 @@ def test_selected_filter_toggle_interaction(page, tmp_path):
 
     # Click Selected filter toggle
     filter_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.AppState.filterSelectedOnly === true')
 
     # State should now be active
     assert filter_btn.evaluate("el => el.classList.contains('btn-filter-active')")
@@ -214,7 +216,7 @@ def test_selected_filter_toggle_interaction(page, tmp_path):
 
     # Click Selected button again to deactivate
     filter_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.AppState.filterSelectedOnly === false')
 
     # State restored to inactive and both rows visible
     assert not filter_btn.evaluate("el => el.classList.contains('btn-filter-active')")
@@ -231,7 +233,7 @@ def test_dynamic_selection_reactivity_without_reload(page, tmp_path):
 
     filter_btn = page.locator("#kw-btn-filter-selected")
     filter_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.AppState.filterSelectedOnly === true')
 
     row0 = page.locator("#lemma-table tbody tr[data-row-id='0']")
     row1 = page.locator("#lemma-table tbody tr[data-row-id='1']")
@@ -240,7 +242,7 @@ def test_dynamic_selection_reactivity_without_reload(page, tmp_path):
 
     # Click on the word "groß" in source text or toggle row 1 selection
     page.evaluate("window.toggleRowSelection(1, true)")
-    page.wait_for_timeout(50)
+    page.wait_for_function('document.querySelector("tr[data-row-id=\'1\']").getAttribute("data-selected") === "1"')
 
     # Row 1 is now selected (data-selected="1") and instantly visible in filtered table
     assert row1.get_attribute("data-selected") == "1"
@@ -249,7 +251,7 @@ def test_dynamic_selection_reactivity_without_reload(page, tmp_path):
 
     # Deselect Row 0 (Haus)
     page.evaluate("window.toggleRowSelection(0, false)")
-    page.wait_for_timeout(50)
+    page.wait_for_function('document.querySelector("tr[data-row-id=\'0\']").getAttribute("data-selected") === "0"')
 
     # Row 0 is now unselected (data-selected="0") and instantly hidden from filtered table
     assert row0.get_attribute("data-selected") == "0"
@@ -267,7 +269,7 @@ def test_tab_switching_filter_persistence(page, tmp_path):
 
     # Turn filter ON
     filter_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.AppState.filterSelectedOnly === true')
     assert page.evaluate("window.AppState.filterSelectedOnly") is True
     assert filter_btn.evaluate("el => el.classList.contains('btn-filter-active')")
     assert lemma_table.evaluate("el => el.classList.contains('kw-filter-selected-only')")
@@ -279,7 +281,6 @@ def test_tab_switching_filter_persistence(page, tmp_path):
 
     # Click next tab
     page.evaluate("window.WorkspaceTabs.nextTab()")
-    page.wait_for_timeout(50)
 
     # Verify filter remains active after tab switch
     assert page.evaluate("window.AppState.filterSelectedOnly") is True
@@ -288,7 +289,6 @@ def test_tab_switching_filter_persistence(page, tmp_path):
 
     # Switch back to Overview tab (Tab seq 1)
     page.evaluate("window.WorkspaceTabs.switchToTab(1)")
-    page.wait_for_timeout(50)
 
     assert page.evaluate("window.AppState.filterSelectedOnly") is True
     assert filter_btn.evaluate("el => el.classList.contains('btn-filter-active')")
@@ -315,23 +315,23 @@ def test_keyboard_arrow_navigation_skips_hidden_rows(page, tmp_path):
 
     # Enable filter
     filter_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.AppState.filterSelectedOnly === true')
 
     # Focus initial row using ArrowDown
     page.keyboard.press("ArrowDown")
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.getFocusedRowId() === 0')
     focused_id_1 = page.evaluate("window.getFocusedRowId()")
     assert focused_id_1 == 0
 
     # Press ArrowDown again -> should skip hidden Row 1 and focus Row 2
     page.keyboard.press("ArrowDown")
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.getFocusedRowId() === 2')
     focused_id_2 = page.evaluate("window.getFocusedRowId()")
     assert focused_id_2 == 2
 
     # Press ArrowUp -> should skip hidden Row 1 and focus Row 0
     page.keyboard.press("ArrowUp")
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.getFocusedRowId() === 0')
     focused_id_3 = page.evaluate("window.getFocusedRowId()")
     assert focused_id_3 == 0
 
@@ -352,6 +352,7 @@ def test_clicking_middle_selected_row_does_not_cascade_deselection(page, tmp_pat
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, 'Haus Baum Katze Hund Vogel', 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text="Haus Baum Katze Hund Vogel",
         language="de",
@@ -368,7 +369,7 @@ def test_clicking_middle_selected_row_does_not_cascade_deselection(page, tmp_pat
 
     filter_btn = page.locator("#kw-btn-filter-selected")
     filter_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.AppState.filterSelectedOnly === true')
 
     # All rows initially selected and visible in filtered mode
     row_info = page.evaluate("Array.from(document.querySelectorAll('#lemma-table tbody tr')).map(r => ({id: r.getAttribute('data-row-id'), sel: r.getAttribute('data-selected'), text: r.innerText}))")
@@ -382,7 +383,7 @@ def test_clicking_middle_selected_row_does_not_cascade_deselection(page, tmp_pat
     mid_id = row_info[2]['id']
     mid_row = page.locator(f"#lemma-table tbody tr[data-row-id='{mid_id}']")
     mid_row.locator("td").first.click(modifiers=["Control"])
-    page.wait_for_timeout(50)
+    mid_row.wait_for(state="hidden")
 
     # Only mid_id should be hidden; other rows MUST remain visible
     assert not page.locator(f"#lemma-table tbody tr[data-row-id='{mid_id}']").is_visible()
@@ -408,6 +409,7 @@ def test_drag_deselection_across_rows_in_filtered_mode(page, tmp_path):
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, 'Haus Baum Katze Hund Vogel', 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text="Haus Baum Katze Hund Vogel",
         language="de",
@@ -424,7 +426,7 @@ def test_drag_deselection_across_rows_in_filtered_mode(page, tmp_path):
 
     filter_btn = page.locator("#kw-btn-filter-selected")
     filter_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.AppState.filterSelectedOnly === true')
 
     # Perform drag gesture across row 1 (Baum) to row 2 (Katze) with Ctrl held
     row1 = page.locator("#lemma-table tbody tr").nth(1)
@@ -440,7 +442,7 @@ def test_drag_deselection_across_rows_in_filtered_mode(page, tmp_path):
     page.mouse.move(box2["x"] + 20, box2["y"] + box2["height"] / 2, steps=5)
     page.mouse.up()
     page.keyboard.up("Control")
-    page.wait_for_timeout(50)
+    page.wait_for_function('document.querySelector("tr[data-row-id=\'1\']").getAttribute("data-selected") === "0" && document.querySelector("tr[data-row-id=\'2\']").getAttribute("data-selected") === "0"')
 
     # Rows 1 and 2 should now be deselected and hidden in filtered mode
     # Rows 0, 3, 4 should remain selected and visible
@@ -464,14 +466,13 @@ def test_empty_selection_placeholder_displayed_when_no_rows_selected(page, tmp_p
     
     # Deselect row 0 so 0 rows are selected
     page.evaluate("window.toggleRowSelection(0, false)")
-    page.wait_for_timeout(50)
 
     # Empty placeholder should NOT be present when filter is OFF
     assert page.locator("#kw-empty-selection-row").count() == 0
 
     # Turn filter ON
     filter_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.querySelector('#kw-empty-selection-row') !== null")
 
     # Now empty state row must be present and visible
     empty_row = page.locator("#kw-empty-selection-row")
@@ -482,7 +483,7 @@ def test_empty_selection_placeholder_displayed_when_no_rows_selected(page, tmp_p
     # Click the "show all words" action link
     clear_btn = page.locator("#kw-btn-empty-clear-filter")
     clear_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.AppState.filterSelectedOnly === false')
 
     # Filter is turned OFF
     assert page.evaluate("window.AppState.filterSelectedOnly") is False
@@ -502,14 +503,14 @@ def test_empty_selection_placeholder_reactivity_on_selecting_word(page, tmp_path
     # Deselect row 0 -> 0 rows selected
     page.evaluate("window.toggleRowSelection(0, false)")
     filter_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.querySelector('#kw-empty-selection-row') !== null")
 
     empty_row = page.locator("#kw-empty-selection-row")
     assert empty_row.is_visible()
 
     # Select row 1 (groß)
     page.evaluate("window.toggleRowSelection(1, true)")
-    page.wait_for_timeout(50)
+    page.wait_for_function('document.querySelector(\'#kw-empty-selection-row\') === null && document.querySelector("tr[data-row-id=\'1\']").getAttribute("data-selected") === "1"')
 
     # Placeholder must be removed, row 1 must be visible
     assert page.locator("#kw-empty-selection-row").count() == 0
@@ -517,7 +518,7 @@ def test_empty_selection_placeholder_reactivity_on_selecting_word(page, tmp_path
 
     # Deselect row 1 again -> placeholder reappears
     page.evaluate("window.toggleRowSelection(1, false)")
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.querySelector('#kw-empty-selection-row') !== null")
     assert empty_row.is_visible()
 
 
@@ -528,7 +529,7 @@ def test_empty_selection_placeholder_not_shown_during_active_drag(page, tmp_path
 
     filter_btn = page.locator("#kw-btn-filter-selected")
     filter_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function('window.AppState.filterSelectedOnly === true')
 
     # Initially row 0 is selected and visible
     row0 = page.locator("#lemma-table tbody tr[data-row-id='0']")
@@ -541,7 +542,7 @@ def test_empty_selection_placeholder_not_shown_during_active_drag(page, tmp_path
     page.mouse.move(box0["x"] + 20, box0["y"] + box0["height"] / 2)
     page.mouse.down()
     page.mouse.move(box0["x"] + 30, box0["y"] + box0["height"] / 2 + 10, steps=3)
-    page.wait_for_timeout(50)
+    page.wait_for_function('document.querySelector("tr[data-row-id=\'0\']").getAttribute("data-selected") === "0"')
 
     # While LMB is still down: row 0 is deselected, but placeholder MUST NOT be visible
     assert page.locator("#kw-empty-selection-row").count() == 0
@@ -549,7 +550,7 @@ def test_empty_selection_placeholder_not_shown_during_active_drag(page, tmp_path
     # Release mouse
     page.mouse.up()
     page.keyboard.up("Control")
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.querySelector('#kw-empty-selection-row') !== null")
 
     # Now that drag is finished and all rows are deselected/hidden, placeholder appears
     assert page.locator("#kw-empty-selection-row").is_visible()

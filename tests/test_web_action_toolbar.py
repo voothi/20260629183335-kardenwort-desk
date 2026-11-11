@@ -1,10 +1,15 @@
 import json
-import pytest
 from pathlib import Path
 import kardenwort_desk
+from tests.render_test_support import seed_render_tsv, seed_render_rows
+from tests.controller_test_support import controller_world
+from tests.toolbar_test_support import with_translation_skeleton, controlled_event_stream_script, component_page as page
 
-def get_desk_page_html(tmp_path, theme="dark", zid="20260826214953", seq_num=None):
+
+def get_desk_page_html(tmp_path, theme="dark", zid="20260826214953", seq_num=None, backend='sqlite'):
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    config.set('storage','backend',backend)
+    resolved_paths['storage_backend'] = backend
     tsv_file = tmp_path / f"{zid}-test.de.tsv"
     tsv_content = (
         "# comment\n"
@@ -13,6 +18,8 @@ def get_desk_page_html(tmp_path, theme="dark", zid="20260826214953", seq_num=Non
         "Baum\tBaum\tдерево\t1\tDas Haus\tДом\t\n"
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
+    if backend == 'sqlite':
+        seed_render_tsv(config,resolved_paths,tsv_file,zid,"Das Haus und der Baum","de")
 
     html = kardenwort_desk.run_render_flow(
         text="Das Haus und der Baum",
@@ -22,11 +29,12 @@ def get_desk_page_html(tmp_path, theme="dark", zid="20260826214953", seq_num=Non
         config=config,
         resolved_paths=resolved_paths,
         theme=theme,
-        tsv_path=str(tsv_file),
+        tsv_path=zid if backend == 'sqlite' else str(tsv_file),
         seq_num=seq_num,
         spawn_children=False
     )
-    return html
+    token = config.get('server','api_key',fallback='')
+    return html.replace('<head>', '<head><script>window.API_TOKEN='+json.dumps(token)+';</script>')
 
 def inject_mock_fetch(html):
     mock_script = """<script>
@@ -219,7 +227,7 @@ def test_save_button_dirty_state_and_rest_dispatch(page, tmp_path):
 
     # Click save button
     save_btn.click()
-    page.wait_for_timeout(100)
+    page.wait_for_function('window.__fetches.length === 1')
 
     # Verify fetch payload
     fetches = page.evaluate("window.__fetches")
@@ -242,7 +250,7 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     # 1. Click Re-word without selection -> warning toast, no fetch, no reload
     reword_btn = page.locator("#kw-btn-reword")
     reword_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.querySelector('.kw-toast-warning') !== null")
     fetches = page.evaluate("window.__fetches")
     assert len(fetches) == 0
     assert page.evaluate("window.__reloads") == 0
@@ -254,7 +262,7 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     row0 = page.locator("tr[data-row-id='0']")
     row0.click()
     reword_btn.click()
-    page.wait_for_timeout(100)
+    page.wait_for_function('window.__fetches.length === 2 && document.querySelector("tr[data-row-id=\'0\'] td.col-translation").textContent.includes(\'_reworded\')')
     fetches = page.evaluate("window.__fetches")
     assert len(fetches) == 2
     assert fetches[0]["url"] == "/session/save"
@@ -278,7 +286,7 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     # 3. Click Re-text -> dispatches /session/retext and in-place updates translation container without reload
     retext_btn = page.locator("#kw-btn-retext")
     retext_btn.click()
-    page.wait_for_timeout(100)
+    page.wait_for_function("window.__fetches.length === 3 && !document.getElementById('kw-btn-retext').disabled")
     fetches = page.evaluate("window.__fetches")
     assert len(fetches) == 3
     assert fetches[2]["url"] == "/session/retext"
@@ -290,7 +298,7 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     # 4. Click Update -> dispatches /session/status and in-place updates without reload
     update_btn = page.locator("#kw-btn-update")
     update_btn.click()
-    page.wait_for_timeout(100)
+    page.wait_for_function("window.__fetches.length === 4 && !document.getElementById('kw-btn-update').disabled")
     fetches = page.evaluate("window.__fetches")
     assert len(fetches) == 4
     assert "/session/status" in fetches[3]["url"]
@@ -305,7 +313,7 @@ def test_send_to_anki_rest_dispatch(page, tmp_path):
 
     # 1. No selection -> warning toast
     export_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.querySelector('.kw-toast-warning') !== null")
     fetches = page.evaluate("window.__fetches")
     assert len(fetches) == 0
     toast_warn = page.locator(".kw-toast-warning")
@@ -316,7 +324,7 @@ def test_send_to_anki_rest_dispatch(page, tmp_path):
     page.locator("tr[data-row-id='0']").click()
     page.locator("tr[data-row-id='1']").click(modifiers=["Control"])
     export_btn.click()
-    page.wait_for_timeout(100)
+    page.wait_for_function("window.__fetches.length === 2 && !document.getElementById('kw-btn-export').disabled")
 
     fetches = page.evaluate("window.__fetches")
     assert len(fetches) == 2
@@ -368,7 +376,7 @@ def test_window_sequence_branding_in_web_view(page, tmp_path):
     # 1. Test with seq_num = 1 (Master window) - clean title, favicon #1, no toolbar badge element
     html_seq1 = get_desk_page_html(tmp_path, zid="20260826235951", seq_num=1)
     page.set_content(html_seq1)
-    assert page.title() == "Kardenwort - de (single) - 20260826235951-test.de.tsv - Ready"
+    assert page.title() == "Kardenwort - de (single) - 20260826235951 - Ready"
     favicon = page.locator("link[rel='icon']")
     assert favicon.get_attribute("href") == "/assets/numbers/1.ico"
     assert page.locator("#kw-seq-badge").count() == 0
@@ -376,14 +384,14 @@ def test_window_sequence_branding_in_web_view(page, tmp_path):
     # 2. Test with seq_num = 3 (Child window) - clean title, favicon #3, no toolbar badge element
     html_seq3 = get_desk_page_html(tmp_path, zid="20260826235953", seq_num=3)
     page.set_content(html_seq3)
-    assert page.title() == "Kardenwort - de (single) - 20260826235953-test.de.tsv - Ready"
+    assert page.title() == "Kardenwort - de (single) - 20260826235953 - Ready"
     assert page.locator("link[rel='icon']").get_attribute("href") == "/assets/numbers/3.ico"
     assert page.locator("#kw-seq-badge").count() == 0
 
     # 3. Test without seq_num (Default fallback)
     html_default = get_desk_page_html(tmp_path, zid="20260826235950", seq_num=None)
     page.set_content(html_default)
-    assert page.title() == "Kardenwort - de (single) - 20260826235950-test.de.tsv - Ready"
+    assert page.title() == "Kardenwort - de (single) - 20260826235950 - Ready"
     assert page.locator("link[rel='icon']").get_attribute("href") == "/assets/numbers/1.ico"
     assert page.locator("#kw-seq-badge").count() == 0
 
@@ -419,7 +427,7 @@ window.ActiveXObject = function() {};
 delete window.fetch;
 delete window.EventSource;
 </script>"""
-    html = get_desk_page_html(tmp_path, zid="20260827003912", seq_num=2)
+    html = get_desk_page_html(tmp_path, zid="20260827003912", seq_num=2, backend='tsv')
     html_mshtml = html.replace("<head>", f"<head>\n{mock_mshtml_env}")
 
     page.set_content(html_mshtml)
@@ -460,7 +468,7 @@ def test_toolbar_api_token_propagation(page, tmp_path):
 
     save_btn = page.locator("#kw-btn-save")
     save_btn.click()
-    page.wait_for_timeout(100)
+    page.wait_for_function('window.__fetches.length === 1')
 
     fetches = page.evaluate("window.__fetches")
     assert len(fetches) == 1
@@ -471,7 +479,7 @@ def test_toolbar_api_token_propagation(page, tmp_path):
     # 2. Test Retext
     retext_btn = page.locator("#kw-btn-retext")
     retext_btn.click()
-    page.wait_for_timeout(100)
+    page.wait_for_function("window.__fetches.length === 2 && !document.getElementById('kw-btn-retext').disabled")
 
     fetches = page.evaluate("window.__fetches")
     assert len(fetches) == 2
@@ -483,7 +491,7 @@ def test_toolbar_api_token_propagation(page, tmp_path):
     page.locator("tr[data-row-id='0']").click()
     reword_btn = page.locator("#kw-btn-reword")
     reword_btn.click()
-    page.wait_for_timeout(100)
+    page.wait_for_function("window.__fetches.length === 4 && !document.getElementById('kw-btn-reword').disabled")
 
     fetches = page.evaluate("window.__fetches")
     assert len(fetches) == 4
@@ -496,7 +504,7 @@ def test_toolbar_api_token_propagation(page, tmp_path):
     # 4. Test Export
     export_btn = page.locator("#kw-btn-export")
     export_btn.click()
-    page.wait_for_timeout(100)
+    page.wait_for_function("window.__fetches.length === 5 && !document.getElementById('kw-btn-export').disabled")
 
     fetches = page.evaluate("window.__fetches")
     assert len(fetches) == 5
@@ -539,7 +547,7 @@ window.fetch = function(url, options) {
 
     # Resolve fetch
     page.evaluate("window.__fetchResolve({ ok: true, status: 'success', rows: {} })")
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.getElementById('kw-btn-reword').textContent === 'Re-word' && !document.getElementById('kw-btn-reword').disabled")
     assert reword_btn.inner_text() == "Re-word"
     assert not reword_btn.is_disabled()
 
@@ -547,12 +555,12 @@ window.fetch = function(url, options) {
     retext_btn = page.locator("#kw-btn-retext")
     assert retext_btn.inner_text() == "Re-text"
     retext_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.getElementById('kw-btn-retext').textContent === 'Retexting...' && document.getElementById('kw-btn-retext').disabled")
     assert retext_btn.inner_text() == "Retexting..."
     assert retext_btn.is_disabled()
 
     page.evaluate("window.__fetchResolve({ ok: true, status: 'success' })")
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.getElementById('kw-btn-retext').textContent === 'Re-text' && !document.getElementById('kw-btn-retext').disabled")
     assert retext_btn.inner_text() == "Re-text"
     assert not retext_btn.is_disabled()
 
@@ -565,12 +573,12 @@ window.fetch = function(url, options) {
     save_btn = page.locator("#kw-btn-save")
     assert not save_btn.is_disabled()
     save_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.getElementById('kw-btn-save').textContent === 'Saving...' && document.getElementById('kw-btn-save').disabled")
     assert save_btn.inner_text() == "Saving..."
     assert save_btn.is_disabled()
 
     page.evaluate("window.__fetchResolve({ ok: true, status: 'success' })")
-    page.wait_for_timeout(50)
+    page.wait_for_function("document.getElementById('kw-btn-save').textContent === 'Save (Ctrl+S)' && document.getElementById('kw-btn-save').disabled")
     assert save_btn.inner_text() == "Save (Ctrl+S)"
     assert save_btn.is_disabled()  # Clean state after successful save
 
@@ -601,7 +609,7 @@ window.fetch = async function(url, options) {
     page.locator("tr[data-row-id='0']").click()
     reword_btn = page.locator("#kw-btn-reword")
     reword_btn.click()
-    page.wait_for_timeout(100)
+    page.wait_for_function("document.querySelector('.kw-toast-error') !== null && !document.getElementById('kw-btn-reword').disabled")
 
     # Button must be restored to enabled state
     assert reword_btn.inner_text() == "Re-word"
@@ -616,29 +624,18 @@ window.fetch = async function(url, options) {
 
     # Clicking toast should dismiss it
     err_toast.click()
-    page.wait_for_timeout(300)
+    page.wait_for_function("document.querySelector('.kw-toast-error') === null")
     assert page.locator(".kw-toast-error").count() == 0
 
 
 def test_eventsource_auto_closure_on_finished_event(page, tmp_path):
-    mock_sse_script = """<script>
-window.__sseInstances = [];
-window.EventSource = function(url) {
-    this.url = url;
-    this.closed = false;
-    this.close = function() {
-        this.closed = true;
-    };
-    window.__sseInstances.push(this);
-};
-</script>"""
+    mock_sse_script = controlled_event_stream_script()
     html = get_desk_page_html(tmp_path)
-    html_with_skeleton = html.replace(
-        '<div class="translation-text" id="translation-container">',
-        '<div class="translation-text" id="translation-container"><span class="skeleton-loader" data-pending="true">Loading...</span>'
-    )
+    html_with_skeleton = with_translation_skeleton(html)
     html_with_skeleton = html_with_skeleton.replace("<head>", f"<head>\n{mock_sse_script}")
     page.set_content(html_with_skeleton)
+
+    page.wait_for_function("window.__sseInstances.length === 1 && window._kwEvtSource.readyState === 1")
 
     # Verify EventSource was created and is active
     instances = page.evaluate("window.__sseInstances.length")
@@ -649,18 +646,16 @@ window.EventSource = function(url) {
     # Simulate SSE message with is_finished: true
     page.evaluate("""
         var sse = window.__sseInstances[0];
-        sse.onmessage({
-            data: JSON.stringify({
+        sse.send({
                 type: "update",
                 is_finished: true,
                 stage: "finished",
                 rows: {
                     0: { lemma: "Haus", inflected: "Haus", trans: "дом", ipa: "/haʊs/", morph: "N", token_order: "0", sentence_idx: "1" }
                 }
-            })
         });
     """)
-    page.wait_for_timeout(100)
+    page.wait_for_function("window.__sseInstances[0].closed && window._kwEvtSource === null && !window._kwSkeletonPollTimer")
 
     # Verify EventSource was closed, reference cleared, and poll timer stopped
     is_closed = page.evaluate("window.__sseInstances[0].closed")
@@ -670,31 +665,15 @@ window.EventSource = function(url) {
 
 
 def test_eventsource_error_fallback_to_watchdog_polling(page, tmp_path):
-    mock_sse_error_script = """<script>
-window.__sseInstances = [];
-window.EventSource = function(url) {
-    this.url = url;
-    this.closed = false;
-    this.close = function() {
-        this.closed = true;
-    };
-    window.__sseInstances.push(this);
-    var self = this;
-    setTimeout(function() {
-        if (self.onerror) self.onerror(new Error("Connection refused"));
-    }, 50);
-};
-</script>"""
+    mock_sse_error_script = controlled_event_stream_script()
     html = get_desk_page_html(tmp_path)
-    html_with_skeleton = html.replace(
-        '<div class="translation-text" id="translation-container">',
-        '<div class="translation-text" id="translation-container"><span class="skeleton-loader" data-pending="true">Loading...</span>'
-    )
+    html_with_skeleton = with_translation_skeleton(html)
     html_with_skeleton = html_with_skeleton.replace("<head>", f"<head>\n{mock_sse_error_script}")
     page.set_content(html_with_skeleton)
 
-    # Wait for onerror to trigger
-    page.wait_for_timeout(150)
+    page.wait_for_function("window.__sseInstances.length === 1 && window._kwEvtSource.readyState === 1")
+    page.evaluate("window.__sseInstances[0].fail()")
+    page.wait_for_function("window.__sseInstances[0].closed && window._kwEvtSource === null")
 
     # EventSource must be closed immediately on error
     is_closed = page.evaluate("window.__sseInstances[0].closed")
@@ -712,10 +691,7 @@ def test_visibilitychange_pauses_and_resumes_watchdog_polling(page, tmp_path):
 window.EventSource = undefined;
 </script>"""
     html = get_desk_page_html(tmp_path)
-    html_with_skeleton = html.replace(
-        '<div class="translation-text" id="translation-container">',
-        '<div class="translation-text" id="translation-container"><span class="skeleton-loader" data-pending="true">Loading...</span>'
-    )
+    html_with_skeleton = with_translation_skeleton(html)
     html_with_skeleton = html_with_skeleton.replace("<head>", f"<head>\n{mock_no_sse_script}")
     page.set_content(html_with_skeleton)
 
@@ -727,7 +703,7 @@ window.EventSource = undefined;
         Object.defineProperty(document, 'hidden', { value: true, configurable: true });
         document.dispatchEvent(new Event('visibilitychange'));
     """)
-    page.wait_for_timeout(50)
+    page.wait_for_function('window._kwSkeletonPollTimer === null')
     assert page.evaluate("window._kwSkeletonPollTimer === null") is True
 
     # 2. Simulate tab visible (user returns to tab) -> Polling must resume
@@ -735,13 +711,15 @@ window.EventSource = undefined;
         Object.defineProperty(document, 'hidden', { value: false, configurable: true });
         document.dispatchEvent(new Event('visibilitychange'));
     """)
-    page.wait_for_timeout(50)
+    page.wait_for_function('window._kwSkeletonPollTimer !== null')
     assert page.evaluate("window._kwSkeletonPollTimer !== null") is True
 
 
 def test_button_loading_recovery_timer_timeout(page, tmp_path):
     html = inject_mock_fetch(get_desk_page_html(tmp_path))
     page.set_content(html)
+
+    page.clock.install()
 
     # Put update button in loading state
     page.evaluate("""
@@ -754,17 +732,8 @@ def test_button_loading_recovery_timer_timeout(page, tmp_path):
     assert btn.inner_text() == "Updating..."
     assert page.evaluate("document.getElementById('kw-btn-update')._recoveryTimer !== null") is True
 
-    # Fast-forward recovery timer by setting setTimeout delay or triggering callback directly
-    page.evaluate("""
-        var btn = document.getElementById('kw-btn-update');
-        // Trigger recovery callback simulating 25s timeout expiration
-        clearTimeout(btn._recoveryTimer);
-        btn.disabled = false;
-        var original = btn.getAttribute('data-default-text') || 'Update';
-        btn.textContent = original;
-        btn._recoveryTimer = null;
-        window.showToast("Action timed out. Restored toolbar controls.", "warning");
-    """)
+    # Execute the production recovery timer on a controlled browser clock.
+    page.clock.run_for(25000)
 
     assert not btn.is_disabled()
     assert btn.inner_text() == "Update"
@@ -885,7 +854,7 @@ def test_update_button_in_place_hydration_and_fallback_reload(page, tmp_path):
 
     # 1. Successful update with hydrated rows -> updates DOM in-place without reload
     update_btn.click()
-    page.wait_for_timeout(100)
+    page.wait_for_function('document.querySelector("tr[data-row-id=\'0\'] td.col-translation").textContent.includes(\'_status_updated\')')
     assert page.evaluate("window.__reloads") == 0
     assert "дом_status_updated" in cell_trans.inner_text()
     toast = page.locator(".kw-toast-success")
@@ -895,7 +864,7 @@ def test_update_button_in_place_hydration_and_fallback_reload(page, tmp_path):
     # 2. Simulate network failure on /session/status -> triggers fallback reload
     page.evaluate("window.__failStatus = true;")
     update_btn.click()
-    page.wait_for_timeout(100)
+    page.wait_for_function('window.__reloads === 1')
 
     # Asserts that fallback reload was triggered
     assert page.evaluate("window.__reloads") == 1
@@ -994,7 +963,7 @@ def test_session_status_client_hydration_multi_sentence_frequency_order(page, tm
     # Click Update button to trigger /session/status hydration
     update_btn = page.locator("#kw-btn-update")
     update_btn.click()
-    page.wait_for_timeout(100)
+    page.wait_for_function('document.querySelector("tr[data-row-id=\'0\'] td.col-translation").textContent.includes(\'_hydrated_s1\')')
 
     # Assert rows remain in global frequency order with updated values
     assert "Haus" in row0_lemma.inner_text()
@@ -1084,7 +1053,7 @@ window.EventSource = undefined;
         Object.defineProperty(document, 'hidden', { value: true, configurable: true });
         document.dispatchEvent(new Event('visibilitychange'));
     """)
-    page.wait_for_timeout(50)
+    page.wait_for_function('window._kwWatchdogMaxTimer === null && window._kwSkeletonPollTimer === null')
 
     # Watchdog timer is paused/cleared when hidden
     assert page.evaluate("window._kwWatchdogMaxTimer === null") is True
@@ -1137,14 +1106,14 @@ window.fetch = async function(url, options) {
         Object.defineProperty(document, 'hidden', { value: true, configurable: true });
         document.dispatchEvent(new Event('visibilitychange'));
     """)
-    page.wait_for_timeout(50)
+    page.wait_for_function('window._kwSkeletonPollTimer === null')
 
     # 2. Switch tab to visible -> Visibilitychange probe immediately triggers status sync
     page.evaluate("""
         Object.defineProperty(document, 'hidden', { value: false, configurable: true });
         document.dispatchEvent(new Event('visibilitychange'));
     """)
-    page.wait_for_timeout(100)
+    page.wait_for_function("document.querySelectorAll('.skeleton-loader, [data-pending=true]').length === 0")
 
     # Skeletons cleared / resolved
     assert page.locator(".skeleton-loader").count() == 0
@@ -1235,7 +1204,7 @@ window.fetch = async function(url, options) {
 
     # Click Update button
     page.click("#kw-btn-update")
-    page.wait_for_timeout(100)
+    page.wait_for_function("['/session/retext','/session/reword','/session/status'].every(path => window.__fetches.some(call => call.url.includes(path))) && document.querySelector('.kw-toast-success') !== null")
 
     # Verify requests sent
     fetches = page.evaluate("window.__fetches")
@@ -1299,7 +1268,7 @@ window.fetch = async (url, options) => {
     row0 = page.locator("tr[data-row-id='0']")
     row0.click()
     page.click("#kw-btn-reword")
-    page.wait_for_timeout(100)
+    page.wait_for_function('document.querySelector("tr[data-row-id=\'0\'] td.col-gender .kw-gender-f") !== null')
 
     cell_pos0 = page.locator("tr[data-row-id='0'] td.col-pos")
     assert cell_pos0.inner_text() == "n."
@@ -1310,7 +1279,7 @@ window.fetch = async (url, options) => {
     row1 = page.locator("tr[data-row-id='1']")
     row1.click()
     page.click("#kw-btn-reword")
-    page.wait_for_timeout(100)
+    page.wait_for_function('document.querySelector("tr[data-row-id=\'1\'] td.col-pos").textContent === \'v.\'')
 
     cell_pos1 = page.locator("tr[data-row-id='1'] td.col-pos")
     assert cell_pos1.inner_text() == "v."
@@ -1330,6 +1299,7 @@ def get_3row_desk_page_html(tmp_path, zid="20260913021333"):
         "Garten\tGarten\tсад\t1\tDas Haus\tДом\t\n"
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
+    seed_render_tsv(config,resolved_paths,tsv_file,zid,'Haus Baum Garten','de')
 
     html = kardenwort_desk.run_render_flow(
         text="Haus Baum Garten",
@@ -1339,10 +1309,10 @@ def get_3row_desk_page_html(tmp_path, zid="20260913021333"):
         config=config,
         resolved_paths=resolved_paths,
         theme="dark",
-        tsv_path=str(tsv_file),
+        tsv_path=zid,
         spawn_children=False
     )
-    return html
+    return html.replace('<head>', '<head><script>window.API_TOKEN='+json.dumps(config.get('server','api_key'))+';</script>')
 
 
 def test_table_row_single_click_toggles_selection(page, tmp_path):
@@ -1523,7 +1493,7 @@ window.fetch = async (url, options) => {
 
     # Click Re-word button
     page.click("#kw-btn-reword")
-    page.wait_for_timeout(100)
+    page.wait_for_function('document.querySelector("tr[data-row-id=\'0\'] td.col-translation").textContent.includes(\'_reworded\')')
 
     # Verify row 0 received the updated translation
     cell0_trans = page.locator("tr[data-row-id='0'] td.col-translation")
@@ -1546,6 +1516,10 @@ def test_window_config_injection_in_render_flow(tmp_path):
     cp.set(SEC_UI, 'auto_save_on_edit', 'true')
     cp.set(SEC_UI, 'auto_save_on_close', 'true')
     cp.set(SEC_UI, 'theme', 'dark')
+
+    seed_render_rows(cp,resolved_paths,'20260921223000','Haus','de',
+        ['Quotation','WordSource','WordDestination','SentenceSourceIndex','SentenceSource','SentenceDestination'],
+        [['Haus','Haus','дом','1','Haus','Дом']])
 
     html_out = run_render_flow(
         text="Haus",
@@ -1594,8 +1568,8 @@ window.fetch = async (url, options) => {
     edit_input.fill("домик_autosave")
     page.keyboard.press("Enter")
 
-    # Wait for debounced auto-save to fire (300ms + buffer)
-    page.wait_for_timeout(600)
+    # Await the debounced auto-save request.
+    page.wait_for_function("window.__fetches.some(call => call.url === '/session/save')")
 
     # Verify fetch('/session/save') was called with deltas
     fetches = page.evaluate("() => window.__fetches")

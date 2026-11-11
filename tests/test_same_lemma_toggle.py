@@ -5,6 +5,7 @@ import configparser
 import kardenwort_desk
 from tests.test_preference_commands import preference_world  # noqa: F401
 from tests.sqlite_document_support import serve_document, wait_state
+from tests.render_test_support import seed_render_tsv
 
 def get_desk_page_html(tmp_path, theme="dark", zid="20261002101427", text_mode="multi", highlight_same_lemma=False):
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
@@ -23,6 +24,7 @@ def get_desk_page_html(tmp_path, theme="dark", zid="20261002101427", text_mode="
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, 'Das Haus ist groß.', 'de', text_mode=text_mode)
     html = kardenwort_desk.run_render_flow(
         text="Das Haus ist groß.",
         language="de",
@@ -129,6 +131,9 @@ def test_same_lemma_toggle_interaction(page, tmp_path):
 
 def get_multi_occurrence_desk_page_html(tmp_path, highlight_same_lemma=False, zid="20261002101427"):
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    # The numbered-tooltip scenario specifies the alphabetical Am, Beim display.
+    config.read_dict({'token_mappings': {'combine_source_words_order': 'alphabetical'},
+                      'merge': {'combine_source_words_order': 'alphabetical'}})
     if not config.has_section("rendering"):
         config.add_section("rendering")
     config.set("rendering", "highlight_same_lemma", "true" if highlight_same_lemma else "false")
@@ -142,6 +147,7 @@ def get_multi_occurrence_desk_page_html(tmp_path, highlight_same_lemma=False, zi
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, 'Am Morgen trinke ich Kaffee.\nBeim Spiel hatte er Spaß.', 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text="Am Morgen trinke ich Kaffee.\nBeim Spiel hatte er Spaß.",
         language="de",
@@ -274,7 +280,7 @@ def test_targeted_token_export_creates_single_card(page, tmp_path, monkeypatch):
 
     # Trigger Send to Anki export
     page.locator("#kw-btn-export").click()
-    page.wait_for_timeout(100)
+    page.wait_for_function("window.__fetches.some(call => call.url === '/session/export')")
 
     # 1. Verify client fetch sent strictly row_ids=[1] (Sentence 2)
     fetches = page.evaluate("() => window.__fetches")
@@ -329,7 +335,7 @@ def test_merged_row_export_unrolls_all_occurrences(page, tmp_path, monkeypatch):
 
     # Trigger Send to Anki export
     page.locator("#kw-btn-export").click()
-    page.wait_for_timeout(100)
+    page.wait_for_function("window.__fetches.some(call => call.url === '/session/export')")
 
     # 1. Verify client fetch sent unrolled row_ids=[0, 1]
     fetches = page.evaluate("() => window.__fetches")
@@ -386,6 +392,7 @@ def test_translation_rollup_and_deduplication(tmp_path):
         "Beim\tder\tв\t2\tBeim Spiel hatte er Spaß.\tВо время игры ему было весело.\t0\n"
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
+    seed_render_tsv(config, resolved_paths, str(tsv_file), '20261002235912', 'Am Morgen trinke ich Kaffee.\nBeim Spiel hatte er Spaß.', 'de', text_mode='single')
     html_identical = kardenwort_desk.run_render_flow(
         text="Am Morgen trinke ich Kaffee.\nBeim Spiel hatte er Spaß.",
         language="de",
@@ -441,7 +448,7 @@ def test_reword_dispatch_and_dynamic_rollup(page, tmp_path):
     beim_span = page.locator('#source-container span.word:has-text("Beim")').first
     beim_span.click()
     page.locator("#kw-btn-reword").click()
-    page.wait_for_timeout(100)
+    page.wait_for_function("window.__fetches.filter(call => call.url === '/session/reword').length === 1 && !document.getElementById('kw-btn-reword').disabled")
 
     fetches = page.evaluate("() => window.__fetches")
     reword_fetches = [f for f in fetches if f["url"] == "/session/reword"]
@@ -457,7 +464,7 @@ def test_reword_dispatch_and_dynamic_rollup(page, tmp_path):
 
     page.wait_for_function("() => !document.getElementById('kw-btn-reword').disabled")
     page.locator("#kw-btn-reword").click()
-    page.wait_for_timeout(100)
+    page.wait_for_function("window.__fetches.filter(call => call.url === '/session/reword').length === 2 && !document.getElementById('kw-btn-reword').disabled")
 
     fetches = page.evaluate("() => window.__fetches")
     reword_fetches = [f for f in fetches if f["url"] == "/session/reword"]
@@ -473,7 +480,6 @@ def test_reword_dispatch_and_dynamic_rollup(page, tmp_path):
             }
         });
     }""")
-    page.wait_for_timeout(100)
     trans_cell_text = page.locator("#lemma-table tbody tr[data-all-row-ids='0,1'] td.col-translation").inner_text()
     assert "утром" in trans_cell_text
     assert "во время матча" in trans_cell_text
@@ -495,6 +501,7 @@ def get_intra_sentence_desk_page_html(tmp_path, highlight_same_lemma=False, zid=
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, 'Er sieht den Hund, das Kind und die Katze.', 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text="Er sieht den Hund, das Kind und die Katze.",
         language="de",
@@ -695,6 +702,7 @@ def test_unified_article_pronoun_pos_and_translation_aggregation(page, tmp_path)
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
     text = "Er fängt heute mit der Arbeit an, die ihm gefällt. Weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde."
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, text, 'de', text_mode='multi')
     raw_html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -755,6 +763,7 @@ def test_unified_article_only_single_role_preserves_pure_art_pos(page, tmp_path)
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
     text = "Er sieht den Hund und das Kind. Er sieht das Kind und die Katze."
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, text, 'de', text_mode='multi')
     raw_html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -809,6 +818,7 @@ def test_active_subtoken_click_does_not_highlight_earlier_duplicate_token(page, 
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
     text = "Er fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde."
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, text, 'de', text_mode='multi')
     raw_html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -876,6 +886,7 @@ def test_active_subtoken_persists_across_page_reload(page, tmp_path, preference_
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
     text = "Er fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde."
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, text, 'de', text_mode='multi')
     raw_html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -969,6 +980,7 @@ def test_table_row_click_clears_storage_and_prevents_reload_resurrection(page, t
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
     text = "Er fängt heute mit der Arbeit an, der ihm versprochen wurde."
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, text, 'de', text_mode='multi')
     raw_html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -1048,6 +1060,7 @@ def test_table_row_click_highlights_all_der_occurrences(page, tmp_path):
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
     text = "Er fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde."
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, text, 'de', text_mode='multi')
     raw_html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -1332,6 +1345,7 @@ def test_separable_verb_peer_highlight_across_sentences(page, tmp_path):
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
     text = "Er fängt heute an 1. Er fängt morgen wieder an 2."
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, text, 'de', text_mode='multi')
     raw_html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -1415,6 +1429,7 @@ def test_contraction_peer_highlight_across_sentences(page, tmp_path):
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
     text = "You're here 1. We may be able 2."
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, text, 'en', text_mode='multi')
     raw_html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -1503,6 +1518,7 @@ def test_compound_subtoken_row_ids_and_highlight_isolation(page, tmp_path):
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, 'Schauen Sie bitte in Ihr E-Mail-Postfach nach der neuesten E-Mail von Amazon.', 'de', text_mode='single')
     raw_html = kardenwort_desk.run_render_flow(
         text="Schauen Sie bitte in Ihr E-Mail-Postfach nach der neuesten E-Mail von Amazon.",
         language="de",

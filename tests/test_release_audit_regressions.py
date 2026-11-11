@@ -331,6 +331,7 @@ def test_f2_browser_reconnect_recovers_durable_membership(page, tmp_path, runnin
                  results_dir=server.resolved_paths["results_dir"])
     config.set("storage", "backend", backend)
     config.set("server", "api_key", "test-controller-api-key")
+    config.set("server", "controller_port", str(server.server_port))
 
     tsv = tmp_path / f"{zid}-audit.de.tsv"
     tsv.write_text(
@@ -395,6 +396,7 @@ def test_phase3_local_uncommitted_selections_preserved_during_recovery(page, tmp
                  results_dir=server.resolved_paths["results_dir"])
     config.set("storage", "backend", "sqlite")
     config.set("server", "api_key", "test-controller-api-key")
+    config.set("server", "controller_port", str(server.server_port))
 
     tsv = tmp_path / f"{zid}-audit.de.tsv"
     tsv.write_text(
@@ -463,6 +465,7 @@ def test_phase3_concurrent_live_event_prevents_stale_read_overwrite(page, tmp_pa
                  results_dir=server.resolved_paths["results_dir"])
     config.set("storage", "backend", "sqlite")
     config.set("server", "api_key", "test-controller-api-key")
+    config.set("server", "controller_port", str(server.server_port))
 
     tsv = tmp_path / f"{zid}-audit.de.tsv"
     tsv.write_text(
@@ -484,15 +487,15 @@ def test_phase3_concurrent_live_event_prevents_stale_read_overwrite(page, tmp_pa
 
     # Intercept /internal/selection to hold the read in flight
     held_reads = []
-    page.route("**/internal/selection", lambda route: held_reads.append(route))
+    def hold_read(route):
+        held_reads.append(route)
+        page.evaluate("window.__selectionReadHeld = true")
+    page.route("**/internal/selection", hold_read)
+    page.evaluate("window.__selectionReadHeld = false")
 
     # Trigger recovery via SSEBridge connect
     page.evaluate(f"() => SSEBridge.connect('{zid}', '{url}')")
-    import time
-    for _ in range(50):
-        if len(held_reads) >= 1:
-            break
-        page.wait_for_timeout(50)
+    page.wait_for_function("window.__selectionReadHeld", timeout=2500)
     assert len(held_reads) >= 1
 
     # While read is held, a newer live event arrives updating membership

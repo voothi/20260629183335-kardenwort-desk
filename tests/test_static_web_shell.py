@@ -248,6 +248,10 @@ def test_run_render_flow_contains_kardenwort_bootstrap(tmp_path):
     config, resolved_paths, _, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
     tsv_file = tmp_path / "20261014210000-test.de.tsv"
     tsv_file.write_text("WordSource\tWordDestination\nKatze\tкошка\n", encoding="utf-8")
+    from tests.render_test_support import seed_render_tsv
+    seed_render_tsv(config,resolved_paths,tsv_file,'20261014210000','Die Katze schläft.','de')
+    config.set('pipeline','progressive_text_translation','false')
+    config.set('rendering','display_mode','monolithic')
 
     html = kardenwort_desk.run_render_flow(
         text="Die Katze schläft.",
@@ -461,7 +465,7 @@ def test_playwright_table_inline_editing_history_and_navigation(page, test_serve
 
     # 3. Save button execution and clearing dirty states (Task 6.4, R17)
     save_btn.click()
-    page.wait_for_timeout(200)
+    page.wait_for_function("!window.isDirty()")
     assert page.evaluate("() => window.isDirty()") is False
     assert "dirty" not in (dest_cell.get_attribute("class") or "")
     assert save_btn.is_disabled()
@@ -634,8 +638,8 @@ def test_playwright_action_toolbar_shortcuts_modal_and_audio(page, test_server):
 
     # 6. Global Shortcuts: F5 triggers update, Ctrl+A selects all, Ctrl+Shift+A deselects (Task 7.4, R14)
     calls.clear()
-    page.keyboard.press("F5")
-    page.wait_for_timeout(200)
+    with page.expect_response(lambda response: '/session/status' in response.url):
+        page.keyboard.press("F5")
     assert any(c[0] == "status" for c in calls)
 
     # Ctrl+A selects all rows (Task 6.6, R36)
@@ -650,8 +654,8 @@ def test_playwright_action_toolbar_shortcuts_modal_and_audio(page, test_server):
 
     # 7. Retext & Reword endpoints (Task 7.18, 7.19)
     calls.clear()
-    page.locator("#kw-btn-retext").click()
-    page.wait_for_timeout(200)
+    with page.expect_response(lambda response: '/session/retext' in response.url):
+        page.locator("#kw-btn-retext").click()
     assert any(c[0] == "retext" for c in calls)
 
     # Select row 0 before reword
@@ -659,14 +663,14 @@ def test_playwright_action_toolbar_shortcuts_modal_and_audio(page, test_server):
     assert 0 in page.evaluate("() => window.getSelectedRowsArray()")
 
     calls.clear()
-    page.locator("#kw-btn-reword").click()
-    page.wait_for_timeout(200)
+    with page.expect_response(lambda response: '/session/reword' in response.url):
+        page.locator("#kw-btn-reword").click()
     assert any(c[0] == "reword" for c in calls)
 
     # 8. Audio Pronunciation & AHK Bridge (Task 7.16, 7.17)
     calls.clear()
-    page.evaluate("() => window.playAudio('Fuchs', 'de')")
-    page.wait_for_timeout(200)
+    with page.expect_response(lambda response: '/api/v1/audio/synthesize' in response.url):
+        page.evaluate("() => window.playAudio('Fuchs', 'de')")
     assert any(c[0] == "audio" for c in calls)
 
     # AHK Bridge
@@ -1021,8 +1025,8 @@ def test_audio_drag_zoom_and_contextual_reword(page, test_server):
 
     page.goto(f"http://127.0.0.1:{port}/index.html")
 
-    page.evaluate("() => window.playAudio('Hase', 'de')")
-    page.wait_for_timeout(200)
+    with page.expect_response(lambda response: '/api/v1/audio/synthesize' in response.url):
+        page.evaluate("() => window.playAudio('Hase', 'de')")
     assert len(audio_calls) > 0
     assert audio_calls[0]["text"] == "Hase"
     assert audio_calls[0]["language"] == "de"

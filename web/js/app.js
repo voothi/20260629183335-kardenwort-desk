@@ -10475,9 +10475,12 @@
             var projections = {highlight_same_lemma: setHighlightSameLemma, filter_selected_only: setFilterSelectedOnly};
             if (projections[key]) projections[key](value, false);
         }
+        function viewCardAvailable(cards, activeCard) {
+            return (cards.length === 0 && activeCard === 1) || cards.some(function(card) { return card.seq_num === activeCard; });
+        }
         function restoreClientView(view) {
             var cards = window.WorkspaceTabs.getCards();
-            var available = cards.some(function(card) { return card.seq_num === view.active_card; });
+            var available = viewCardAvailable(cards, view.active_card);
             if (view.revision > 0) window.WorkspaceTabs.switchToTab(available ? view.active_card : 1, true);
             var restored = window.SqliteState.restoreOccurrences(view.active_tokens, tokenMap);
             window.AppState.restoredActiveTokens = restored;

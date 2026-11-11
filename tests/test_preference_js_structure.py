@@ -25,13 +25,13 @@ def function_body(source, name):
 def test_preference_javascript_branch_upper_bound():
     sources = {
         ROOT/'web/js/features/preferences.js': ['create', 'settle', 'submit', 'flushSlots', 'current', 'unresolved'],
-        ROOT/'web/js/features/sqlite-state.js': ['restoreOccurrences', 'clientSlot', 'legacyKeys', 'clearLegacy',
+        ROOT/'web/js/features/sqlite-state.js': ['restoreOccurrences', 'clientSlot', 'randomClientId', 'hasLegacyStorageOrigin', 'legacyKeys', 'clearLegacy',
             'readLegacy', 'legacyBoolean', 'importDialog', 'finish', 'importPreview', 'viewBody', 'readView',
             'migrate', 'start', 'reportFailure', 'save', 'flush', 'reconcileFailure', 'sendPreference', 'receive', 'create',
             'requireView', 'requirePreferenceAck'],
         ROOT/'web/js/app.js': ['projectPreferenceFeedback', 'projectPreferenceStatus',
             'sendPreference', 'persistPreference', 'projectPreferenceClass',
-            'setHighlightSameLemma', 'setFilterSelectedOnly', 'stateRequest', 'captureClientView', 'restoreClientView'],
+            'setHighlightSameLemma', 'setFilterSelectedOnly', 'stateRequest', 'captureClientView', 'restoreClientView', 'viewCardAvailable'],
     }
     measured = {}
     for path, names in sources.items():

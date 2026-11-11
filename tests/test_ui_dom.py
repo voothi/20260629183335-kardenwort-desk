@@ -1163,6 +1163,10 @@ def test_word_span_layout_metrics_invariance_on_flip_and_hover(page, tmp_path):
     tsv_file = tmp_path / "20261012220000-layout-test.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    from tests.render_test_support import seed_render_tsv
+    seed_render_tsv(config,resolved_paths,tsv_file,'20261012220000',source_text,'en')
+    config.set('pipeline','progressive_text_translation','false')
+    config.set('rendering','display_mode','monolithic')
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
