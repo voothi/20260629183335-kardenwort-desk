@@ -8423,18 +8423,20 @@
                                     var isCur = curSelMap.hasOwnProperty(rIdStr);
                                     var isInit = (cw.selected === '1' || cw.selected === 1);
                                     var sIdxVal = (cw.sentence_idx !== undefined && cw.sentence_idx !== null && String(cw.sentence_idx) !== '') ? parseInt(String(cw.sentence_idx), 10) : (card.sentence_idx !== undefined ? card.sentence_idx : 1);
-                                    var deltaKey = sIdxVal + '_' + rIdStr;
-                                    if (isCur !== isInit && !seenWordDeltas[deltaKey]) {
+                                    var tOrdVal = (cw.token_order !== undefined && cw.token_order !== null && String(cw.token_order) !== '') ? parseInt(String(cw.token_order), 10) : parseInt(String(rIdStr), 10);
+                                    var targets = cw.occurrence_targets || [{sentence_idx: sIdxVal, token_order: tOrdVal}];
+                                    targets.forEach(function(target) {
+                                        var deltaKey = target.sentence_idx + '_' + target.token_order;
+                                        if (isCur === isInit || seenWordDeltas[deltaKey]) return;
                                         seenWordDeltas[deltaKey] = true;
-                                        var tOrdVal = (cw.token_order !== undefined && cw.token_order !== null && String(cw.token_order) !== '') ? parseInt(String(cw.token_order), 10) : parseInt(String(rIdStr), 10);
                                         mergedDeltas.push({
                                             row_id: parseInt(String(rIdStr), 10),
-                                            token_order: tOrdVal,
-                                            sentence_idx: sIdxVal,
+                                            token_order: Number(target.token_order),
+                                            sentence_idx: Number(target.sentence_idx),
                                             column: 'DeskSelected',
                                             value: isCur ? '1' : ''
                                         });
-                                    }
+                                    });
                                 }
                             }
                         }
@@ -9281,7 +9283,12 @@
                 cards.forEach(function(card) {
                     (card.words || []).forEach(function(word) {
                         var sentence = word.sentence_idx !== undefined ? word.sentence_idx : card.sentence_idx;
-                        if (Number(sentence) === Number(d.sentence_idx) && Number(word.token_order) === Number(d.token_order)) {
+                        var targets = word.occurrence_targets || [{sentence_idx: sentence, token_order: word.token_order}];
+                        var matches = targets.some(function(target) {
+                            return Number(target.sentence_idx) === Number(d.sentence_idx) &&
+                                Number(target.token_order) === Number(d.token_order);
+                        });
+                        if (matches && (Number(d.sentence_idx) !== 0 || Number(word.row_id) === Number(d.row_id))) {
                             word.selected = d.value === '1' ? '1' : '0';
                         }
                     });
@@ -9725,6 +9732,8 @@
                 return;
             }
             if (window.commitActiveEdit) window.commitActiveEdit();
+            // A status response begun before this mutation cannot describe its result.
+            statusRead = null;
             var rows = [];
             var tokenOrders = [];
             var targetCoordinates = [];

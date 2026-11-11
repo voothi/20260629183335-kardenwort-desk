@@ -6,6 +6,7 @@ from playwright.sync_api import expect
 
 import kardenwort_desk as desk
 from tests.reword_contract_support import ZID, TOKEN, backend, provider_name, world
+from tests.sqlite_document_support import wait_state
 
 
 def open_generated_desktop(page, world, text):
@@ -66,6 +67,8 @@ def test_generated_desktop_edit_history_save_reload(page, world, active_seq):
         page.wait_for_function('!isDirty()')
         assert world.values() == {(1, 0): 'edited-house', (2, 0): 'tree'}
         page.reload()
+        if world.backend == 'sqlite':
+            wait_state(page)
         page.wait_for_function('window.WorkspaceTabs && WorkspaceTabs.getCards().length >= 3')
         page.evaluate('seq => WorkspaceTabs.switchToTab(seq)', active_seq)
         expect(cell.locator('.scrollable-cell')).to_have_text('edited-house')
@@ -114,6 +117,8 @@ def test_generated_merged_overview_rejects_ambiguity_and_child_saves_exactly(pag
         page.wait_for_function('!isDirty()')
         assert world.values() == {(1, 0): 'shared-edit', (2, 0): 'home'}
         page.reload()
+        if world.backend == 'sqlite':
+            wait_state(page)
         page.wait_for_function('window.WorkspaceTabs && WorkspaceTabs.getCards().length >= 3')
         page.evaluate('WorkspaceTabs.switchToTab(2)')
         expect(cell.locator('.scrollable-cell')).to_have_text('shared-edit')

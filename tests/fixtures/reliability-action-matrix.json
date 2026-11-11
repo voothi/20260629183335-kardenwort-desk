@@ -1,0 +1,189 @@
+{
+  "axes": {
+    "provider": [
+      "google",
+      "deepl",
+      "argos",
+      "intellifiller"
+    ],
+    "audio": [
+      "configured-engine",
+      "disabled"
+    ],
+    "theme": [
+      "dark",
+      "light",
+      "white",
+      "compact"
+    ],
+    "highlight": [
+      "lemma-off",
+      "lemma-on",
+      "subtoken"
+    ],
+    "filter": [
+      "off",
+      "on"
+    ],
+    "transport": [
+      "sse",
+      "status",
+      "overlap",
+      "reload"
+    ]
+  },
+  "rows": [
+    {
+      "provider": "google",
+      "audio": "configured-engine",
+      "theme": "dark",
+      "highlight": "lemma-off",
+      "filter": "off",
+      "transport": "sse"
+    },
+    {
+      "provider": "google",
+      "audio": "disabled",
+      "theme": "light",
+      "highlight": "lemma-on",
+      "filter": "on",
+      "transport": "status"
+    },
+    {
+      "provider": "deepl",
+      "audio": "configured-engine",
+      "theme": "white",
+      "highlight": "subtoken",
+      "filter": "on",
+      "transport": "overlap"
+    },
+    {
+      "provider": "argos",
+      "audio": "disabled",
+      "theme": "compact",
+      "highlight": "subtoken",
+      "filter": "off",
+      "transport": "reload"
+    },
+    {
+      "provider": "intellifiller",
+      "audio": "configured-engine",
+      "theme": "dark",
+      "highlight": "lemma-on",
+      "filter": "on",
+      "transport": "reload"
+    },
+    {
+      "provider": "intellifiller",
+      "audio": "disabled",
+      "theme": "light",
+      "highlight": "lemma-off",
+      "filter": "off",
+      "transport": "overlap"
+    },
+    {
+      "provider": "deepl",
+      "audio": "disabled",
+      "theme": "white",
+      "highlight": "lemma-on",
+      "filter": "off",
+      "transport": "sse"
+    },
+    {
+      "provider": "argos",
+      "audio": "configured-engine",
+      "theme": "compact",
+      "highlight": "lemma-off",
+      "filter": "on",
+      "transport": "status"
+    },
+    {
+      "provider": "deepl",
+      "audio": "disabled",
+      "theme": "dark",
+      "highlight": "subtoken",
+      "filter": "off",
+      "transport": "status"
+    },
+    {
+      "provider": "argos",
+      "audio": "configured-engine",
+      "theme": "light",
+      "highlight": "subtoken",
+      "filter": "on",
+      "transport": "sse"
+    },
+    {
+      "provider": "google",
+      "audio": "configured-engine",
+      "theme": "white",
+      "highlight": "lemma-off",
+      "filter": "off",
+      "transport": "reload"
+    },
+    {
+      "provider": "google",
+      "audio": "configured-engine",
+      "theme": "compact",
+      "highlight": "lemma-on",
+      "filter": "off",
+      "transport": "overlap"
+    },
+    {
+      "provider": "deepl",
+      "audio": "configured-engine",
+      "theme": "light",
+      "highlight": "lemma-off",
+      "filter": "off",
+      "transport": "reload"
+    },
+    {
+      "provider": "argos",
+      "audio": "configured-engine",
+      "theme": "dark",
+      "highlight": "lemma-on",
+      "filter": "off",
+      "transport": "overlap"
+    },
+    {
+      "provider": "intellifiller",
+      "audio": "configured-engine",
+      "theme": "white",
+      "highlight": "subtoken",
+      "filter": "off",
+      "transport": "status"
+    },
+    {
+      "provider": "intellifiller",
+      "audio": "configured-engine",
+      "theme": "compact",
+      "highlight": "lemma-off",
+      "filter": "off",
+      "transport": "sse"
+    },
+    {
+      "provider": "google",
+      "audio": "configured-engine",
+      "theme": "dark",
+      "highlight": "subtoken",
+      "filter": "off",
+      "transport": "sse"
+    },
+    {
+      "provider": "deepl",
+      "audio": "configured-engine",
+      "theme": "compact",
+      "highlight": "lemma-off",
+      "filter": "off",
+      "transport": "sse"
+    },
+    {
+      "provider": "argos",
+      "audio": "configured-engine",
+      "theme": "white",
+      "highlight": "lemma-off",
+      "filter": "off",
+      "transport": "sse"
+    }
+  ]
+}

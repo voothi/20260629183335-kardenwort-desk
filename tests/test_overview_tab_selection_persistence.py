@@ -4,6 +4,13 @@ import re
 from pathlib import Path
 import kardenwort_desk
 from kardenwort_db import KardenwortDB
+from tests.render_test_support import seed_render_tsv
+
+
+def manual_render_inputs(config):
+    config.read_dict({'triggers': {'run_text_translation': 'manual',
+        'run_lemma_base_translation': 'manual', 'run_lemma_enrichment': 'manual'},
+        'audio': {'lmb_play': 'false', 'rmb_play': 'false'}})
 
 
 def test_overview_tab_selection_and_f5_restoration(page, tmp_path):
@@ -15,6 +22,7 @@ def test_overview_tab_selection_and_f5_restoration(page, tmp_path):
     KardenwortDB(db_path=db_path).run_migrations()
 
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    manual_render_inputs(config)
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     config.set("sentences_mode", "spawn_order", "normal")
@@ -120,6 +128,7 @@ def test_bidirectional_shared_selection(page, tmp_path):
     KardenwortDB(db_path=db_path).run_migrations()
 
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    manual_render_inputs(config)
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     config.set("sentences_mode", "spawn_order", "normal")
@@ -210,6 +219,7 @@ def test_ctrl_s_single_execution_and_clean_hotkey(page, tmp_path):
     duplicate keydown events or spurious secondary notifications.
     """
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    manual_render_inputs(config)
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
 
@@ -222,6 +232,7 @@ def test_ctrl_s_single_execution_and_clean_hotkey(page, tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, tsv_file, unique_zid, text, 'en')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",

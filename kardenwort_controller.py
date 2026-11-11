@@ -2378,9 +2378,10 @@ class SessionArbiter:
 
         mapping = load_anki_mapping(self.resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
-        # If session is active in-memory, preserve its exact data_rows order; otherwise sort initial load
+        # Preserve the active render's row order only for a complete row snapshot.
+        # Status delivery may cache projected rows without its headers contract.
         with self._lock:
-            if session_zid in self.sessions and self.sessions[session_zid].get("data_rows"):
+            if session_zid in self.sessions and self.sessions[session_zid].get("data_rows") and self.sessions[session_zid].get("headers"):
                 data_rows = [list(r) for r in self.sessions[session_zid]["data_rows"]]
                 headers = list(self.sessions[session_zid]['headers'])
                 role_fields = get_role_fields(mapping, headers)
