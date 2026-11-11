@@ -94,10 +94,41 @@
         });
     }
 
+    function occurrenceRowIds(cards) {
+        var result = {};
+        cards.forEach(function(card) {
+            if (!(Number(card.sentence_idx) > 0)) return;
+            (card.words || []).forEach(function(word) {
+                var key = String(card.sentence_idx) + ':' + String(word.token_order);
+                var id = String(word.row_id);
+                if (Object.prototype.hasOwnProperty.call(result, key) && result[key] !== id) {
+                    throw new Error('Ambiguous occurrence in card projection: ' + key);
+                }
+                result[key] = id;
+            });
+        });
+        return result;
+    }
+
+    function normalizeOccurrenceRowDeltas(rows, cards) {
+        var identities = occurrenceRowIds(cards), result = {};
+        Object.keys(rows).forEach(function(id) {
+            var delta = rows[id];
+            if (Number(delta.sentence_idx) > 0 && delta.token_order !== undefined) {
+                var key = String(delta.sentence_idx) + ':' + String(delta.token_order);
+                var target = Object.prototype.hasOwnProperty.call(identities, key) ? identities[key] : id;
+                if (Object.prototype.hasOwnProperty.call(result, target)) throw new Error('Duplicate occurrence projection: ' + key);
+                result[target] = Object.assign({}, delta, {row_id: target});
+            } else result[id] = delta;
+        });
+        return result;
+    }
+
     function normalizeLegacyRowDeltas(rows, payload) {
         var tabs = window.WorkspaceTabs;
         var cards = tabs && tabs.getCards ? tabs.getCards() : [];
         if (!cards.length) return rows;
+        rows = normalizeOccurrenceRowDeltas(rows, cards);
         var active = tabs.getActiveCard ? tabs.getActiveCard() : null;
         var activeSentence = active && active.sentence_idx !== undefined ? String(active.sentence_idx) : null;
         var legacy = {}, matches = {}, rowMatches = {}, result = {};
@@ -5147,6 +5178,7 @@
                         token_order: tOrder,
                         atomic_id: aId,
                         lemma: lem,
+                        atomic_row_ids: td && td.atomic_row_ids !== undefined ? td.atomic_row_ids.slice() : rIds.slice(),
                         row_ids: rIds
                     });
                 }
@@ -8227,19 +8259,34 @@
 
         /** @param {HistoryAction} action @param {string} value */
         function projectEditedValue(action, value) {
-            var cell = currentHistoryCell(historyValues(action)[0]);
+            projectCellValue(historyValues(action)[0], value);
+        }
+
+        function projectCellValue(target, value) {
+            var cell = currentHistoryCell(target);
             if (!cell) return;
             cell.innerHTML = '';
             var div = document.createElement('div');
             div.className = 'scrollable-cell';
             div.textContent = value;
             cell.appendChild(div);
-            if (action.column === 'WordDestination') {
+            if (target.column === 'WordDestination') {
                 var title = formatTranslationCellTooltip(value, cell.getAttribute('data-provenance'));
                 cell.setAttribute('title', String(title));
                 div.setAttribute('title', String(title));
             }
         }
+
+        function projectPendingEdits() {
+            Object.keys(acknowledgedValues).forEach(function(key) {
+                var intent = acknowledgedValues[key];
+                if (intent.current !== intent.value && intent.delta.column !== '_delete') {
+                    projectCellValue(intent.delta, intent.current);
+                }
+            });
+            rebuildDeltas();
+        }
+        window.projectPendingEdits = projectPendingEdits;
 
         /** @param {HistoryAction} action */
         function applyAction(action) {

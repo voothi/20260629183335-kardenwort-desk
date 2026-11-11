@@ -912,6 +912,7 @@
             if (typeof w.rebindTableRows === 'function') {
                 w.rebindTableRows(selectedIds);
             }
+            if (typeof w.projectPendingEdits === 'function') w.projectPendingEdits();
             if (typeof updateEmptySelectionState === 'function') {
                 updateEmptySelectionState();
             }

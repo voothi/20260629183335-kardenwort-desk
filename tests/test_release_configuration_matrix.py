@@ -13,6 +13,7 @@ from tests.release_projection_support import checked_controller as running_contr
 from tests.test_release_boundary_contracts import ZID, TOKEN, save_selection, use_backend, wait_for_held
 from tests.test_release_save_convergence import native_http_window
 from tests.test_stream_gap_recovery import seed_session, set_committed_translation
+from tests.sqlite_document_support import wait_state
 
 
 def pairs(row):
@@ -99,6 +100,12 @@ def test_configuration_pair_converges_without_losing_filter(browser, page, tmp_p
         row.append(translation)
     adapter.save_tsv_rows_safely(Path(memo['tsv_path']), comments, headers, rows)
     memo.update(headers=headers, data_rows=rows)
+    # Retained TSV domain actions still use the real SQLite preference/view owner.
+    # Declare its relational session/occurrence prerequisites explicitly.
+    view_adapter = desk.SqliteStorageAdapter(server.config, server.resolved_paths,
+        db_path=str(server.resolved_paths['sqlite_db_path']))
+    view_adapter.save_session(session_zid=ZID, source_language='de', target_language='en',
+        text_mode='single', source_raw_text='Das Haus. Der Baum.', headers=headers, data_rows=rows)
     save_selection(url, 0, True)
     requests, errors = [], []
     native = case['host'] == 'native'
@@ -124,6 +131,7 @@ def test_configuration_pair_converges_without_losing_filter(browser, page, tmp_p
     page.on('request', lambda request: requests.append(request.url))
     page.on('pageerror', lambda error: errors.append(str(error)))
     try:
+        wait_state(page)
         active_matrix_card(page, case)
         cell = page.locator('#lemma-table tr[data-row-id="0"] td[data-col="WordDestination"] .scrollable-cell')
         expected = 'matrix-' + case['transport']

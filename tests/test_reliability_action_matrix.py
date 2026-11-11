@@ -5,6 +5,7 @@ Subtoken gestures and the complete control register have separate contracts.
 """
 import itertools
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ from tests.controller_test_support import controller_world
 from tests.enrichment_test_support import enrichment_engine
 from tests.reword_contract_support import HEADERS, ROWS, TOKEN, ZID
 from tests.test_release_boundary_contracts import post, wait_for_held
+from tests.test_preference_js_structure import function_body
 
 
 MATRIX = json.loads((Path(__file__).parent/'fixtures/reliability-action-matrix.json').read_text())
@@ -26,6 +28,14 @@ def test_frozen_action_matrix_contains_every_axis_pair():
     for first, second in itertools.combinations(axes, 2):
         assert {(row[first], row[second]) for row in MATRIX['rows']} == set(
             itertools.product(axes[first], axes[second]))
+
+
+def test_occurrence_projection_branch_upper_bound():
+    source = (Path(__file__).resolve().parents[1]/'web/js/app.js').read_text(encoding='utf-8')
+    measured = {name: 1+len(re.findall(r'\b(?:if|for|while|case|catch)\b|&&|\|\||\?', function_body(source, name)))
+        for name in ['occurrenceRowIds', 'normalizeOccurrenceRowDeltas', 'projectCellValue',
+                     'projectEditedValue', 'projectPendingEdits']}
+    assert max(measured.values()) <= 7, measured
 
 
 def configure(server, case):
@@ -75,8 +85,8 @@ def flush(page):
     assert page.evaluate('window.__matrixFlush') == 'saved'
 
 
-def render_document(world, case):
-    return desk.run_render_flow(text='Haus. Baum.', language='de', zid=ZID,
+def render_document(world, case, text='Haus. Baum.'):
+    return desk.run_render_flow(text=text, language='de', zid=ZID,
         text_mode='single', config=world.config, resolved_paths=world.paths,
         theme=case['theme'], tsv_path=ZID, spawn_children=False)
 
@@ -167,4 +177,189 @@ def test_provider_action_preserves_selection_preferences_and_cold_reload(page, c
             assert cold.db.get_session_bundle(ZID) == before
             assert errors == []
         finally:
+            page.close()
+
+
+SUBTOKEN_CASES = [case for case in MATRIX['rows'] if case['highlight'] == 'subtoken']
+
+
+@pytest.mark.parametrize('case', SUBTOKEN_CASES, ids=lambda row: '-'.join(row.values()))
+def test_compound_subtoken_action_keeps_composite_and_sibling_unchanged(page, controller_world, case):
+    url, server = controller_world
+    adapter, world = configure(server, case)
+    source = 'Haus_Baum Haus Baum.'
+    text = source+' Baum.'
+    rows = [
+        ['0', 'Haus_Baum', 'Haus_Baum', 'compound', '1', source, '', 'noun', 'House tree.'],
+        ['1', 'Haus', 'Haus', 'house', '1', source, '', 'noun', 'House tree.'],
+        ['2', 'Baum', 'Baum', 'tree', '1', source, '', 'noun', 'House tree.'],
+        ['0', 'Baum', 'Baum', 'other tree', '2', 'Baum.', '', 'noun', 'Other tree.'],
+    ]
+    adapter.save_session(session_zid=ZID, source_language='de', target_language='en',
+        source_raw_text=text, text_mode='single', headers=HEADERS+['SentenceDestination'],
+        data_rows=rows, sentences=[dict(sentence_index=1, sentence_source=source,
+            sentence_destination='House tree.'), dict(sentence_index=2,
+            sentence_source='Baum.', sentence_destination='Other tree.')])
+    audio, held = [], []
+
+    def unavailable_engine(route):
+        audio.append(route.request.post_data_json)
+        route.fulfill(status=503, content_type='application/json',
+            body='{"message":"Owned configured engine unavailable"}')
+
+    page.route('**/api/v1/audio/synthesize', unavailable_engine)
+    with enrichment_engine(server.config) as engine:
+        engine.release.set()
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        document = [render_document(world, case, text)]
+        page.route(url+'/', lambda route: route.fulfill(content_type='text/html', body=document[0]))
+        page.set_extra_http_headers({'X-API-Token': TOKEN})
+        page.set_default_timeout(6000)
+        page.goto(url+'/', wait_until='domcontentloaded')
+        try:
+            open_card(page)
+            page.evaluate('args => SSEBridge.connect(args.zid,args.url,args.token)',
+                dict(zid=ZID, url=url, token=TOKEN))
+            page.wait_for_function("document.getElementById('sse-status-indicator').dataset.sync === 'synced'")
+            token = page.locator('#source-container .word[data-lower-clean="haus"][data-sentence-idx="1"]').first
+            sibling = page.locator('#source-container .word[data-lower-clean="baum"][data-sentence-idx="1"]').first
+            assert token.count() == 1, page.locator('#source-container').inner_html()
+            geometry = [token.bounding_box(), sibling.bounding_box()]
+            token.click()
+            flush(page)
+            assert [token.bounding_box(), sibling.bounding_box()] == geometry
+            assert adapter.get_shared_selection(ZID) == {'haus_baum': False, 'haus': True, 'baum': False}
+            assert 'highlight-orange-active' in (token.get_attribute('class') or '')
+            assert 'highlight-orange-active' not in (sibling.get_attribute('class') or '')
+            if case['audio'] == 'configured-engine':
+                expect(page.locator('#kw-toast-container')).to_contain_text('Audio failed')
+                assert audio == [{'text': 'Haus', 'language': 'de'}]
+            else:
+                assert audio == []
+            if case['filter'] == 'on':
+                page.locator('#kw-btn-filter-selected').click()
+                page.wait_for_function('AppState.filterSelectedOnly === true')
+            flush(page)
+            before = adapter.db.get_words_by_session(ZID)
+            if case['transport'] == 'overlap':
+                page.route('**/session/status?*', lambda route: held.append(route))
+                page.evaluate('onUpdateClick()')
+                wait_for_held(page, held, 1)
+                stale = held[0].fetch()
+            with page.expect_response('**/session/reword') as response:
+                page.locator('#kw-btn-reword').click()
+            assert response.value.ok, (response.value.text(), response.value.request.post_data_json,
+                page.evaluate('AppState.activeTokenSelections'))
+            targets = response.value.request.post_data_json['target_coordinates']
+            assert [(int(target['sentence_idx']), int(target['token_order'])) for target in targets] == [(1, 1)]
+            expected = 'trans_Haus' if case['provider'] == 'intellifiller' else case['provider']+': Haus'
+            cold = desk.SqliteStorageAdapter(server.config, server.resolved_paths)
+            after = cold.db.get_words_by_session(ZID)
+            assert after[1]['word_destination'] == expected
+            assert after[1]['word_provenance'] == 'live:'+case['provider']
+            assert after[0] == before[0]
+            assert after[2] == before[2]
+            assert after[3] == before[3]
+            cell = page.locator('#lemma-table tr[data-token-order="1"] td[data-col="WordDestination"] .scrollable-cell')
+            expect(cell).to_have_text(expected)
+            if case['transport'] == 'overlap':
+                held.pop().fulfill(response=stale)
+                page.unroute('**/session/status?*')
+                expect(page.locator('#kw-btn-update')).to_be_enabled()
+            elif case['transport'] == 'status':
+                with page.expect_response('**/session/status?*') as status:
+                    page.locator('#kw-btn-update').click()
+                assert status.value.ok
+            expect(cell).to_have_text(expected)
+            assert not page.evaluate('isDirty()'), page.evaluate('({deltas:getDeltas(), selected:AppState.selectedLemmas, cards:WorkspaceTabs.getCards().map(c=>({seq:c.seq_num,selected:c.selected_ids,words:c.words.map(w=>({id:w.row_id,sentence:w.sentence_idx,token:w.token_order,lemma:w.lemma,selected:w.selected}))}))})')
+            document[0] = render_document(world, case, text)
+            page.reload()
+            open_card(page)
+            page.evaluate('args => SSEBridge.connect(args.zid,args.url,args.token)',
+                dict(zid=ZID, url=url, token=TOKEN))
+            page.wait_for_function("document.getElementById('sse-status-indicator').dataset.sync === 'synced'")
+            expect(cell).to_have_text(expected)
+            assert cold.get_shared_selection(ZID) == {'haus_baum': False, 'haus': True, 'baum': False}
+            assert page.evaluate('AppState.filterSelectedOnly') is (case['filter'] == 'on')
+            flush(page)
+            with page.expect_response('**/session/reword') as restored:
+                page.locator('#kw-btn-reword').click()
+            assert restored.value.ok, restored.value.text()
+            assert len(restored.value.request.post_data_json['row_ids']) == 1
+            targets = restored.value.request.post_data_json['target_coordinates']
+            assert [(int(target['sentence_idx']), int(target['token_order'])) for target in targets] == [(1, 1)]
+            assert cold.db.get_words_by_session(ZID) == after
+            assert errors == []
+        finally:
+            for route in held:
+                route.abort()
+            page.close()
+
+
+@pytest.mark.parametrize('provider', ['google', 'intellifiller'])
+def test_provider_completion_and_old_status_preserve_unrelated_pending_edit(page, controller_world, provider):
+    case = next(row for row in MATRIX['rows'] if row['provider'] == provider and row['audio'] == 'disabled')
+    url, server = controller_world
+    adapter, world = configure(server, case)
+    held, errors = [], []
+    with enrichment_engine(server.config) as engine:
+        engine.release.set()
+        document = [render_document(world, case)]
+        page.route(url+'/', lambda route: route.fulfill(content_type='text/html', body=document[0]))
+        page.set_extra_http_headers({'X-API-Token': TOKEN})
+        page.set_default_timeout(6000)
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.goto(url+'/')
+        try:
+            open_card(page)
+            page.evaluate('args => SSEBridge.connect(args.zid,args.url,args.token)',
+                dict(zid=ZID, url=url, token=TOKEN))
+            page.wait_for_function("document.getElementById('sse-status-indicator').dataset.sync === 'synced'")
+            page.locator('#source-container .word[data-sentence-idx="1"]').first.click()
+            flush(page)
+            page.route('**/session/status?*', lambda route: held.append(route))
+            page.locator('#kw-btn-update').click()
+            wait_for_held(page, held, 1)
+            stale = held[0].fetch()
+            page.evaluate('WorkspaceTabs.switchToTab(3)')
+            cell = page.locator('#lemma-table tr[data-sentence-idx="2"] td[data-col="WordDestination"]')
+            cell.dblclick()
+            cell.locator('input.cell-editor').fill('pending tree edit')
+            cell.locator('input.cell-editor').press('Enter')
+            pending = page.evaluate('getDeltas()')
+            assert page.evaluate('isDirty()')
+            before_other = adapter.db.get_words_by_session(ZID)[1]
+            status, result = post(url, '/session/reword', dict(session_zid=ZID, language='de', row_ids=[0],
+                target_coordinates=[dict(sentence_idx=1, token_order=0)], sentence_idx=1), token=TOKEN)
+            assert status == 200, result
+            expected = 'trans_Haus' if provider == 'intellifiller' else 'google: Haus'
+            page.evaluate('WorkspaceTabs.switchToTab(2)')
+            house = page.locator('#lemma-table tr[data-sentence-idx="1"] td[data-col="WordDestination"] .scrollable-cell')
+            expect(house).to_have_text(expected)
+            held.pop().fulfill(response=stale)
+            page.unroute('**/session/status?*')
+            expect(page.locator('#kw-btn-update')).to_be_enabled()
+            expect(house).to_have_text(expected)
+            assert page.evaluate('getDeltas()') == pending
+            page.evaluate('WorkspaceTabs.switchToTab(3)')
+            expect(cell.locator('.scrollable-cell')).to_have_text('pending tree edit')
+            cold = desk.SqliteStorageAdapter(server.config, server.resolved_paths)
+            committed = cold.db.get_words_by_session(ZID)
+            assert (committed[0]['word_destination'], committed[0]['word_provenance']) == (expected, 'live:'+provider)
+            assert committed[1] == before_other
+            with page.expect_response('**/session/save') as saved:
+                page.locator('#kw-btn-save').click()
+            assert saved.value.ok, saved.value.text()
+            flush(page)
+            assert [word['word_destination'] for word in cold.db.get_words_by_session(ZID)] == [expected, 'pending tree edit']
+            document[0] = render_document(world, case)
+            page.reload()
+            open_card(page, 3)
+            expect(cell.locator('.scrollable-cell')).to_have_text('pending tree edit')
+            assert not page.evaluate('isDirty()')
+            assert errors == []
+        finally:
+            for route in held:
+                route.abort()
             page.close()

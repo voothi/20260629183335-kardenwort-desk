@@ -10,7 +10,8 @@
             if (matches.length !== 1) return null;
             var token = matches[0];
             return {visual_idx: token.visual_idx, sentence_idx: token.sentence_idx, token_order: token.token_order,
-                atomic_id: token.atomic_id, lemma: token.lemma, row_ids: token.row_ids.slice()};
+                atomic_id: token.atomic_id, lemma: token.lemma, row_ids: token.row_ids.slice(),
+                atomic_row_ids: (token.atomic_row_ids !== undefined ? token.atomic_row_ids : token.row_ids).slice()};
         }).filter(function(item) { return item !== null; });
     }
     function clientSlot() {

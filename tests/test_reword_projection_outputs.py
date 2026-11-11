@@ -16,9 +16,8 @@ def test_generated_cards_use_complete_provenance_identity(world, provider_name):
     occurrence_world(world)
     status, payload = world.post(row_request(world))
     assert status == 200, payload
-    world.config.add_section('rendering')
-    world.config.set('rendering', 'filter_selected_only', 'false')
-    world.config.set('sentences_mode', 'enabled', 'true')
+    world.config.read_dict({'rendering': {'filter_selected_only': 'false'},
+        'sentences_mode': {'enabled': 'true'}})
     before = world.snapshot()
     rendered = desk.run_render_flow(text='Haus und Haus. Baum.', language='de', zid=ZID,
         text_mode='single', config=world.config, resolved_paths=world.paths,

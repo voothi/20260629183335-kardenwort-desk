@@ -338,7 +338,7 @@ def test_server_maintenance_expires_abandoned_consumer_without_another_poll(monk
 
 def native_http_window(browser, html, url, consumer):
     """A synchronous HTTP transport runs the shared JS against the real controller."""
-    context = browser.new_context()
+    context = browser.new_context(extra_http_headers={'X-API-Token': TOKEN})
     page = context.new_page()
     page.clock.install()
     page.clock.pause_at(page.evaluate('Date.now()') + 1000)
