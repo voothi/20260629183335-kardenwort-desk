@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 import kardenwort_desk
+from tests.controller_test_support import controller_world, DeterministicTranslationHandler
 from kardenwort_desk import (
     resolve_provider_chain,
     translate_text,
@@ -459,23 +460,27 @@ def test_resolve_provider_chain_canonical_precedence():
     assert leg_provs == ["deepl"]
 
 
-def test_network_failure_fast_path_text_bypasses_intermediate_online_providers(tmp_path):
-    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
-    config = make_config(chain="google, deepl, argos", strategy="chain")
+def test_network_failure_fast_path_text_bypasses_intermediate_online_providers(controller_world, monkeypatch):
+    from translate_server import TranslationServerException
+    _, server = controller_world
+    resolved_paths = server.resolved_paths
+    config = make_config(chain='google, deepl, argos', strategy='chain')
+    config.read_dict({'services': {'translation_server_url': f'http://127.0.0.1:{server.translation_service.server_port}'}})
+    mock_google = MagicMock(side_effect=TranslationServerException(503, 'ERR_NETWORK_UNREACHABLE', 'Network unreachable'))
+    mock_deepl = MagicMock(return_value='DeepL should not be called')
+    mock_argos = MagicMock(return_value='Argos translated sentence')
 
-    mock_google = MagicMock(side_effect=ConnectionError("Network unreachable"))
-    mock_deepl = MagicMock(return_value="DeepL should not be called")
-    mock_argos = MagicMock(return_value="Argos translated sentence")
+    def engine(handler, provider, text, source, target):
+        handler.server.provider_calls.append((text, source, target))
+        return {'google': mock_google, 'deepl': mock_deepl, 'argos': mock_argos}[provider](text, source, target)
 
-    with patch("kardenwort_desk.is_network_online_multi", return_value=False), \
-         patch("kardenwort_desk.run_google_translation", mock_google), \
-         patch("kardenwort_desk.run_deepl_translation", mock_deepl), \
-         patch("kardenwort_desk.run_argos_translation", mock_argos):
-        res = _translate_text_impl("Test text", "en", "de", config, resolved_paths)
-        assert res == "Argos translated sentence"
-        mock_google.assert_called_once()
-        mock_deepl.assert_not_called()
-        mock_argos.assert_called_once()
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', engine)
+    monkeypatch.setattr(kardenwort_desk, 'is_network_online_multi', lambda **kwargs: False)
+    res = _translate_text_impl('Test text', 'en', 'de', config, resolved_paths)
+    assert res == "Argos translated sentence"
+    mock_google.assert_called_once()
+    mock_deepl.assert_not_called()
+    mock_argos.assert_called_once()
 
 
 def test_network_failure_fast_path_lemmas_bypasses_intermediate_online_providers(tmp_path):
@@ -498,43 +503,39 @@ def test_network_failure_fast_path_lemmas_bypasses_intermediate_online_providers
         assert getattr(res, "provenance", None) == "live:argos"
 
 
-def test_single_provider_timeout_while_host_online_sequential_failover(tmp_path):
-    """Task 3.1: When host is online and Google times out, failover sequentially to DeepL (not Argos)."""
-    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
-    config = make_config(chain="google, deepl, argos", strategy="chain")
+def test_single_provider_timeout_while_host_online_sequential_failover(controller_world, monkeypatch):
+    """Actual HTTP provider timeout follows DeepL for both text and lemma tasks."""
+    from translate_server import TranslationServerException
+    _, server = controller_world
+    resolved_paths = server.resolved_paths
+    config = make_config(chain='google, deepl, argos', strategy='chain')
+    service = {'translation_server_url': f'http://127.0.0.1:{server.translation_service.server_port}'}
+    config.read_dict({'services': service})
+    settings = resolved_paths['base_dir']/'deepl-settings.ini'
+    settings.write_text('[Security]\nSecretsPath=owned-deepl.ini\n', encoding='utf-8')
+    settings.with_name('owned-deepl.ini').write_text('[DeepL]\nKey=dGVzdC1rZXk=\n', encoding='utf-8')
+    config.read_dict({'environment': {'deepl_settings_file': str(settings)}})
+    mock_google = MagicMock(side_effect=TranslationServerException(504, 'ERR_TIMEOUT', 'Connection timeout to Google'))
+    mock_deepl = MagicMock(side_effect=lambda text, *args: 'Haus' if text == 'House' else 'DeepL translated sentence')
+    mock_argos = MagicMock(return_value='Argos sentence')
 
-    # Text pipeline verification
-    mock_google = MagicMock(side_effect=TimeoutError("Connection timeout to Google"))
-    mock_deepl = MagicMock(return_value="DeepL translated sentence")
-    mock_argos = MagicMock(return_value="Argos sentence")
+    def engine(handler, provider, text, source, target):
+        handler.server.provider_calls.append((text, source, target))
+        return {'google': mock_google, 'deepl': mock_deepl, 'argos': mock_argos}[provider](text, source, target)
 
-    with patch("kardenwort_desk.is_network_online_multi", return_value=True), \
-         patch("kardenwort_desk.run_google_translation", mock_google), \
-         patch("kardenwort_desk.run_deepl_translation", mock_deepl), \
-         patch("kardenwort_desk.run_argos_translation", mock_argos):
-        res = _translate_text_impl("Test text", "en", "de", config, resolved_paths)
-        assert res == "DeepL translated sentence"
-        mock_google.assert_called_once()
-        mock_deepl.assert_called_once()
-        mock_argos.assert_not_called()
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', engine)
+    monkeypatch.setattr(kardenwort_desk, 'is_network_online_multi', lambda **kwargs: True)
+    res = _translate_text_impl('Test text', 'en', 'de', config, resolved_paths)
+    assert res == "DeepL translated sentence"
+    mock_google.assert_called_once()
+    mock_deepl.assert_called_once()
+    mock_argos.assert_not_called()
 
-    # Lemma pipeline verification
-    lemma_config = make_config(lemma_chain="google, deepl, argos", strategy="chain")
-
-    def mock_translate_lemma(text, source, target, cfg, paths, provider=None, zid=None, trace_id=None, task_type='lemma'):
-        if provider == "google":
-            raise TimeoutError("Google timed out")
-        elif provider == "deepl":
-            return "Haus"
-        elif provider == "argos":
-            raise RuntimeError("Argos should not be called when DeepL is available")
-        return ""
-
-    with patch("kardenwort_desk.is_network_online_multi", return_value=True), \
-         patch("kardenwort_desk.translate_text", side_effect=mock_translate_lemma):
-        res_lemma = translate_lemmas_fast_path(["House"], "en", "de", lemma_config, resolved_paths, provider="google")
-        assert res_lemma == {"House": "Haus"}
-        assert getattr(res_lemma, "provenance", None) == "live:deepl"
+    lemma_config = make_config(lemma_chain='google, deepl, argos', strategy='chain')
+    lemma_config.read_dict({'services': service, 'environment': {'deepl_settings_file': str(settings)}})
+    res_lemma = translate_lemmas_fast_path(['House'], 'en', 'de', lemma_config, resolved_paths, provider='google')
+    assert res_lemma == {"House": "Haus"}
+    assert getattr(res_lemma, "provenance", None) == "live:deepl"
 
 
 def test_task_scoped_cooldown_isolation_text_and_lemma(tmp_path):

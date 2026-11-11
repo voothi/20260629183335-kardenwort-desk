@@ -17,7 +17,7 @@ from http.server import ThreadingHTTPServer
 import kardenwort_desk
 import kardenwort_controller
 from tests.thread_support import sse_events
-from tests.controller_test_support import controller_world
+from tests.controller_test_support import controller_world, DeterministicTranslationHandler
 from tests.audio_test_support import audio_server
 from kardenwort_controller import (
     ProcessSupervisor,
@@ -2072,90 +2072,32 @@ kardenwort_workspace={tmp_path.as_posix()}
     assert res["rows"][0]["provenance"] == "live:base"
 
 
-def test_reword_session_classification_reevaluation(tmp_path, monkeypatch):
-    """
-    Verifies that reword_session dynamically re-evaluates classification dictionary mappings
-    for reworded rows when [classification] is enabled.
-    """
-    import configparser
-    config_path = tmp_path / "config.ini"
-    mapping_path = tmp_path / "mapping.ini"
-    mapping_path.write_text(
-        "[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_index=SentenceSourceIndex\n[desk_columns]\nClassificationOxford=oxford\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nClassificationOxford=\nSentenceSourceIndex=\n",
-        encoding="utf-8"
-    )
-    kw_workspace = tmp_path / "kw_ws"
-    kw_workspace.mkdir(parents=True, exist_ok=True)
-    results_dir = kw_workspace / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
+@pytest.mark.parametrize('controller_world', ['tsv'], indirect=True)
+def test_reword_session_classification_reevaluation(controller_world, monkeypatch):
+    from tests.classification_test_support import configure_classification
+    _, server = controller_world
+    config, resolved_paths = configure_classification(server, monkeypatch)
+    config.set('pipeline', 'lemma_reprocess_provider', 'deepl')
+    config.set('pipeline', 'lemma_provider_chain', 'deepl')
+    sess_zid = '20260913010303'
+    headers = ['TokenOrder', 'WordSource', 'WordDestination', 'ClassificationOxford', 'SentenceSourceIndex']
+    data_rows = [['0', 'abandon', '', '', '1'], ['1', 'ability', '', '', '1']]
+    tsv_file = resolved_paths['results_dir']/f'{sess_zid}.en.tsv'
+    kardenwort_desk.save_tsv_rows_safely(tsv_file, [], headers, data_rows)
+    arbiter = server.arbiter
+    arbiter.sessions[sess_zid] = dict(session_zid=sess_zid, language='en', headers=headers,
+        data_rows=data_rows, row_provenances={}, tsv_path=str(tsv_file),
+        role_fields=dict(lemma='WordSource', word_translation='WordDestination', oxford='ClassificationOxford',
+                         sentence_index='SentenceSourceIndex'))
 
-    config_path.write_text(f"""[pipeline]
-lemma_reprocess_provider=deepl
-[classification]
-enabled=true
-[storage]
-backend=tsv
-[settings]
-default_language=en
-default_target_language=ru
-anki_mapping_file={mapping_path.as_posix()}
-[environment]
-kardenwort_workspace={kw_workspace.as_posix()}
-""", encoding="utf-8")
+    def engine(handler, provider, text, source, target):
+        handler.server.provider_calls.append((text, source, target))
+        for lemma in ('abandon', 'ability'):
+            text = text.replace(lemma, 'trans_' + lemma)
+        return text
 
-    config, resolved_paths, _, _ = kardenwort_desk.load_config(config_path)
-    sess_zid = "20260913010303"
-    tsv_file = results_dir / f"{sess_zid}.en.tsv"
-    tsv_file.write_text(
-        "# comment\n"
-        "TokenOrder\tWordSource\tWordDestination\tClassificationOxford\tSentenceSourceIndex\n"
-        "0\tabandon\t\t\t1\n"
-        "1\tability\t\t\t1\n",
-        encoding="utf-8"
-    )
-
-    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
-    arbiter.sessions[sess_zid] = {
-        "session_zid": sess_zid,
-        "language": "en",
-        "data_rows": [
-            ["0", "abandon", "", "", "1"],
-            ["1", "ability", "", "", "1"],
-        ],
-        "headers": ["TokenOrder", "WordSource", "WordDestination", "ClassificationOxford", "SentenceSourceIndex"],
-        "role_fields": {"lemma": "WordSource", "word_translation": "WordDestination", "oxford": "ClassificationOxford", "sentence_index": "SentenceSourceIndex"},
-        "row_provenances": {},
-    }
-
-    # Mock MT
-    def fake_fast_path(lemmas, source, target, config, resolved_paths, provider):
-        return {l: f"trans_{l}" for l in lemmas}
-    monkeypatch.setattr(kardenwort_controller, "translate_lemmas_fast_path", fake_fast_path)
-
-    # Mock classification dictionary loader
-    mock_dict = {"abandon": "B2", "ability": "A2"}
-    kw_cp = configparser.ConfigParser()
-    kw_cp.read_string("[classification]\nenabled=true\ndictionaries_en=oxford=3k:data/en/oxford.tsv\n")
-    monkeypatch.setattr(kardenwort_controller, "load_kardenwort_config", lambda ws: kw_cp)
-
-    import types
-    mock_kw = types.ModuleType("kardenwort")
-    mock_kw_core = types.ModuleType("kardenwort.core")
-    mock_kw_core_kw = types.ModuleType("kardenwort.core.kardenwort")
-    mock_kw_core_kw.load_classification_dictionaries = lambda classify_args: {"oxford": mock_dict}
-    mock_kw.core = mock_kw_core
-    mock_kw_core.kardenwort = mock_kw_core_kw
-
-    monkeypatch.setitem(sys.modules, "kardenwort", mock_kw)
-    monkeypatch.setitem(sys.modules, "kardenwort.core", mock_kw_core)
-    monkeypatch.setitem(sys.modules, "kardenwort.core.kardenwort", mock_kw_core_kw)
-
-    res = arbiter.reword_session(
-        session_zid=sess_zid,
-        selected_rows=[0, 1],
-        language="en",
-    )
-
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', engine)
+    res = arbiter.reword_session(session_zid=sess_zid, selected_rows=[0, 1], language='en')
     assert res["status"] == "success"
     assert res["row_provenances"].get(0) == "live:deepl" or res["row_provenances"].get("0") == "live:deepl"
     assert res["rows"][0]["trans"] == "trans_abandon"
@@ -2167,48 +2109,19 @@ kardenwort_workspace={kw_workspace.as_posix()}
     assert res["rows"][0].get("classifications", {}).get("oxford") == "B2"
     assert res["rows"][1].get("classifications", {}).get("oxford") == "A2"
 
+    _, stored_headers, stored = kardenwort_desk.load_tsv_rows(tsv_file)
+    assert [row[stored_headers.index('ClassificationOxford')] for row in stored] == ['B2', 'A2']
+    assert server.translation_service.provider_calls
 
-def test_reword_session_classification_reevaluation_sqlite(tmp_path, monkeypatch):
-    """
-    Verifies that reword_session in SQLite storage mode dynamically re-evaluates
-    classification dictionary mappings and persists them into SQLite words.
-    """
-    import configparser
-    from kardenwort_db import KardenwortDB
-    db_path = tmp_path / "kardenwort.db"
-    db = KardenwortDB(str(db_path))
-    db.run_migrations()
 
-    mapping_path = tmp_path / "mapping.ini"
-    mapping_path.write_text(
-        "[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_index=SentenceSourceIndex\n[desk_columns]\nClassificationOxford=oxford\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nClassificationOxford=\nSentenceSourceIndex=\n",
-        encoding="utf-8"
-    )
-    kw_workspace = tmp_path / "kw_ws"
-    kw_workspace.mkdir(parents=True, exist_ok=True)
-    results_dir = kw_workspace / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
-
-    config_path = tmp_path / "config.ini"
-    config_path.write_text(f"""[pipeline]
-lemma_reprocess_provider=google
-[classification]
-enabled=true
-[storage]
-backend=sqlite
-sqlite_db_path={db_path.as_posix()}
-[settings]
-default_language=en
-default_target_language=ru
-anki_mapping_file={mapping_path.as_posix()}
-[environment]
-kardenwort_workspace={kw_workspace.as_posix()}
-""", encoding="utf-8")
-
-    config, resolved_paths, _, _ = kardenwort_desk.load_config(config_path)
+def test_reword_session_classification_reevaluation_sqlite(controller_world, monkeypatch):
+    from tests.classification_test_support import configure_classification
+    from tests.test_structured_enrichment import control_writes, prohibited
+    _, server = controller_world
+    config, resolved_paths = configure_classification(server, monkeypatch)
+    config.set('pipeline', 'lemma_reprocess_provider', 'google')
     storage_adapter = kardenwort_desk.get_storage_adapter(config, resolved_paths)
-    sess_zid = "20260913010404"
-
+    sess_zid = '20260913010404'
     storage_adapter.save_session(
         session_zid=sess_zid,
         slug="test-sqlite-class",
@@ -2226,36 +2139,18 @@ kardenwort_workspace={kw_workspace.as_posix()}
         zid=sess_zid,
     )
 
-    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
-    arbiter.storage_adapter = storage_adapter
+    arbiter = server.arbiter
+    unrelated = storage_adapter.db.get_session_bundle('20261108113001')
 
-    def fake_fast_path(lemmas, source, target, config, resolved_paths, provider):
-        return {l: f"перевод_{l}" for l in lemmas}
-    monkeypatch.setattr(kardenwort_controller, "translate_lemmas_fast_path", fake_fast_path)
+    def engine(handler, provider, text, source, target):
+        handler.server.provider_calls.append((text, source, target))
+        for lemma in ('doctor', 'patient'):
+            text = text.replace(lemma, '\u043f\u0435\u0440\u0435\u0432\u043e\u0434_' + lemma)
+        return text
 
-    mock_dict = {"doctor": "A1", "patient": "B1"}
-    kw_cp = configparser.ConfigParser()
-    kw_cp.read_string("[classification]\nenabled=true\ndictionaries_en=oxford=3k:data/en/oxford.tsv\n")
-    monkeypatch.setattr(kardenwort_controller, "load_kardenwort_config", lambda ws: kw_cp)
-
-    import types
-    mock_kw = types.ModuleType("kardenwort")
-    mock_kw_core = types.ModuleType("kardenwort.core")
-    mock_kw_core_kw = types.ModuleType("kardenwort.core.kardenwort")
-    mock_kw_core_kw.load_classification_dictionaries = lambda classify_args: {"oxford": mock_dict}
-    mock_kw.core = mock_kw_core
-    mock_kw_core.kardenwort = mock_kw_core_kw
-
-    monkeypatch.setitem(sys.modules, "kardenwort", mock_kw)
-    monkeypatch.setitem(sys.modules, "kardenwort.core", mock_kw_core)
-    monkeypatch.setitem(sys.modules, "kardenwort.core.kardenwort", mock_kw_core_kw)
-
-    res = arbiter.reword_session(
-        session_zid=sess_zid,
-        selected_rows=[0, 1],
-        language="en",
-    )
-
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', engine)
+    with control_writes() as writes:
+        res = arbiter.reword_session(session_zid=sess_zid, selected_rows=[0, 1], language='en')
     assert res["status"] == "success"
     assert res["rows"][0]["trans"] == "перевод_doctor"
     assert res["rows"][0]["provenance"] == "live:google"
@@ -2268,6 +2163,13 @@ kardenwort_workspace={kw_workspace.as_posix()}
     doc_word = next(w for w in db_words if w["lemma"] == "doctor")
     assert doc_word["word_destination"] == "перевод_doctor"
     assert doc_word["word_provenance"] == "live:google"
+
+    cold = kardenwort_desk.SqliteStorageAdapter(config, resolved_paths)
+    stored = cold.db.get_words_by_session(sess_zid)
+    assert [row['classification_oxford'] for row in stored] == ['A1', 'B1']
+    assert cold.db.get_session_bundle('20261108113001') == unrelated
+    assert server.translation_service.provider_calls
+    assert prohibited(writes) == []
 
 
 def test_reword_session_with_lemma_frequency_shift_preserves_target_row_and_neighbors(tmp_path, monkeypatch):

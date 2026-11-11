@@ -12966,7 +12966,8 @@ def run_lookup_flow(
             with storage_adapter.file_lock(working_tsv_path):
                 storage_adapter.save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
             prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
-            run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
+            # Base translation already filled destinations; requested enrichment must still run.
+            run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths, reprocess=True)
             comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
     else:
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])

@@ -3245,68 +3245,66 @@ def test_translation_exception_envelope():
     assert exc.envelope == env
 
 
-def test_cmd_export_and_detached_import_trace_propagation(monkeypatch, tmp_path):
-    config = configparser.ConfigParser()
-    config.read_string("""
-[settings]
-export_selection_mode=selected
-save_to_favorites_on_export=true
-send_to_anki_after_export=true
-detach_import_on_send=true
-show_import_window=false
-""")
-    
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "config.ini").write_text("[project_structure]\ngenerated_results_dir=results\n")
-    results_dir = workspace / "results"
-    results_dir.mkdir()
-    
-    working_tsv = results_dir / "20260818190300-test.en.tsv"
-    working_tsv.write_text("DeskSelected\tSourceWord\tTranslation\n0\tword\ttranslation\n", encoding='utf-8')
-    
-    fav_dir = tmp_path / "favorites"
+def test_cmd_export_and_detached_import_trace_propagation(monkeypatch, tmp_path, controller_world):
+    """Real export plus a deterministic OS launch acknowledgment; child import is separate."""
+    _, server = controller_world
+    config, resolved_paths = server.config, server.resolved_paths
+    fav_dir = tmp_path/'favorites'
     fav_dir.mkdir()
-    
-    resolved_paths = {
-        'kardenwort_workspace': workspace,
-        'favorites_output_dir': fav_dir,
-        'kardenwort_python': sys.executable,
-        'anki_mapping_file': tmp_path / "anki-mapping.ini"
-    }
-    
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps({
-        "zid": "20260818190300",
-        "selected_row_ids": [0],
-        "tsv_path": str(working_tsv)
-    }))
-    
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
-    monkeypatch.setattr(desk, 'load_anki_mapping', lambda p: configparser.ConfigParser())
-    
-    import subprocess
+    config.read_dict({'settings': {'export_selection_mode': 'selected',
+        'anki_mapping_file': str(resolved_paths['anki_mapping_file']), 'favorites_output_dir': str(fav_dir),
+        'save_to_favorites_on_export': 'true', 'send_to_anki_after_export': 'true',
+        'detach_import_on_send': 'true', 'show_import_window': 'false'}})
+    configuration = tmp_path/'export-config.ini'
+    with configuration.open('w', encoding='utf-8') as stream:
+        config.write(stream)
+    adapter = desk.SqliteStorageAdapter(config, resolved_paths)
+    zid = '20260818190300'
+    adapter.save_session(session_zid=zid, slug='test', source_language='en', target_language='ru',
+        source_raw_text='word', sentences=[dict(sentence_index=1, sentence_source='word')],
+        words=[dict(sentence_index=1, token_order=0, quotation='word', lemma='word',
+                    word_destination='translation', selected=0)])
+    before = adapter.db.get_words_by_session(zid)
+    working_tsv = resolved_paths['results_dir']/f'{zid}-test.en.tsv'
+    manifest_path = tmp_path/'manifest.json'
+    manifest_path.write_text(json.dumps(dict(zid=zid, selected_row_ids=[0], tsv_path=str(working_tsv))), encoding='utf-8')
     captured_commands = []
-    def mock_popen(cmd, **kwargs):
+    runner = Path(resolved_paths['kardenwort_workspace'])/'src/kardenwort/core/kardenwort_runner.py'
+    assert runner.is_file()
+
+    def launch_acknowledgment(cmd, **kwargs):
+        # Observe command construction and PID forwarding only; never launch Anki or playback.
+        assert Path(cmd[1]) == runner
         captured_commands.append(cmd)
-        class MockProcess:
-            pid = 9999
-        return MockProcess()
-        
-    monkeypatch.setattr(desk.subprocess, 'Popen', mock_popen)
-    
+        return type('LaunchAcknowledgment', (), {'pid': 9999})()
+
+    monkeypatch.setattr(desk.subprocess, 'Popen', launch_acknowledgment)
     class Args:
-        config = None
+        config = str(configuration)
         selection_manifest = str(manifest_path)
-        language = "en"
-        zid = "20260818190300"
-        trace_id = "20260818190300:export:selection"
-        
+        language = 'en'
+        zid = '20260818190300'
+        trace_id = '20260818190300:export:selection'
+
     captured_payloads = []
-    monkeypatch.setattr(desk, 'emit_payload', lambda p: captured_payloads.append(p))
-    
+    original_emit = desk.emit_payload
+
+    def observe(payload):
+        captured_payloads.append(payload)
+        return original_emit(payload)
+
+    monkeypatch.setattr(desk, 'emit_payload', observe)
     desk.cmd_export(Args())
-    
+    favorites = list(fav_dir.glob('*.tsv'))
+    assert len(favorites) == 1
+    _, exported_headers, exported = desk.load_tsv_rows(favorites[0])
+    assert len(exported) == 1
+    assert exported[0][exported_headers.index('WordSource')] == 'word'
+    assert exported[0][exported_headers.index('WordDestination')] == 'translation'
+    cold = desk.SqliteStorageAdapter(config, resolved_paths)
+    assert cold.db.get_words_by_session(zid) == [dict(before[0], selected=1)]
+    assert not working_tsv.exists()
+
     assert len(captured_payloads) == 1
     assert captured_payloads[0]["import_started"] is True
     assert captured_payloads[0]["pid"] == 9999

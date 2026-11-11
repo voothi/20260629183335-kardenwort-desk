@@ -19,10 +19,7 @@ class EnrichmentHandler(BaseHTTPRequestHandler):
             self.server.changed.notify_all()
         try:
             assert self.server.release.wait(5), 'Enrichment engine was not released'
-            rows = [dict(row_id=row['row_id'], WordDestination='trans_' + row['WordSource'],
-                         WordSourceIPA='/ipa_' + row['WordSource'] + '/',
-                         WordSourceMorphologyAI='morph_' + row['WordSource'])
-                    for row in payload['rows']]
+            rows = self.server.response(payload['rows'])
             body = json.dumps(dict(status='success', enriched_rows=rows)).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
@@ -39,12 +36,13 @@ class EnrichmentHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def enrichment_engine(config):
+def enrichment_engine(config, response=None):
     server = create_browser_test_server(EnrichmentHandler)
     server.requests = []
     server.changed = threading.Condition()
     server.release = threading.Event()
     server.active = server.maximum_active = 0
+    server.response = response or enriched_rows
     config.set('services', 'intellifiller_server_url', f'http://127.0.0.1:{server.server_port}')
     try:
         server.start()
@@ -52,6 +50,12 @@ def enrichment_engine(config):
     finally:
         server.release.set()
         server.server_close()
+
+
+def enriched_rows(rows):
+    return [dict(row_id=row['row_id'], WordDestination='trans_' + row['WordSource'],
+                 WordSourceIPA='/ipa_' + row['WordSource'] + '/',
+                 WordSourceMorphologyAI='morph_' + row['WordSource']) for row in rows]
 
 
 class FutureWaiters:

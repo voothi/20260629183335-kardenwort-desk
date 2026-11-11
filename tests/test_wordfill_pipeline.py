@@ -11,6 +11,7 @@ import pytest
 
 import kardenwort_desk as desk
 from kardenwort_controller import SessionArbiter
+from tests.controller_test_support import controller_world
 
 
 def _create_test_config(tmp_path, enabled=True, target_quality='any', target_fallback=True):
@@ -226,13 +227,21 @@ def test_progressive_worker_skips_base_provider_on_wordfill_match(tmp_path, monk
     assert out_rows[0][2] == "/baʊm/"
 
 
-def test_reword_and_reprocess_prefill_and_filter_intellifiller(tmp_path, monkeypatch):
-    """
-    Task 3.3: Verifies Re-word / reprocess pre-fills from wordfill and skips
-    IntelliFiller for matching high-quality rows.
-    """
-    config, resolved_paths = _create_test_config(tmp_path, enabled=True, target_quality='full')
-
+@pytest.mark.parametrize('controller_world', ['tsv'], indirect=True)
+def test_reword_and_reprocess_prefill_and_filter_intellifiller(tmp_path, monkeypatch, controller_world):
+    """Real retained TSV word-fill skips enrichment; explicit Re-word bypasses it."""
+    from tests.enrichment_test_support import enrichment_engine
+    import kardenwort_controller
+    _, server = controller_world
+    config, resolved_paths = server.config, server.resolved_paths
+    (tmp_path/'corpus').mkdir()
+    config.read_dict({'settings': {'default_language': 'de',
+        'anki_mapping_file': str(resolved_paths['anki_mapping_file'])},
+        'classification': {'enabled': 'false'}, 'languages': {'de_lemma_index': ''},
+        'pipeline': {'lemma_reprocess_provider': 'intellifiller', 'run_lemmatizer': 'false'},
+        'wordfill': {'enabled': 'true', 'scan_roots': str(tmp_path/'corpus'), 'scan_depth': '1',
+            'scan_scope': 'all', 'scan_sort_order': 'chronological', 'scan_match_language': 'true',
+            'scan_max_files': '50', 'target_quality': 'full', 'target_fallback': 'true'}})
     # Corpus has full quality match for "apfel", but no match for "birne"
     corpus_tsv = tmp_path / 'corpus' / '20260801120000-corpus.de.tsv'
     headers = [
@@ -259,63 +268,65 @@ def test_reword_and_reprocess_prefill_and_filter_intellifiller(tmp_path, monkeyp
         for r in sess_rows:
             writer.writerow(r)
 
-    # Track IntelliFiller dispatches
     intellifiller_calls = []
-    def mock_headless_intellifiller(tsv, prompt, cfg, paths, selected_rows=None, **kw):
+    original = desk.run_headless_intellifiller
+
+    def observe(tsv, prompt, cfg, paths, selected_rows=None, **kwargs):
         intellifiller_calls.append(list(selected_rows or []))
-        return True
+        return original(tsv, prompt, cfg, paths, selected_rows=selected_rows, **kwargs)
 
-    monkeypatch.setattr(desk, 'run_headless_intellifiller', mock_headless_intellifiller)
-    import kardenwort_controller
-    monkeypatch.setattr(kardenwort_controller, 'run_headless_intellifiller', mock_headless_intellifiller)
-    monkeypatch.setattr(desk, 'safe_write_update_js', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'run_headless_intellifiller', observe)
+    monkeypatch.setattr(kardenwort_controller, 'run_headless_intellifiller', observe)
+    with enrichment_engine(config) as engine:
+        engine.release.set()
+        configuration = tmp_path/'wordfill-worker.ini'
+        with configuration.open('w', encoding='utf-8') as stream:
+            config.write(stream)
+        class ReprocessArgs:
+            config = str(configuration)
+            tsv = str(sess_tsv)
+            rows = '0,1'
+            zid = sess_zid
+            prompt = 'de_prompt'
+            language = 'de'
+        desk.cmd_reprocess_worker(ReprocessArgs())
 
-    # 1. Test cmd_reprocess_worker with rows="0,1"
-    class ReprocessArgs:
-        config = None
-        tsv = str(sess_tsv)
-        rows = "0,1"
-        zid = sess_zid
-        prompt = None
+        # Row 0 ("apfel") was pre-filled from wordfill; IntelliFiller was only dispatched for row 1 ("birne")!
+        assert len(intellifiller_calls) == 1
+        assert intellifiller_calls[0] == [1]
 
-    # Save initial config to load_config mock
-    monkeypatch.setattr(desk, 'load_config', lambda *a, **kw: (config, resolved_paths, {}, desk.resolve_wordfill_config(config, resolved_paths)))
-    desk.cmd_reprocess_worker(ReprocessArgs())
+        # Verify disk content has pre-filled "apfel"
+        _, _, updated_rows = desk.load_tsv_rows(sess_tsv)
+        assert updated_rows[0][0] == 'apfel'
+        assert updated_rows[0][1] == 'яблоко'
+        assert updated_rows[0][2] == '/ˈapfəl/'
+        assert updated_rows[0][3] == 'Substantiv, Maskulinum'
 
-    # Row 0 ("apfel") was pre-filled from wordfill; IntelliFiller was only dispatched for row 1 ("birne")!
-    assert len(intellifiller_calls) == 1
-    assert intellifiller_calls[0] == [1]
+        # 2. Test SessionArbiter.reword_session
+        intellifiller_calls.clear()
+        arbiter = SessionArbiter(config, resolved_paths)
+        try:
+            arbiter.reword_session(session_zid=sess_zid, selected_rows=[0, 1], language='de')
+        finally:
+            arbiter.enrichment_queue.shutdown(wait=True)
 
-    # Verify disk content has pre-filled "apfel"
-    _, _, updated_rows = desk.load_tsv_rows(sess_tsv)
-    assert updated_rows[0][0] == 'apfel'
-    assert updated_rows[0][1] == 'яблоко'
-    assert updated_rows[0][2] == '/ˈapfəl/'
-    assert updated_rows[0][3] == 'Substantiv, Maskulinum'
+        # In reword_session, WordFill is bypassed; all selected rows [0, 1] are sent to intellifiller
+        assert len(intellifiller_calls) == 1
+        assert intellifiller_calls[0] == [0, 1]
 
-    # 2. Test SessionArbiter.reword_session
-    intellifiller_calls.clear()
-    arbiter = SessionArbiter(config, resolved_paths)
-    arbiter.reword_session(session_zid=sess_zid, selected_rows=[0, 1], language='de')
-
-    # In reword_session, WordFill is bypassed; all selected rows [0, 1] are sent to intellifiller
-    assert len(intellifiller_calls) == 1
-    assert intellifiller_calls[0] == [0, 1]
+        _, final_headers, final_rows = desk.load_tsv_rows(sess_tsv)
+        assert [row[final_headers.index('WordDestination')] for row in final_rows] == ['trans_apfel', 'trans_birne']
+        assert [[row['WordSource'] for row in request['rows']] for request in engine.requests] == [['birne'], ['apfel', 'birne']]
 
 
-def test_cmd_reprocess_worker_sqlite_mode_classification(tmp_path, monkeypatch):
-    """
-    Verifies that in SQLite storage mode, cmd_reprocess_worker executes dictionary classification
-    without encountering FileNotFoundError on physical TSV paths.
-    """
-    config, resolved_paths = _create_test_config(tmp_path, enabled=False)
-    config.set('storage', 'backend', 'sqlite')
-    config.set('storage', 'sqlite_db_path', str(tmp_path / 'kardenwort.db'))
-    resolved_paths['storage_backend'] = 'sqlite'
-
-    config.add_section('classification')
-    config.set('classification', 'enabled', 'true')
-
+def test_cmd_reprocess_worker_sqlite_mode_classification(controller_world, monkeypatch):
+    """Real structured enrichment and classification persist without physical TSV input."""
+    import types
+    from tests.classification_test_support import configure_classification
+    from tests.enrichment_test_support import enrichment_engine
+    from tests.test_structured_enrichment import control_writes, prohibited
+    _, server = controller_world
+    config, resolved_paths = configure_classification(server, monkeypatch)
     storage_adapter = desk.get_storage_adapter(config, resolved_paths)
     sess_zid = "20260824215000"
     sentences = [
@@ -337,27 +348,33 @@ def test_cmd_reprocess_worker_sqlite_mode_classification(tmp_path, monkeypatch):
         zid=sess_zid
     )
 
-    # Mock intellifiller to return updated rows
-    monkeypatch.setattr(storage_adapter, 'enrich_session_intellifiller', lambda *a, **kw: True)
-    monkeypatch.setattr(desk, 'get_storage_adapter', lambda *a, **kw: storage_adapter)
-    monkeypatch.setattr(desk, 'safe_write_update_js', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'load_config', lambda *a, **kw: (config, resolved_paths, {}, {}))
-
-    class ReprocessArgs:
-        config = None
-        tsv = str(tmp_path / "results" / f"{sess_zid}.en.tsv")
-        rows = "0"
-        zid = sess_zid
-        prompt = None
-
-    # Should complete cleanly without raising FileNotFoundError
-    desk.cmd_reprocess_worker(ReprocessArgs())
+    unrelated = storage_adapter.db.get_session_bundle('20261108113001')
+    with enrichment_engine(config) as engine:
+        engine.release.set()
+        configuration = resolved_paths['base_dir']/'sqlite-classification-worker.ini'
+        with configuration.open('w', encoding='utf-8') as stream:
+            config.write(stream)
+        args = types.SimpleNamespace(config=str(configuration),
+            tsv=str(resolved_paths['results_dir']/f'{sess_zid}.en.tsv'),
+            rows='0', zid=sess_zid, prompt='en_prompt', language='en')
+        with control_writes() as writes:
+            desk.cmd_reprocess_worker(args)
+        assert len(engine.requests) == 1
+        assert engine.requests[0]['rows'][0]['WordSource'] == 'invest'
+        cold = desk.SqliteStorageAdapter(config, resolved_paths)
+        word = cold.db.get_words_by_session(sess_zid)[0]
+        assert word['word_destination'] == 'trans_invest'
+        assert word['word_provenance'] == 'live:intellifiller'
+        assert cold.db.get_session_bundle('20261108113001') == unrelated
+        assert prohibited(writes) == []
 
     # Verify session is intact in SQLite
     restored = storage_adapter.restore_session(sess_zid)
     assert len(restored["data_rows"]) == 1
     lemma_idx = restored["headers"].index("WordSource")
     assert restored["data_rows"][0][lemma_idx] == "invest"
+
+    assert restored['data_rows'][0][restored['headers'].index('ClassificationOxford')] == '3k:B2'
 
 
 def test_wordfill_ignores_wordsource2_and_prioritizes_destination(tmp_path):

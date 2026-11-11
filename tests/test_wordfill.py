@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import kardenwort_desk as desk
+from tests.controller_test_support import controller_world
 
 
 # ---------------------------------------------------------------------------
@@ -513,86 +514,49 @@ import subprocess
 
 class TestWordfillIntegration:
 
-    def test_run_lookup_flow_prefills_and_bypasses_translation(self, monkeypatch, tmp_path):
-        """
-        run_lookup_flow with wordfill enabled should fill translations and bypass
-        calling the slow translation API for matched words, and it should preserve
-        the filled IPA/morphology even if run_intellifiller=False.
-        """
-        # Setup lookup test env (borrow setup_test_env from test_lookup)
-        from tests.test_lookup import setup_test_env
-        config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
-
-        # Set run_intellifiller = False
-        goldendict['run_intellifiller'] = False
-        
-        # Configure wordfill
-        wordfill_cfg = {
-            'enabled': True,
-            'scan_roots': [tmp_path],
-            'scan_depth': 0,
-            'scan_scope': 'all',
-            'target_quality': 'any',
-            'scan_max_files': 500,
-            'scan_match_language': True,
-        }
-
-        # Mock find_wordfill_match to return a full match for 'test'
+    def test_run_lookup_flow_prefills_and_bypasses_translation(self, monkeypatch, controller_world):
+        """Actual SQLite corpus matching survives disabled enrichment and skips matched lemmas."""
+        from tests.test_structured_enrichment import control_writes, prohibited
+        _, server = controller_world
+        config, resolved_paths, goldendict = server.config, server.resolved_paths, server.goldendict
+        config.read_dict({'wordfill': {'enabled': 'true', 'target_quality': 'any', 'target_fallback': 'true'}})
+        goldendict.update(run_intellifiller=False, lookup_ttl_seconds=0, sentence_match_strategy='none',
+                         allow_checksum_fallback=False)
         match = {
             'WordDestination': 'тест_wordfilled',
             'WordSourceIPA': '/tɛst/',
             'WordSourceMorphologyAI': 'noun',
         }
-        monkeypatch.setattr(desk, 'find_wordfill_match', lambda w, l, cfg, exclude_path=None: match if w == 'test' else None)
-
-        # Mock translate_source_text for sentences
-        monkeypatch.setattr(desk, 'translate_source_text', lambda *a, **kw: {0: "working"})
-
-        # Mock subprocess.run to provide initial TSV containing the word 'test'
-        def mock_run(*args, **kwargs):
-            cmd = args[0]
-            out_file = Path(cmd[cmd.index("--output-file") + 1])
-            out_file.parent.mkdir(parents=True, exist_ok=True)
-            # headers must contain all fields
-            headers = [
-                'WordSource', 'WordDestination', 'WordSourceIPA', 'WordSourceMorphologyAI',
-                'SentenceSourceIndex', 'SentenceSourceContextLeft', 'SentenceSource', 'SentenceSourceContextRight',
-                'SentenceDestinationContextLeft', 'SentenceDestination', 'SentenceDestinationContextRight',
-                'SentenceDestination2ContextLeft', 'SentenceDestination2', 'SentenceDestination2ContextRight',
-                'SentenceSourceWordlist', 'SentenceSourceCloze', 'SentenceSourceRewriteAISentenceSource',
-                'SentenceSourceRewriteAISentenceDestination'
-            ]
-            rows = [['test', '', '', '', '0', '', 'test context', '', '', '', '', '', '', '', '', '', '', '']]
-            
-            with open(out_file, 'w', encoding='utf-8', newline='') as f:
-                writer = csv.writer(f, delimiter='\t', lineterminator='\n')
-                writer.writerow(headers)
-                for row in rows:
-                    writer.writerow(row)
-
-        monkeypatch.setattr(subprocess, 'run', mock_run)
-
-        # Mock translate_lemmas_fast_path — we expect it NOT to be called or to receive no lemmas
-        # because the word 'test' translation is already filled by wordfill!
+        adapter = desk.SqliteStorageAdapter(config, resolved_paths)
+        corpus_zid = '20261111211801'
+        adapter.save_session(session_zid=corpus_zid, slug='corpus-test', source_language='en',
+            target_language='ru', text_mode='single', source_raw_text='test',
+            sentences=[dict(sentence_index=1, sentence_source='test')],
+            words=[dict(sentence_index=1, token_order=0, quotation='test', lemma='test',
+                word_destination=match['WordDestination'], ipa=match['WordSourceIPA'],
+                morphology=match['WordSourceMorphologyAI'], word_provenance='cached:fixture')])
+        corpus_before = adapter.db.get_session_bundle(corpus_zid)
+        wordfill_cfg = desk.resolve_wordfill_config(config, resolved_paths)
         translate_lemmas_called = []
-        def mock_translate_lemmas_fast_path(lemmas, *args, **kwargs):
-            translate_lemmas_called.append(lemmas)
-            return {l: 'fallback_transl' for l in lemmas}
-        monkeypatch.setattr(desk, 'translate_lemmas_fast_path', mock_translate_lemmas_fast_path)
+        original = desk.translate_lemmas_fast_path
 
-        # Run lookup flow
-        comments, headers, data_rows, sent_trans = desk.run_lookup_flow(
-            text="test context",
-            language="en",
-            target_lang="ru",
-            fmt="text",
-            config=config,
-            resolved_paths=resolved_paths,
-            goldendict=goldendict,
-            zid="test_zid",
-            text_mode="single",
-            wordfill_cfg=wordfill_cfg
-        )
+        def observe(lemmas, *args, **kwargs):
+            translate_lemmas_called.append(list(lemmas))
+            return original(lemmas, *args, **kwargs)
+
+        monkeypatch.setattr(desk, 'translate_lemmas_fast_path', observe)
+        with control_writes() as writes:
+            comments, headers, data_rows, sent_trans = desk.run_lookup_flow(
+                text='test context', language='en', target_lang='ru', fmt='text',
+                config=config, resolved_paths=resolved_paths, goldendict=goldendict,
+                zid='20261111211802', text_mode='single', wordfill_cfg=wordfill_cfg)
+        cold = desk.SqliteStorageAdapter(config, resolved_paths)
+        assert cold.db.get_session_bundle(corpus_zid) == corpus_before
+        stored = next(row for row in cold.db.get_words_by_session('20261111211802') if row['lemma'] == 'test')
+        assert stored['word_destination'] == match['WordDestination']
+        assert stored['ipa'] == match['WordSourceIPA']
+        assert stored['morphology'] == match['WordSourceMorphologyAI']
+        assert prohibited(writes) == []
 
         # Verify translate_lemmas_fast_path was NOT called with 'test' (because it was pre-filled)
         assert len(translate_lemmas_called) == 0 or 'test' not in translate_lemmas_called[0]

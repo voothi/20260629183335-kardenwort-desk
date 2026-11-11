@@ -138,50 +138,44 @@ def test_lookup_translation_failure(monkeypatch, tmp_path):
     assert sent_trans.startswith("[Translation Error:")
     assert data_rows[0][headers.index('WordDestination')] == ""
 
-def test_lookup_intellifiller(monkeypatch, tmp_path):
-    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
-    
-    mock_run_headless_intellifiller = MagicMock()
-    
-    def mock_run(*args, **kwargs):
-        cmd = args[0]
-        out_file = Path(cmd[cmd.index("--output-file") + 1])
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        # Note: missing MorphologyAI initially
-        out_file.write_text("WordSource\tWordSourceMorphologyAI\ntest\t\n", encoding='utf-8')
-        
-    monkeypatch.setattr(subprocess, 'run', mock_run)
-    monkeypatch.setattr(kardenwort_desk, 'translate_source_text', lambda *a, **kw: {0: "working"})
-    monkeypatch.setattr(kardenwort_desk, 'translate_lemmas_fast_path', lambda *a, **kw: {'test': "test_transl"})
-    
-    # Test True
-    goldendict['run_intellifiller'] = True
-    def side_effect_ifiller(tsv_path, *args, **kwargs):
-        # mock it filling the data
-        tsv_path.write_text("WordSource\tWordSourceMorphologyAI\ntest\tverb\n", encoding='utf-8')
-        mock_run_headless_intellifiller()
-        
-    monkeypatch.setattr(kardenwort_desk, 'run_headless_intellifiller', side_effect_ifiller)
-    
-    comments, headers, data_rows, sent = kardenwort_desk.run_lookup_flow("test text", "en", "ru", "html", config, resolved_paths, goldendict, "zid1")
-    assert mock_run_headless_intellifiller.call_count == 1
-    assert data_rows[0][headers.index('WordSourceMorphologyAI')] == 'verb'
-    
-    # Test False
-    goldendict['run_intellifiller'] = False
-    
-    def mock_run2(*args, **kwargs):
-        cmd = args[0]
-        out_file = Path(cmd[cmd.index("--output-file") + 1])
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        # It comes with some data
-        out_file.write_text("WordSource\tWordSourceMorphologyAI\ntest2\tadj\n", encoding='utf-8')
-        
-    monkeypatch.setattr(subprocess, 'run', mock_run2)
-    comments, headers, data_rows, sent = kardenwort_desk.run_lookup_flow("test text 2", "en", "ru", "html", config, resolved_paths, goldendict, "zid2")
-    assert mock_run_headless_intellifiller.call_count == 1 # unchanged
-    # Should clear morphology data
-    assert data_rows[0][headers.index('WordSourceMorphologyAI')] == ''
+@pytest.mark.parametrize('controller_world', ['tsv'], indirect=True)
+def test_lookup_intellifiller(monkeypatch, controller_world):
+    """Real retained lookup enrichment and disabled-enrichment cache clearing."""
+    from tests.enrichment_test_support import enrichment_engine
+    _, server = controller_world
+    config, resolved_paths, goldendict = server.config, server.resolved_paths, server.goldendict
+    config.set('wordfill', 'enabled', 'false')
+    goldendict.update(run_intellifiller=True, lookup_ttl_seconds=0, sentence_match_strategy='none',
+                     allow_checksum_fallback=False)
+    mock_run_headless_intellifiller = MagicMock(wraps=kardenwort_desk.run_headless_intellifiller)
+    monkeypatch.setattr(kardenwort_desk, 'run_headless_intellifiller', mock_run_headless_intellifiller)
+
+    def response(rows):
+        return [dict(row_id=row['row_id'], WordDestination='trans_' + row['WordSource'],
+                     WordSourceMorphologyAI='verb') for row in rows]
+
+    with enrichment_engine(config, response=response) as engine:
+        engine.release.set()
+        comments, headers, data_rows, sent = kardenwort_desk.run_lookup_flow(
+            'test text', 'en', 'ru', 'html', config, resolved_paths, goldendict, '20261111211701')
+        assert mock_run_headless_intellifiller.call_count == 1
+        assert data_rows[0][headers.index('WordSourceMorphologyAI')] == 'verb'
+
+        goldendict['run_intellifiller'] = False
+        second = resolved_paths['results_dir']/f'20261111211702-{kardenwort_desk.generate_slug("test text 2")}.en.tsv'
+        kardenwort_desk.save_tsv_rows_safely(second, [],
+            ['WordSource', 'WordSourceMorphologyAI', 'SentenceSourceIndex', 'SentenceSource'],
+            [['test2', 'adj', '1', 'test text 2']])
+        comments, headers, data_rows, sent = kardenwort_desk.run_lookup_flow(
+            'test text 2', 'en', 'ru', 'html', config, resolved_paths, goldendict, '20261111211702')
+        assert mock_run_headless_intellifiller.call_count == 1 # unchanged
+        # Should clear morphology data
+        assert data_rows[0][headers.index('WordSourceMorphologyAI')] == ''
+        assert len(engine.requests) == 1
+        _, stored_headers, stored = kardenwort_desk.load_tsv_rows(second)
+        assert stored[0][stored_headers.index('WordSourceMorphologyAI')] == ''
+        assert server.translation_service.provider_calls
+
 
 def test_lookup_utf8_stdout(monkeypatch, lookup_cli_world):
     import io
@@ -352,92 +346,40 @@ def test_progressive_worker_d4_text_mode(monkeypatch, controller_world):
 
     assert passed_text_mode == 'multi_line'
 
-def test_reprocess_worker_classification_update(monkeypatch, tmp_path):
-    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
-    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
-    
-    kardenwort_workspace = resolved_paths['kardenwort_workspace']
-    
-    # Overwrite the anki mapping file with oxford role
-    mapping = configparser.ConfigParser()
-    mapping.read_string("""
-[fields]
-WordSource=lemma
-WordDestination=word_translation
-WordSourceMorphologyAI=morphology
-WordSourceIPA=ipa
-ClassificationOxford=oxford
-[desk_columns]
-WordSource=lemma
-WordDestination=word_translation
-WordSourceMorphologyAI=morphology
-WordSourceIPA=ipa
-ClassificationOxford=oxford
-[fields_mapping.word]
-WordSource=lemma
-WordDestination=translation
-ClassificationOxford=oxford
-""")
-    with open(resolved_paths['anki_mapping_file'], 'w') as f:
-        mapping.write(f)
-        
-    # Enable classification section in local config and mock load_kardenwort_config
-    config.add_section(SEC_CLASSIFICATION)
-    config.set(SEC_CLASSIFICATION, 'enabled', 'true')
-    
-    kw_config = MagicMock()
-    kw_config.has_section.return_value = True
-    kw_config.getboolean.return_value = True
-    kw_config.get.return_value = "oxford=data/en/oxford.tsv"
-    monkeypatch.setattr(kardenwort_desk, 'load_kardenwort_config', lambda *a: kw_config)
-    
-    # Mock load_classification_dictionaries
-    mock_classifications = {"oxford": {"word1": "3k:A1", "word2": "5k:B2"}}
-    
-    # Mock import from core kardenwort
-    import sys
-    class MockKardenwortCore:
-        @staticmethod
-        def load_classification_dictionaries(classify_args):
-            return mock_classifications
-            
-    sys.modules['kardenwort'] = MagicMock()
-    sys.modules['kardenwort.core'] = MagicMock()
-    sys.modules['kardenwort.core.kardenwort'] = MockKardenwortCore
-    
-    # Create working TSV containing columns
-    tsv_path = kardenwort_workspace / "results" / "test_reproc.tsv"
-    tsv_path.parent.mkdir(parents=True, exist_ok=True)
-    tsv_path.write_text("WordSource\tWordSourceMorphologyAI\tWordSourceIPA\tWordDestination\tClassificationOxford\nword1\t\t\t\t\nword2\t\t\t\t\n", encoding='utf-8')
-    
-    # Sibling text file
-    tsv_path.with_suffix('.txt').write_text("word1 word2", encoding='utf-8')
-    
-    # Mock _reprocess_worker_stage_intellifiller to do nothing
-    monkeypatch.setattr(kardenwort_desk, '_reprocess_worker_stage_intellifiller', lambda *a, **kw: a[4])
-    
-    # Mock write_update_js
+@pytest.mark.parametrize('controller_world', ['tsv'], indirect=True)
+def test_reprocess_worker_classification_update(monkeypatch, controller_world):
+    """Actual enrichment, dictionary parsing and final classification projection."""
+    import types
+    from tests.classification_test_support import configure_classification
+    from tests.enrichment_test_support import enrichment_engine
+    _, server = controller_world
+    config, paths = configure_classification(server, monkeypatch)
+    zid = '20261111211500'
+    tsv_path = paths['results_dir']/f'{zid}-classification.en.tsv'
+    headers = ['WordSource', 'WordSourceMorphologyAI', 'WordSourceIPA', 'WordDestination', 'ClassificationOxford']
+    kardenwort_desk.save_tsv_rows_safely(tsv_path, ['# language=en'], headers,
+        [['word1', '', '', '', ''], ['word2', '', '', '', '']])
     write_calls = []
-    def mock_write_update_js(tsv_p, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None):
-        write_calls.append(class_cols)
-        
-    monkeypatch.setattr(kardenwort_desk, 'write_update_js', mock_write_update_js)
-    
-    mock_logger = MagicMock()
-    monkeypatch.setattr(kardenwort_desk, 'logger', mock_logger)
-    
-    args = MagicMock()
-    args.tsv = str(tsv_path)
-    args.rows = "0,1"
-    args.config = None
-    args.language = 'en'
-    
-    kardenwort_desk.cmd_reprocess_worker(args)
-    
-    # Print logger errors if any
-    for call in mock_logger.error.call_args_list:
-        print(f"LOGGER ERROR: {call}")
-        
+    original = kardenwort_desk.write_update_js
+
+    def observe(*args, **kwargs):
+        write_calls.append(kwargs.get('class_cols'))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(kardenwort_desk, 'write_update_js', observe)
+    with enrichment_engine(config) as engine:
+        engine.release.set()
+        configuration = paths['base_dir']/'classification-worker.ini'
+        with configuration.open('w', encoding='utf-8') as stream:
+            config.write(stream)
+        args = types.SimpleNamespace(tsv=str(tsv_path), rows='0,1', config=str(configuration),
+            language='en', prompt='en_prompt', zid=zid, trace_id=f'{zid}:test')
+        kardenwort_desk.cmd_reprocess_worker(args)
+        assert len(engine.requests) == 1
+        assert [row['WordSource'] for row in engine.requests[0]['rows']] == ['word1', 'word2']
+        _, stored_headers, stored = kardenwort_desk.load_tsv_rows(tsv_path)
+        assert [row[stored_headers.index('WordDestination')] for row in stored] == ['trans_word1', 'trans_word2']
+
     # Verify TSV was updated with classification values
     comments, headers, data_rows = kardenwort_desk.load_tsv_rows(tsv_path)
     col_idx = headers.index("ClassificationOxford")
