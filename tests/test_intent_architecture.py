@@ -23,7 +23,15 @@ def complexity(node):
     return count
 
 
-@pytest.mark.parametrize('name', ['kardenwort_alignment', 'kardenwort_delivery', 'kardenwort_events', 'kardenwort_configuration', 'kardenwort_grammar', 'kardenwort_theme'])
+def test_repaired_sqlite_connection_and_migration_boundaries_meet_ceiling():
+    tree = ast.parse((ROOT / 'kardenwort_db.py').read_text(encoding='utf-8'))
+    names = {'get_connection', '_configure_connection', '_apply_migration'}
+    measured = {node.name: complexity(node) for node in functions(tree) if node.name in names}
+    assert set(measured) == names
+    assert max(measured.values()) <= 7, measured
+
+
+@pytest.mark.parametrize('name', ['kardenwort_alignment', 'kardenwort_delivery', 'kardenwort_events', 'kardenwort_configuration', 'kardenwort_grammar', 'kardenwort_theme', 'kardenwort_assets'])
 def test_new_boundaries_have_no_backwards_shell_imports(name):
     tree = ast.parse((ROOT / (name + '.py')).read_text(encoding='utf-8'))
     imports = set()
@@ -37,7 +45,7 @@ def test_new_boundaries_have_no_backwards_shell_imports(name):
         assert not imports
 
 
-@pytest.mark.parametrize('name', ['kardenwort_alignment', 'kardenwort_delivery', 'kardenwort_events', 'kardenwort_configuration', 'kardenwort_grammar', 'kardenwort_theme'])
+@pytest.mark.parametrize('name', ['kardenwort_alignment', 'kardenwort_delivery', 'kardenwort_events', 'kardenwort_configuration', 'kardenwort_grammar', 'kardenwort_theme', 'kardenwort_assets'])
 def test_new_boundary_complexity_ceiling(name):
     tree = ast.parse((ROOT / (name + '.py')).read_text(encoding='utf-8'))
     violations = {node.name: complexity(node) for node in functions(tree) if complexity(node) > 7}

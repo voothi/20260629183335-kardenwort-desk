@@ -101,6 +101,9 @@ class DBLogger:
 
 # Global singleton instance of DBLogger
 _GLOBAL_DB_LOGGER = DBLogger()
+# Journal-mode changes precede transactions. Serialize cold connection setup
+# across adapter instances; migration ownership is enforced separately by SQLite.
+_WAL_INITIALIZATION_LOCK = threading.Lock()
 
 
 def get_db_logger() -> DBLogger:
@@ -325,6 +328,7 @@ class KardenwortDB:
         if self.read_only and not read_only:
             raise ValueError('Read-only database does not permit write connections')
         connect_mode = 'rw' if read_only else 'rwc'
+        conn = None
         try:
             conn = sqlite3.connect(
                 # Require an existing database. SQLite needs its ordinary WAL
@@ -339,18 +343,7 @@ class KardenwortDB:
             conn.row_factory = sqlite3.Row
             conn.read_only = read_only
 
-            cursor = conn.cursor()
-            if read_only:
-                cursor.execute("PRAGMA query_only = ON;")
-            else:
-                if not self._wal_initialized:
-                    cursor.execute("PRAGMA journal_mode = WAL;")
-                    self._wal_initialized = True
-                cursor.execute("PRAGMA synchronous = NORMAL;")
-
-            cursor.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms};")
-            cursor.execute("PRAGMA foreign_keys = ON;")
-            cursor.close()
+            self._configure_connection(conn, read_only)
 
             duration_ms = (time.perf_counter() - start_t) * 1000.0
             self.logger.log(
@@ -362,6 +355,8 @@ class KardenwortDB:
             )
             return conn
         except Exception as e:
+            if conn is not None:
+                conn.close()
             duration_ms = (time.perf_counter() - start_t) * 1000.0
             self.logger.log(
                 "ERROR",
@@ -371,6 +366,19 @@ class KardenwortDB:
                 details={"db_path": str(self.db_path), "error": str(e)},
             )
             raise
+
+    def _configure_connection(self, conn: KardenwortConnection, read_only: bool) -> None:
+        if read_only:
+            conn.execute("PRAGMA query_only = ON;")
+        else:
+            if not self._wal_initialized:
+                with _WAL_INITIALIZATION_LOCK:
+                    if not self._wal_initialized:
+                        conn.execute("PRAGMA journal_mode = WAL;")
+                        self._wal_initialized = True
+            conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms};")
+        conn.execute("PRAGMA foreign_keys = ON;")
 
     @contextmanager
     def transaction(
@@ -431,23 +439,10 @@ class KardenwortDB:
                 if sql_file.name in applied_set:
                     continue
 
-                from kardenwort_state_backup import backup_preference_migration
-                backup_preference_migration(self, sql_file.name)
-                sql_content = sql_file.read_text(encoding="utf-8")
                 mig_start = time.perf_counter()
-
-                with self.get_connection(zid=zid) as conn:
-                    cursor = conn.cursor()
-                    # Execute migration SQL statements individually within transaction
-                    # to ensure full transactional rollback of DDL statements on error
-                    for statement in sql_content.split(";"):
-                        stmt_clean = statement.strip()
-                        if stmt_clean:
-                            cursor.execute(stmt_clean)
-                    cursor.execute(
-                        "INSERT INTO _migrations (filename, applied_at) VALUES (?, ?);",
-                        (sql_file.name, datetime.now(timezone.utc).isoformat()),
-                    )
+                if not self._apply_migration(sql_file, zid):
+                    already_applied.append(sql_file.name)
+                    continue
 
                 mig_dur = (time.perf_counter() - mig_start) * 1000.0
                 applied_now.append(sql_file.name)
@@ -494,6 +489,21 @@ class KardenwortDB:
                 details={"error": str(e)},
             )
             raise QueryExecutionError("MIGRATION_FAILED", f"Migration failed: {e}")
+
+    def _apply_migration(self, sql_file: Path, zid: Optional[str]) -> bool:
+        """Recheck ownership under SQLite's writer lock before any migration effect."""
+        from kardenwort_state_backup import backup_preference_migration
+        sql_content = sql_file.read_text(encoding="utf-8")
+        with self.get_connection(zid=zid) as conn:
+            if conn.execute("SELECT 1 FROM _migrations WHERE filename = ?", (sql_file.name,)).fetchone():
+                return False
+            backup_preference_migration(self, sql_file.name)
+            for statement in sql_content.split(";"):
+                if statement.strip():
+                    conn.execute(statement.strip())
+            conn.execute("INSERT INTO _migrations (filename, applied_at) VALUES (?, ?)",
+                         (sql_file.name, datetime.now(timezone.utc).isoformat()))
+        return True
 
     # ---------------------------------------------------------------------------
     # Diagnostics & Status

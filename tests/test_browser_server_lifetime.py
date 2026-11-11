@@ -248,6 +248,28 @@ def test_historical_sse_handler_without_ownership_hook_fails_before_serving():
         create_browser_test_server(HistoricalHandler)
 
 
+def test_caller_drain_retains_all_worker_failures():
+    from tests.thread_support import Worker, finish_workers
+    entered, release = threading.Event(), threading.Event()
+
+    def first():
+        assert entered.wait(3)
+        release.set()
+        raise ValueError('first caller')
+
+    def second():
+        entered.set()
+        assert release.wait(3)
+        raise RuntimeError('second caller')
+
+    workers = [Worker(first), Worker(second)]
+    with pytest.raises(ExceptionGroup, match='Owned caller failures') as caught:
+        finish_workers(workers)
+    assert [type(error) for error in caught.value.exceptions] == [ValueError, RuntimeError]
+    assert [str(error) for error in caught.value.exceptions] == ['first caller', 'second caller']
+    assert all(not worker.thread.is_alive() for worker in workers)
+
+
 def test_owned_shutdown_tolerates_real_peer_reset():
     entered, release = threading.Event(), threading.Event()
 

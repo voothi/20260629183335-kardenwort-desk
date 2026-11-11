@@ -4,6 +4,7 @@ import pytest
 import configparser
 from pathlib import Path
 import kardenwort_desk as desk
+from tests.controller_test_support import controller_world
 
 def setup_test_env(tmp_path):
     config = configparser.ConfigParser()
@@ -36,45 +37,56 @@ parent_mode=table
 
     return config, resolved_paths
 
-def test_progressive_bypassed(monkeypatch, tmp_path):
-    config, resolved_paths = setup_test_env(tmp_path)
+def test_progressive_bypassed(monkeypatch, controller_world):
+    """Initial real SQLite render returns while its owned provider is still pending."""
+    import threading
+    from tests.controller_test_support import DeterministicTranslationHandler
+    from tests.render_test_support import seed_render_rows
 
-    # Mock prepare_lookup_tsv
-    def mock_prepare_lookup_tsv(*args, **kwargs):
-        p = tmp_path / "mock.tsv"
-        p.write_text("SentenceSourceIndex\tSentenceDestination\n1\t\n", encoding='utf-8')
-        return p
+    _, server = controller_world
+    config, resolved_paths = server.config, server.resolved_paths
+    config.read_dict({'rendering': {'display_mode': 'progressive'},
+                      'pipeline': {'progressive_text_translation': 'true'},
+                      'triggers': {'run_text_translation': 'auto', 'run_lemma_base_translation': 'manual',
+                                   'run_lemma_enrichment': 'manual'}})
+    zid = '20261111132200'
+    seed_render_rows(config, resolved_paths, zid, 'Hello', 'en',
+                     ['TokenOrder', 'WordSource', 'SentenceSourceIndex', 'SentenceSource', 'SentenceDestination'],
+                     [['0', 'hello', '1', 'Hello', '']])
+    entered, release = threading.Event(), threading.Event()
+    original = DeterministicTranslationHandler.translate
 
-    # Mock translate_text with a slow delay
-    def mock_translate_text(*args, **kwargs):
-        time.sleep(3.0)
-        return "Translated Text"
+    def held(handler, provider, text, source, target):
+        entered.set()
+        assert release.wait(5), 'Progressive engine was not released'
+        return original(handler, provider, text, source, target)
 
-    monkeypatch.setattr(desk, 'prepare_lookup_tsv', mock_prepare_lookup_tsv)
-    monkeypatch.setattr(desk, 'translate_text', mock_translate_text)
-    monkeypatch.setattr(desk, 'load_anki_mapping', lambda x: configparser.ConfigParser())
-    monkeypatch.setattr(desk, 'get_role_fields', lambda m, h: {'sentence_destination': 'SentenceDestination', 'sentence_index': 'SentenceSourceIndex'})
-    monkeypatch.setattr(desk, 'load_tsv_rows', lambda p: ([], ["SentenceSourceIndex", "SentenceDestination"], [["1", ""]]))
-    monkeypatch.setattr(desk, 'resolve_translations', lambda *args, **kwargs: None)
-    monkeypatch.setattr(desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
-    monkeypatch.setattr(desk, 'write_update_js', lambda *args, **kwargs: None)
-    monkeypatch.setattr(desk, 'load_kardenwort_config', lambda x: configparser.ConfigParser())
-    monkeypatch.setattr(desk, 'resolve_results_dir', lambda a, b: tmp_path)
-    monkeypatch.setattr(desk, 'spawn_ahk', lambda *args, **kwargs: None)
-
-    start_time = time.time()
-    html_out = desk.run_render_flow("Hello", "en", "123", "single", config, resolved_paths)
-    end_time = time.time()
-
-    duration = end_time - start_time
-
-    # Should be instant, bypassing the 3-second delay
-    assert duration < 1.0, f"Execution was too slow: {duration}s, progressive bypass failed"
-
-    # Should contain the skeleton loader
-    assert "skeleton-loader" in html_out
-    assert "data-pending=\"true\"" in html_out
-    assert "cleanupOrphanSkeletons" in html_out # from the JS watchdog
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', held)
+    future = None
+    try:
+        start_time = time.time()
+        html_out = desk.run_render_flow('Hello', 'en', zid, 'single', config, resolved_paths,
+                                        wordfill_cfg={'enabled': False}, spawn_children=False)
+        end_time = time.time()
+        duration = end_time - start_time
+        assert duration < 1.0, f"Execution was too slow: {duration}s, progressive bypass failed"
+        assert "skeleton-loader" in html_out
+        assert "data-pending=\"true\"" in html_out
+        assert "cleanupOrphanSkeletons" in html_out # from the JS watchdog
+        assert entered.wait(5), 'Real progressive provider was not contacted'
+        with server.arbiter.enrichment_queue._lock:
+            future = server.arbiter.enrichment_queue._active_progressive_sessions[zid]
+        assert not future.done()
+        adapter = desk.get_storage_adapter(config, resolved_paths)
+        assert not adapter.db.get_sentences_by_session(zid)[0]['sentence_destination']
+        release.set()
+        future.result(timeout=5)
+        cold = desk.SqliteStorageAdapter(config, resolved_paths)
+        assert cold.db.get_sentences_by_session(zid)[0]['sentence_destination'] == 'google: Hello'
+    finally:
+        release.set()
+        if future is not None:
+            future.result(timeout=5)
 
 
 # ---------------------------------------------------------------------------

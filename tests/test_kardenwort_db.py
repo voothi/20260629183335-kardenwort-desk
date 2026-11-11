@@ -103,6 +103,36 @@ def test_transaction_rollback_on_error(temp_db):
 # ---------------------------------------------------------------------------
 # Section 2: Migration Runner & _migrations Tracking
 # ---------------------------------------------------------------------------
+def test_concurrent_migration_runners_recheck_after_writer_lock(tmp_path, monkeypatch):
+    """Both runners discover pending DDL; only its transaction owner applies it."""
+    import threading
+    from tests.thread_support import Worker, finish_workers
+
+    migrations = tmp_path / 'migrations'
+    migrations.mkdir()
+    script = migrations / '001_once.sql'
+    script.write_text('CREATE TABLE witnesses (value TEXT); INSERT INTO witnesses VALUES (\'once\');', encoding='utf-8')
+    readers = threading.Barrier(2, timeout=5)
+    original_read = Path.read_text
+
+    def synchronized_read(path, *args, **kwargs):
+        content = original_read(path, *args, **kwargs)
+        if path == script:
+            readers.wait()
+        return content
+
+    monkeypatch.setattr(Path, 'read_text', synchronized_read)
+    databases = [KardenwortDB(tmp_path / 'shared.db', migrations_dir=migrations) for _ in range(2)]
+    workers = [Worker(database.run_migrations) for database in databases]
+    results = finish_workers(workers)
+    assert all(result['ok'] and result['total_applied'] == 1 for result in results)
+    assert sorted(len(result['applied']) for result in results) == [0, 1]
+    assert sorted(len(result['already_applied']) for result in results) == [0, 1]
+    with databases[0].get_connection(read_only=True) as connection:
+        assert [tuple(row) for row in connection.execute('SELECT * FROM witnesses')] == [('once',)]
+        assert connection.execute('SELECT COUNT(*) FROM _migrations').fetchone()[0] == 1
+
+
 def test_migration_runner_initial_schema(temp_db):
     """Verify deterministic migration execution and _migrations table recording."""
     res = temp_db.run_migrations()

@@ -51,6 +51,19 @@ class Worker:
         return self.value
 
 
+def finish_workers(workers):
+    """Drain every caller even if an earlier caller failed; retain all failures."""
+    values, errors = [], []
+    for worker in workers:
+        try:
+            values.append(worker.result())
+        except BaseException as error:
+            errors.append(error)
+    if errors:
+        raise BaseExceptionGroup('Owned caller failures', errors)
+    return values
+
+
 class SSEEvents:
     def __init__(self):
         self.events = []

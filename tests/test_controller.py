@@ -1331,59 +1331,71 @@ def test_audio_play_endpoint_success_and_validation(audio_server):
     assert exc_info.value.code == 405
 
 
-def test_progressive_queue_bounded_concurrency_and_pacing(tmp_path):
-    """
-    Assert that EnrichmentQueue enforces bounded translation worker concurrency
-    and respects rate-limiting pacing under multi-session burst conditions.
-    """
-    import configparser
-    from kardenwort_controller import EnrichmentQueue
+def test_progressive_queue_bounded_concurrency_and_pacing(tmp_path, monkeypatch):
+    """Real queue/provider routing with held engine responses and a controlled clock."""
+    from types import SimpleNamespace
+    from tests.controller_test_support import owned_configuration, translation_service, DeterministicTranslationHandler
+    from tests.enrichment_test_support import FutureWaiters
+    from tests.thread_support import Worker, finish_workers
 
-    config = configparser.ConfigParser()
-    config.read_string("""
-[translation]
-google_max_concurrency = 2
-google_request_delay = 0.05
-[pipeline]
-lemma_base_provider = google
-""")
-    resolved_paths = {"results_dir": tmp_path}
-    eq = EnrichmentQueue(config, resolved_paths, translation_max_workers=2)
-
+    changed, release = threading.Condition(), threading.Event()
     active_workers = 0
     max_active_observed = 0
     call_timestamps = []
-    lock = threading.Lock()
+    clock = SimpleNamespace(value=100.0, waits=[])
 
-    def mock_execute(lemma, source_lang, target_lang, provider, zid, trace_id):
-        nonlocal active_workers, max_active_observed
-        with lock:
-            active_workers += 1
-            if active_workers > max_active_observed:
-                max_active_observed = active_workers
-            call_timestamps.append(time.time())
-        time.sleep(0.04)
-        with lock:
-            active_workers -= 1
-        return f"trans_{lemma}"
+    def advance(delay):
+        clock.waits.append(delay)
+        clock.value += delay
 
-    eq._execute_translate_lemma = mock_execute
+    class HeldEngine(DeterministicTranslationHandler):
+        def translate(self, provider, text, source, target):
+            nonlocal active_workers, max_active_observed
+            with changed:
+                active_workers += 1
+                max_active_observed = max(max_active_observed, active_workers)
+                call_timestamps.append(clock.value)
+                changed.notify_all()
+            try:
+                assert release.wait(5), 'Translation engine was not released'
+                return '\n'.join('trans_' + line for line in text.splitlines())
+            finally:
+                with changed:
+                    active_workers -= 1
+                    changed.notify_all()
 
-    threads = [
-        threading.Thread(target=eq.translate_lemma, args=(f"Lemma_{i}", "de", "ru"))
-        for i in range(6)
-    ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    with translation_service(HeldEngine, google_concurrency=2) as engine:
+        config, resolved_paths, _ = owned_configuration(tmp_path, f'http://127.0.0.1:{engine.server_port}', 'sqlite')
+        config.set('translation', 'google_request_delay', '0.05')
+        monkeypatch.setattr(kardenwort_controller, 'time', SimpleNamespace(time=lambda: clock.value, sleep=advance))
+        eq = EnrichmentQueue(config, resolved_paths, translation_max_workers=2)
+        waiters, workers = FutureWaiters(monkeypatch), []
+        try:
+            workers = [Worker(lambda lemma=f'Lemma_{i}': waiters.call(lambda: eq.translate_lemma(lemma, 'de', 'ru')))
+                       for i in range(6)]
+            waiters.wait(6)
+            with changed:
+                assert changed.wait_for(lambda: active_workers == 2, 5)
+            assert all(worker.thread.is_alive() for worker in workers)
+            release.set()
+            results = finish_workers(workers)
+            assert max_active_observed <= 2, f"Expected concurrency <= 2, got {max_active_observed}"
+            status = eq.get_status()
+            assert status["translation_max_workers"] == 2
+            assert status["translation_cache_size"] == 6
+            assert max_active_observed == 2
+            assert len(call_timestamps) == 6
+            assert len(clock.waits) == 5
+            assert clock.waits == pytest.approx([0.05] * 5)
+            assert clock.value == pytest.approx(100.25)
+            assert set(results) == {f'trans_Lemma_{i}' for i in range(6)}
+        finally:
+            release.set()
+            try:
+                finish_workers(workers)
+            finally:
+                eq.shutdown()
 
-    assert max_active_observed <= 2, f"Expected concurrency <= 2, got {max_active_observed}"
-    status = eq.get_status()
-    assert status["translation_max_workers"] == 2
-    assert status["translation_cache_size"] == 6
-
-    eq.shutdown()
 
 
 def test_get_session_zid_serves_directly_from_sqlite_without_translation(running_controller, monkeypatch):

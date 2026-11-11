@@ -43,9 +43,10 @@ class DeterministicTranslationHandler(TranslationRequestHandler):
 
 
 @contextmanager
-def translation_service(handler, auto_failover=False):
+def translation_service(handler, auto_failover=False, google_concurrency=1):
     server = create_browser_test_server(handler, OwnedTranslationServer,
-        enable_cache=False, auto_failover=auto_failover, google_delay=0)
+        enable_cache=False, auto_failover=auto_failover, google_delay=0,
+        google_concurrency=google_concurrency)
     server.provider_calls = []
     try:
         server.start()
