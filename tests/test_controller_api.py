@@ -340,7 +340,7 @@ def test_confirm_language_cancel(running_controller):
         assert session_zid not in _DRAFT_SESSIONS
 
 
-def test_confirm_language_switch_and_reverse_tab_spawning(running_controller, monkeypatch):
+def test_confirm_language_switch_and_reverse_tab_spawning(running_controller, monkeypatch, language_processing):
     """
     Verify POST /api/v1/confirm-language with action=switch:
     1. Updates runtime config to detected language
@@ -349,6 +349,9 @@ def test_confirm_language_switch_and_reverse_tab_spawning(running_controller, mo
     """
     from kardenwort_controller import _DRAFT_SESSIONS, _DRAFT_SESSIONS_LOCK
     server_url, server = running_controller
+    server.config.set('sentences_mode', 'enabled', 'true')
+    server.config.set('sentences_mode', 'spawn_order', 'reverse')
+    server.config.set('sentences_mode', 'parent_mode', 'full')
     server.config.set("sentences_mode", "delivery_mode", "multi_window")
     server.config.set("settings", "default_language", "en")
 
@@ -374,20 +377,8 @@ def test_confirm_language_switch_and_reverse_tab_spawning(running_controller, mo
     opened_urls = []
     monkeypatch.setattr(kardenwort_desk, "spawn_ahk", lambda args, base_dir=None: spawn_calls.append((args, base_dir)))
     monkeypatch.setattr("kardenwort_controller.spawn_ahk", lambda args, base_dir=None: spawn_calls.append((args, base_dir)))
-    monkeypatch.setattr("kardenwort_controller.persist_default_language", lambda language, base_dir=None: True)
     import webbrowser
     monkeypatch.setattr(webbrowser, "open_new_tab", lambda url: opened_urls.append(url))
-
-    # Mock run_render_flow to simulate reverse order child generation with absolute paths
-    mock_child_args = [
-        "--seq-num", "4", "--restore", r"U:\voothi\20260629183335-kardenwort-desk\results\20260827010101-03.de.tsv",
-        "--seq-num", "3", "--restore", r"U:\voothi\20260629183335-kardenwort-desk\results\20260827010101-02.de.tsv",
-        "--seq-num", "2", "--restore", r"U:\voothi\20260629183335-kardenwort-desk\results\20260827010101-01.de.tsv",
-    ]
-    monkeypatch.setattr(
-        "kardenwort_controller.run_render_flow",
-        lambda **kwargs: ("<html>mock</html>", mock_child_args)
-    )
 
     req_body = {"session_zid": session_zid, "action": "switch"}
     req_data = json.dumps(req_body).encode("utf-8")
@@ -405,6 +396,10 @@ def test_confirm_language_switch_and_reverse_tab_spawning(running_controller, mo
         assert res.get("language") == "de"
         assert len(res.get("urls", [])) == 4
 
+    for identity in (session_zid, '20260827010102', '20260827010103', '20260827010104'):
+        assert_confirmed_session(server, identity, 'de')
+    assert len(language_processing) == 1
+
     # 1. Check in-memory config updated to 'de'
     assert server.config.get("settings", "default_language") == "de"
 
@@ -415,9 +410,9 @@ def test_confirm_language_switch_and_reverse_tab_spawning(running_controller, mo
     # 3. Check opened tab order: Master tab first, then Child 3, Child 2, Child 1 LAST
     assert len(opened_urls) == 4
     assert f"session_zid={session_zid}" in opened_urls[0] and "seq_num=1" in opened_urls[0]
-    assert "20260827010101-03" in opened_urls[1] and "seq_num=4" in opened_urls[1]
-    assert "20260827010101-02" in opened_urls[2] and "seq_num=3" in opened_urls[2]
-    assert "20260827010101-01" in opened_urls[3] and "seq_num=2" in opened_urls[3]  # Opened LAST -> Active focus!
+    assert "20260827010104" in opened_urls[1] and "seq_num=4" in opened_urls[1]
+    assert "20260827010103" in opened_urls[2] and "seq_num=3" in opened_urls[2]
+    assert "20260827010102" in opened_urls[3] and "seq_num=2" in opened_urls[3]  # Opened LAST -> Active focus!
 
 
 def test_confirm_language_process_action(running_controller, monkeypatch, language_processing):
@@ -700,7 +695,7 @@ def test_session_status_worker_sentinel_lock_busy(running_controller):
         data_rows=[["Buch", "book", "0"], ["liegt", "lies", "1"]],
         working_tsv_path=results_dir / f'{storage_zid}.tsv',
     )
-    sentinel_path = (results_dir / f"{storage_zid}.worker.lock") if results_dir else Path(f"{storage_zid}.worker.lock")
+    sentinel_path = results_dir / f'{storage_zid}.tsv.worker.lock'
     try:
         with storage_adapter.file_lock(sentinel_path):
             req = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}", headers={"X-API-Token": "test-controller-api-key"})

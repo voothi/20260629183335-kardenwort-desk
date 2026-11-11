@@ -3,117 +3,50 @@ Verification tests for mass paragraph decomposition and spawn packaging (30-40 s
 
 Capability: mass-spawn-orchestration, multi-mode-decomposition
 """
-import configparser
-import pytest
-from pathlib import Path
 import kardenwort_desk as desk
+from tests.controller_test_support import controller_world, token_service
+from tests.render_pipeline_support import configure_render_pipeline
+from tests.test_structured_enrichment import control_writes, prohibited
 
 
-def test_mass_paragraph_decomposition_sequence_continuity(monkeypatch, tmp_path):
+def real_mass_render(server, monkeypatch, reverse):
+    config, paths = server.config, server.resolved_paths
+    configure_render_pipeline(server)
+    config.read_dict({'sentences_mode': {'delivery_mode': 'multi_window', 'parent_mode': 'table',
+        'spawn_order': 'reverse' if reverse else 'forward'}})
+    sentences = [f'This is sentence number {i} with some unique content.' for i in range(1, 36)]
+    spawn_calls = []
+    monkeypatch.setattr(desk, 'spawn_ahk', lambda args, base_dir: spawn_calls.append(list(args)))
+    with token_service() as tokenizer:
+        config.set('services', 'spacy_server_url', f'http://127.0.0.1:{tokenizer.server_port}')
+        with control_writes() as writes:
+            desk.run_render_flow('\n'.join(sentences), 'en', '20260826000000', 'multi',
+                                 config, paths, seq_num=1, wordfill_cfg={'enabled': False})
+    assert prohibited(writes) == []
+    cold = desk.SqliteStorageAdapter(config, paths)
+    master = cold.db.get_sentences_by_session('20260826000000')
+    assert [row['sentence_source'] for row in master] == sentences
+    assert all(row['sentence_destination'] and row['text_provenance'] == 'live:google' for row in master)
+    for number, sentence in enumerate(sentences, 1):
+        identity = f'202608260000{number:02d}'
+        child = cold.db.get_sentences_by_session(identity)
+        assert len(child) == 1 and child[0]['sentence_source'] == sentence
+        assert child[0]['sentence_destination'] == master[number-1]['sentence_destination']
+        assert child[0]['text_provenance'] == 'live:google'
+        assert cold.db.get_words_by_session(identity)
+    return spawn_calls
+
+
+def test_mass_paragraph_decomposition_sequence_continuity(monkeypatch, controller_world):
     """
     Test decomposing a 35-sentence paragraph to verify that:
     1. All 35 child sessions are correctly initialized with distinct ZIDs and slugs.
     2. Sequence numbers passed to spawn_ahk are strictly monotonic and continuous.
     3. spawn_ahk receives clean argument blocks without duplicate passes.
     """
-    config = configparser.ConfigParser()
-    config.read_string("""
-[settings]
-default_target_language=ru
-[rendering]
-display_mode=progressive
-[pipeline]
-progressive_text_translation=true
-progressive_timeout_seconds=15
-lemma_base_provider=google
-lemma_reprocess_provider=intellifiller
-[triggers]
-run_text_translation=auto
-run_lemma_base_translation=auto
-run_lemma_enrichment=manual
-[sentences_mode]
-enabled=true
-parent_mode=table
-[languages]
-en_prompt=
-[fields]
-""")
-
-    mapping_file = tmp_path / "mapping.ini"
-    mapping_file.write_text(
-        "[fields]\n"
-        "WordSource=\nWordDestination=\nWordSourceInflectedForm=\n"
-        "SentenceSourceIndex=\nSentenceDestination=\nDeskSelected=\n"
-        "[fields_mapping.word]\n"
-        "WordSource=lemma\nWordDestination=word_translation\n"
-        "WordSourceInflectedForm=inflected\n"
-        "SentenceSourceIndex=sentence_index\n"
-        "SentenceDestination=sentence_destination\nDeskSelected=selected\n",
-        encoding="utf-8",
-    )
-
-    resolved_paths = {
-        'results_dir': tmp_path,
-        'kardenwort_core_py': tmp_path / 'dummy.py',
-        'kardenwort_python': tmp_path / 'python',
-        'anki_mapping_file': mapping_file,
-        'kardenwort_workspace': tmp_path,
-        'settings_file': tmp_path / 'settings.ini',
-        'base_dir': tmp_path,
-    }
-
-    headers = [
-        "WordSource", "WordDestination", "WordSourceInflectedForm",
-        "SentenceSourceIndex", "SentenceDestination", "DeskSelected"
-    ]
-
+    _, server = controller_world
     num_sentences = 35
-    sentences = [f"This is sentence number {i} with some unique content." for i in range(1, num_sentences + 1)]
-    full_text = "\n".join(sentences)
-
-    data_rows = []
-    for i in range(1, num_sentences + 1):
-        data_rows.append([f"word{i}", f"trans{i}", f"Word{i}", str(i), f"Sentence trans {i}", "0"])
-
-    role_fields = {
-        "lemma": "WordSource",
-        "word_translation": "WordDestination",
-        "inflected": "WordSourceInflectedForm",
-        "sentence_index": "SentenceSourceIndex",
-        "sentence_destination": "SentenceDestination",
-        "selected": "DeskSelected",
-    }
-
-    master_tsv = tmp_path / "20260826000000-master.en.tsv"
-    master_tsv.write_text("\t".join(headers) + "\n" + "\n".join("\t".join(r) for r in data_rows) + "\n", encoding="utf-8")
-
-    spawn_calls = []
-
-    def mock_spawn_ahk(args, base_dir):
-        spawn_calls.append(list(args))
-
-    monkeypatch.setattr(desk, 'load_anki_mapping', lambda p: configparser.ConfigParser())
-    monkeypatch.setattr(desk, 'is_tsv_llm_filled', lambda *a, **kw: False)
-    monkeypatch.setattr(desk, 'get_role_fields', lambda m, h: role_fields)
-    monkeypatch.setattr(desk, 'load_kardenwort_config', lambda w: configparser.ConfigParser())
-    monkeypatch.setattr(desk, 'resolve_results_dir', lambda rp, kw: tmp_path)
-    monkeypatch.setattr(desk, 'prepare_lookup_tsv', lambda *a, **kw: master_tsv)
-    monkeypatch.setattr(desk, 'run_progressive_worker_async', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'write_update_js', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'spawn_ahk', mock_spawn_ahk)
-    monkeypatch.setattr(desk, 'translate_source_text', lambda *a, **kw: {i: f"Перевод предложения {i+1}" for i in range(num_sentences)})
-    monkeypatch.setattr(desk, 'resolve_translations', lambda *a, **kw: None)
-
-    desk.run_render_flow(
-        full_text,
-        "en",
-        "20260826000000",
-        "multi",
-        config,
-        resolved_paths,
-        seq_num=1,
-        tsv_path=None,
-    )
+    spawn_calls = real_mass_render(server, monkeypatch, reverse=False)
 
     # Verify spawn_ahk was called
     assert len(spawn_calls) == 1, f"Expected 1 call to spawn_ahk, got {len(spawn_calls)}"
@@ -138,7 +71,7 @@ en_prompt=
     assert seq_nums == expected_seqs, f"Sequence numbers mismatch. Got: {seq_nums}, Expected: {expected_seqs}"
 
 
-def test_mass_decomposition_reverse_spawn_order(monkeypatch, tmp_path):
+def test_mass_decomposition_reverse_spawn_order(monkeypatch, controller_world):
     """
     Test decomposing a multi-sentence paragraph when spawn_order is set to 'reverse'.
     Verifies that:
@@ -146,105 +79,9 @@ def test_mass_decomposition_reverse_spawn_order(monkeypatch, tmp_path):
     2. Sequence numbers and restore paths match in reversed order.
     3. Window #2 (sentence 1) is dispatched last so it remains top-of-stack in Windows OS Z-order.
     """
-    config = configparser.ConfigParser()
-    config.read_string("""
-[settings]
-default_target_language=ru
-[rendering]
-display_mode=progressive
-[pipeline]
-progressive_text_translation=true
-progressive_timeout_seconds=15
-lemma_base_provider=google
-lemma_reprocess_provider=intellifiller
-[triggers]
-run_text_translation=auto
-run_lemma_base_translation=auto
-run_lemma_enrichment=manual
-[sentences_mode]
-enabled=true
-parent_mode=table
-spawn_order=reverse
-[languages]
-en_prompt=
-[fields]
-""")
-
-    mapping_file = tmp_path / "mapping.ini"
-    mapping_file.write_text(
-        "[fields]\n"
-        "WordSource=\nWordDestination=\nWordSourceInflectedForm=\n"
-        "SentenceSourceIndex=\nSentenceDestination=\nDeskSelected=\n"
-        "[fields_mapping.word]\n"
-        "WordSource=lemma\nWordDestination=word_translation\n"
-        "WordSourceInflectedForm=inflected\n"
-        "SentenceSourceIndex=sentence_index\n"
-        "SentenceDestination=sentence_destination\nDeskSelected=selected\n",
-        encoding="utf-8",
-    )
-
-    resolved_paths = {
-        'results_dir': tmp_path,
-        'kardenwort_core_py': tmp_path / 'dummy.py',
-        'kardenwort_python': tmp_path / 'python',
-        'anki_mapping_file': mapping_file,
-        'kardenwort_workspace': tmp_path,
-        'settings_file': tmp_path / 'settings.ini',
-        'base_dir': tmp_path,
-    }
-
-    headers = [
-        "WordSource", "WordDestination", "WordSourceInflectedForm",
-        "SentenceSourceIndex", "SentenceDestination", "DeskSelected"
-    ]
-
+    _, server = controller_world
     num_sentences = 35
-    sentences = [f"This is sentence number {i} with some unique content." for i in range(1, num_sentences + 1)]
-    full_text = "\n".join(sentences)
-
-    data_rows = []
-    for i in range(1, num_sentences + 1):
-        data_rows.append([f"word{i}", f"trans{i}", f"Word{i}", str(i), f"Sentence trans {i}", "0"])
-
-    role_fields = {
-        "lemma": "WordSource",
-        "word_translation": "WordDestination",
-        "inflected": "WordSourceInflectedForm",
-        "sentence_index": "SentenceSourceIndex",
-        "sentence_destination": "SentenceDestination",
-        "selected": "DeskSelected",
-    }
-
-    master_tsv = tmp_path / "20260826000000-master.en.tsv"
-    master_tsv.write_text("\t".join(headers) + "\n" + "\n".join("\t".join(r) for r in data_rows) + "\n", encoding="utf-8")
-
-    spawn_calls = []
-
-    def mock_spawn_ahk(args, base_dir):
-        spawn_calls.append(list(args))
-
-    monkeypatch.setattr(desk, 'load_anki_mapping', lambda p: configparser.ConfigParser())
-    monkeypatch.setattr(desk, 'is_tsv_llm_filled', lambda *a, **kw: False)
-    monkeypatch.setattr(desk, 'get_role_fields', lambda m, h: role_fields)
-    monkeypatch.setattr(desk, 'load_kardenwort_config', lambda w: configparser.ConfigParser())
-    monkeypatch.setattr(desk, 'resolve_results_dir', lambda rp, kw: tmp_path)
-    monkeypatch.setattr(desk, 'prepare_lookup_tsv', lambda *a, **kw: master_tsv)
-    monkeypatch.setattr(desk, 'run_progressive_worker_async', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'write_update_js', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'spawn_ahk', mock_spawn_ahk)
-    monkeypatch.setattr(desk, 'translate_source_text', lambda *a, **kw: {i: f"Перевод предложения {i+1}" for i in range(num_sentences)})
-    monkeypatch.setattr(desk, 'resolve_translations', lambda *a, **kw: None)
-
-    desk.run_render_flow(
-        full_text,
-        "en",
-        "20260826000000",
-        "multi",
-        config,
-        resolved_paths,
-        seq_num=1,
-        tsv_path=None,
-    )
+    spawn_calls = real_mass_render(server, monkeypatch, reverse=True)
 
     # Verify spawn_ahk was called
     assert len(spawn_calls) == 1, f"Expected 1 call to spawn_ahk, got {len(spawn_calls)}"
@@ -270,90 +107,59 @@ en_prompt=
     assert seq_nums[0] == 36 and seq_nums[-1] == 2, "First dispatched must be highest seq (36) and last must be window #2"
 
 
-def test_concurrent_render_burst_handling(monkeypatch, tmp_path):
-    """
-    Test that the HTTP server handles a burst of 35 simultaneous /api/v1/render requests
-    without socket timeouts, deadlocks, or dropped connections.
-    """
-    import threading
+def test_concurrent_render_burst_handling(controller_world):
+    """Thirty-five concurrent HTTP renders read actual independently stored sessions."""
     import urllib.request
     import json
-    from http_server import APIRequestHandler, ThreadingHTTPServer
-
-    config = configparser.ConfigParser()
-    config.read_string("""
-[settings]
-default_target_language=ru
-[server]
-enabled=true
-api_key=test-token
-""")
-    resolved_paths = {
-        'results_dir': tmp_path,
-        'kardenwort_workspace': tmp_path,
-        'base_dir': tmp_path,
-    }
-
-    server = ThreadingHTTPServer(('127.0.0.1', 0), APIRequestHandler)
-    server.allow_reuse_address = True
-    server.daemon_threads = True
-    server.config = config
-    server.resolved_paths = resolved_paths
-    server.goldendict = {'server_api_key': 'test-token'}
-    server.api_key = 'test-token'
-    server.seq_counter = 0
-    server.seq_lock = threading.Lock()
-    port = server.server_address[1]
-
     import http_server
-    # Mock render flow to return simple html
-    monkeypatch.setattr(http_server, 'run_render_flow', lambda *a, **kw: "<html><body>Rendered</body></html>")
+    from kardenwort_controller import ControllerRequestHandler
+    from tests.render_test_support import seed_render_rows
+    from tests.thread_support import Worker, finish_workers
 
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
+    server_url, server = controller_world
+    assert http_server.APIRequestHandler is ControllerRequestHandler
+    config, paths = server.config, server.resolved_paths
+    config.read_dict({'rendering': {'display_mode': 'monolithic'},
+        'sentences_mode': {'enabled': 'false'},
+        'triggers': {'run_text_translation': 'manual', 'run_lemma_base_translation': 'manual',
+                     'run_lemma_enrichment': 'manual'}})
+    num_clients = 35
+    for client_id in range(num_clients):
+        text = f'Sentence {client_id}'
+        seed_render_rows(config, paths, f'202608260000{client_id:02d}', text, 'en',
+            ['TokenOrder', 'WordSource', 'SentenceSourceIndex', 'SentenceSource', 'SentenceDestination'],
+            [['0', 'sentence', '1', text, '']])
+    cold = desk.SqliteStorageAdapter(config, paths)
+    before = {f'202608260000{index:02d}': cold.restore_session(f'202608260000{index:02d}')
+              for index in range(num_clients)}
+    results, errors = [], []
+    rendered = []
 
-    try:
-        num_clients = 35
-        results = []
-        errors = []
+    def worker(client_id):
+        try:
+            payload = json.dumps({'session_zid': f'202608260000{client_id:02d}',
+                'language': 'en', 'text': f'Sentence {client_id}', 'text_mode': 'single',
+                'bypass_lang_check': True}).encode('utf-8')
+            request = urllib.request.Request(f'{server_url}/api/v1/render', data=payload,
+                headers={'Content-Type': 'application/json; charset=utf-8', 'X-API-Token': server.api_key})
+            with urllib.request.urlopen(request, timeout=10.0) as response:
+                body = json.loads(response.read().decode('utf-8'))
+                data = body.get('data', body)
+                results.append((client_id, response.status, data.get('ok')))
+                rendered.append((client_id, data))
+        except Exception as error:
+            errors.append((client_id, str(error)))
 
-        def worker(client_id):
-            try:
-                url = f"http://127.0.0.1:{port}/api/v1/render"
-                payload = json.dumps({
-                    "session_zid": f"202608260000{client_id:02d}",
-                    "language": "en",
-                    "text": f"Sentence {client_id}",
-                    "text_mode": "single",
-                    "bypass_lang_check": True,
-                }).encode('utf-8')
-                req = urllib.request.Request(
-                    url,
-                    data=payload,
-                    headers={
-                        "Content-Type": "application/json; charset=utf-8",
-                        "X-API-Token": "test-token"
-                    }
-                )
-                with urllib.request.urlopen(req, timeout=10.0) as resp:
-                    resp_obj = json.loads(resp.read().decode('utf-8'))
-                    ok_val = resp_obj.get("data", {}).get("ok") if "data" in resp_obj else resp_obj.get("ok")
-                    results.append((client_id, resp.status, ok_val))
-            except Exception as e:
-                errors.append((client_id, str(e)))
-
-        threads = [threading.Thread(target=worker, args=(i,)) for i in range(num_clients)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=15.0)
-
-        assert len(errors) == 0, f"Encountered errors during concurrent burst: {errors}"
-        assert len(results) == num_clients, f"Expected {num_clients} successful responses, got {len(results)}"
-        for cid, status, ok in results:
-            assert status == 200, f"Client {cid} got status {status}"
-            assert ok is True, f"Client {cid} got ok={ok}"
-    finally:
-        server.shutdown()
-        server.server_close()
-
+    with control_writes() as writes:
+        finish_workers([Worker(lambda index=index: worker(index)) for index in range(num_clients)])
+    assert len(errors) == 0, f"Encountered errors during concurrent burst: {errors}"
+    assert len(results) == num_clients, f"Expected {num_clients} successful responses, got {len(results)}"
+    for cid, status, ok in results:
+        assert status == 200, f"Client {cid} got status {status}"
+        assert ok is True, f"Client {cid} got ok={ok}"
+    assert prohibited(writes) == []
+    assert server.translation_service.provider_calls == []
+    assert {identity: cold.restore_session(identity) for identity in before} == before
+    assert len(rendered) == num_clients
+    for client_id, data in rendered:
+        assert f'Sentence {client_id}' in data['html']

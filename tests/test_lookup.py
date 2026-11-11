@@ -352,7 +352,7 @@ def test_progressive_worker_failure_isolation(monkeypatch, tmp_path):
     assert write_calls[1] == ('translated_text', 'success')
     assert write_calls[3] == ('translated', 'success')
     assert write_calls[4] == ('enrichment', 'success')
-    assert write_calls[5] == ('finished', 'success')
+    assert write_calls[5] == ('finished', 'failed')
 
 def test_progressive_worker_d3_enrichment_only(monkeypatch, tmp_path):
     config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)

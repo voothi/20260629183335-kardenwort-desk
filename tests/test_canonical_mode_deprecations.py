@@ -1,5 +1,6 @@
 import configparser
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -10,7 +11,8 @@ import kardenwort_desk
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-AHK_CONFIG_DIR = REPO_ROOT.parent / "20240411110510-autohotkey" / "kardenwort-window"
+AHK_CONFIG_DIR = Path(os.environ.get('KARDENWORT_NATIVE_REPO',
+    REPO_ROOT.parent / '20240411110510-autohotkey')) / 'kardenwort-window'
 
 DEPRECATED_CLI_SUBCOMMANDS = (
     "render",

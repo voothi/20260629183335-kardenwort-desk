@@ -9,6 +9,7 @@ import pytest
 import configparser
 import kardenwort_desk as desk
 from kardenwort_desk import TranslationAlignmentError
+from tests.render_test_support import seed_render_tsv
 
 def test_clean_sentence_splits():
     lines = ["First sentence", ", second sentence.", "Punctuation only", "...", "Third sentence"]
@@ -327,6 +328,8 @@ def test_multi_mode_line_alignment_without_context_padding_de(tmp_path, monkeypa
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, tsv_file, zid, text, 'de', text_mode='multi')
+
     pad_called = False
     def mock_pad_translated(*args, **kwargs):
         nonlocal pad_called
@@ -389,6 +392,8 @@ def test_multi_mode_line_alignment_without_context_padding_en(tmp_path, monkeypa
         "cat\tcat\tкот\t3\tThe cat sleeps.\t\t1\n",
         encoding="utf-8"
     )
+
+    seed_render_tsv(config, resolved_paths, tsv_file, zid, text, 'en', text_mode='multi')
 
     pad_called = False
     def mock_pad_translated(*args, **kwargs):

@@ -1,7 +1,5 @@
-import subprocess
 import configparser
 from pathlib import Path
-from unittest.mock import MagicMock
 import pytest
 
 import kardenwort_desk as desk
@@ -10,76 +8,63 @@ from kardenwort_desk import (
     SqliteStorageAdapter,
     TsvStorageAdapter,
 )
-from tests.test_lookup import setup_test_env
+from tests.controller_test_support import controller_world, token_service, DeterministicTranslationHandler
+from tests.lookup_engine_support import NounModel, translate_lookup
+from tests.test_structured_enrichment import control_writes, prohibited
 
 
-def test_db_first_lookup_flow_sqlite_persistence(monkeypatch, tmp_path):
+@pytest.fixture
+def lookup_world(controller_world, monkeypatch):
+    _, server = controller_world
+    config, paths, goldendict = server.config, server.resolved_paths, server.goldendict
+    goldendict.update(lookup_ttl_seconds=0, run_intellifiller=False,
+                     sentence_match_strategy='none', allow_checksum_fallback=False)
+    config.set('wordfill', 'enabled', 'false')
+    config.read_dict({'settings': {'anki_context_words_before': '0', 'anki_context_words_after': '0',
+        'anki_translated_context_words_before': '0', 'anki_translated_context_words_after': '0'}})
+    # Declare lexical selection through real extractor rules, preserving full model context.
+    selection = Path(paths['base_dir'])/'noun-selection.tsv'
+    selection.write_text('\tregex:(?i:I|like|eat|an|are|yellow|sweet|red|the|quick)\t-\n', encoding='utf-8')
+    config.set('languages', 'en_lemma_override', str(selection))
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', translate_lookup)
+    with token_service(NounModel) as tokenizer:
+        config.set('services', 'spacy_server_url', f'http://127.0.0.1:{tokenizer.server_port}')
+        yield server
+
+
+def test_db_first_lookup_flow_sqlite_persistence(monkeypatch, lookup_world):
     """
     Verifies that running run_lookup_flow with SQLite storage backend persists
     the session directly into SQLite database tables (sessions, sentences, words)
     without intermediate TSV disk writes.
     """
-    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
-    
-    db_file = tmp_path / "kardenwort_test.db"
-    config.add_section("storage")
-    config.set("storage", "backend", "sqlite")
-    config.set("storage", "sqlite_db_path", str(db_file))
-    config.set("storage", "fallback_to_tsv", "true")
-    resolved_paths["storage_backend"] = "sqlite"
-    resolved_paths["sqlite_db_path"] = db_file.resolve()
-
-    # Track save_tsv_rows_safely calls
+    server = lookup_world
+    config, resolved_paths, goldendict = server.config, server.resolved_paths, server.goldendict
     saved_tsv_calls = []
-    orig_save_tsv = desk.save_tsv_rows_safely
+    original = desk.save_tsv_rows_safely
 
-    def spy_save_tsv(path, comments, headers, data_rows):
+    def observe(path, comments, headers, rows):
         saved_tsv_calls.append(str(path))
-        return orig_save_tsv(path, comments, headers, data_rows)
+        return original(path, comments, headers, rows)
 
-    monkeypatch.setattr(desk, "save_tsv_rows_safely", spy_save_tsv)
-
-    # Mock subprocess.run for core lemmatization
-    def mock_run(*args, **kwargs):
-        cmd = args[0]
-        out_idx = cmd.index("--output-file") + 1
-        out_file = Path(cmd[out_idx])
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        headers = [
-            "WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI",
-            "SentenceSourceIndex", "SentenceSourceContextLeft", "SentenceSource", "SentenceSourceContextRight",
-            "SentenceDestinationContextLeft", "SentenceDestination", "SentenceDestinationContextRight",
-            "SentenceDestination2ContextLeft", "SentenceDestination2", "SentenceDestination2ContextRight",
-            "SentenceSourceWordlist", "SentenceSourceCloze", "SentenceSourceRewriteAISentenceSource",
-            "SentenceSourceRewriteAISentenceDestination"
-        ]
-        rows = [
-            ["apple", "", "", "", "1", "", "I like apples.", "", "", "", "", "", "", "", "", "", "", ""],
-            ["banana", "", "", "", "2", "", "Bananas are yellow.", "", "", "", "", "", "", "", "", "", "", ""]
-        ]
-        import csv
-        with open(out_file, "w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f, delimiter="\t", lineterminator="\n")
-            writer.writerow(headers)
-            for row in rows:
-                writer.writerow(row)
-
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    monkeypatch.setattr(desk, "translate_source_text", lambda *a, **kw: {0: "Я люблю яблоки.", 1: "Бананы желтые."})
-    monkeypatch.setattr(desk, "translate_lemmas_fast_path", lambda lemmas, *a, **kw: {l: f"{l}_ru" for l in lemmas})
+    monkeypatch.setattr(desk, 'save_tsv_rows_safely', observe)
 
     test_zid = "20260822100000"
-    res = desk.run_lookup_flow(
-        text="I like apples. Bananas are yellow.",
-        language="en",
-        target_lang="ru",
-        fmt="html",
-        config=config,
-        resolved_paths=resolved_paths,
-        goldendict=goldendict,
-        zid=test_zid,
-        text_mode="sentences"
-    )
+    with control_writes() as writes:
+        res = desk.run_lookup_flow(
+            text="I like apples. Bananas are yellow.",
+            language="en",
+            target_lang="ru",
+            fmt="html",
+            config=config,
+            resolved_paths=resolved_paths,
+            goldendict=goldendict,
+            zid=test_zid,
+            text_mode="sentences"
+        )
+
+    assert prohibited(writes) == []
+    assert server.translation_service.provider_calls
 
     # In-memory execution: No intermediate save_tsv_rows_safely calls during translation/wordfill stages
     assert len(saved_tsv_calls) == 0
@@ -122,33 +107,29 @@ def test_db_first_lookup_flow_sqlite_persistence(monkeypatch, tmp_path):
     assert restored["data_rows"][1][trans_col] == "banana_ru"
 
 
-def test_db_first_lookup_flow_tsv_fallback(monkeypatch, tmp_path):
+@pytest.mark.parametrize('controller_world', ['tsv'], indirect=True)
+def test_db_first_lookup_flow_tsv_fallback(lookup_world):
     """
     Verifies that when storage backend is explicitly set to tsv,
     run_lookup_flow works with TsvStorageAdapter without error.
     """
-    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
-    config.add_section("storage")
-    config.set("storage", "backend", "tsv")
-    resolved_paths["storage_backend"] = "tsv"
-
-    def mock_run(*args, **kwargs):
-        cmd = args[0]
-        out_idx = cmd.index("--output-file") + 1
-        out_file = Path(cmd[out_idx])
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        headers = ["WordSource", "WordDestination", "SentenceSourceIndex", "SentenceSource", "SentenceDestination"]
-        rows = [["orange", "", "1", "Oranges are sweet.", ""]]
-        import csv
-        with open(out_file, "w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f, delimiter="\t", lineterminator="\n")
-            writer.writerow(headers)
-            for row in rows:
-                writer.writerow(row)
-
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    monkeypatch.setattr(desk, "translate_source_text", lambda *a, **kw: {0: "Апельсины сладкие."})
-    monkeypatch.setattr(desk, "translate_lemmas_fast_path", lambda lemmas, *a, **kw: {"orange": "апельсин"})
+    server = lookup_world
+    config, resolved_paths, goldendict = server.config, server.resolved_paths, server.goldendict
+    mapping = configparser.ConfigParser(interpolation=None)
+    fields = ['WordSource', 'WordDestination', 'SentenceSourceIndex', 'SentenceSource',
+              'SentenceDestination', 'TokenOrder']
+    mapping.optionxform = str
+    mapping.read_dict({'fields': {field: '' for field in fields},
+        'desk_columns': {'WordSource': 'lemma', 'WordDestination': 'word_translation',
+                        'SentenceSourceIndex': 'sentence_index', 'SentenceSource': 'sentence',
+                        'SentenceDestination': 'sentence_destination'},
+        'fields_mapping.word': {'WordSource': 'lemma', 'SentenceSource': 'source_sentence',
+                                'SentenceSourceIndex': 'sentence_index', 'TokenOrder': 'token_order'}})
+    mapping_path = Path(resolved_paths['base_dir'])/'legacy-mapping.ini'
+    with mapping_path.open('w', encoding='utf-8') as stream:
+        mapping.write(stream)
+    resolved_paths['anki_mapping_file'] = mapping_path
+    config.set('settings', 'anki_mapping_file', str(mapping_path))
 
     test_zid = "20260822100001"
     res = desk.run_lookup_flow(
@@ -171,42 +152,13 @@ def test_db_first_lookup_flow_tsv_fallback(monkeypatch, tmp_path):
     assert data_rows[0][1] == "апельсин"
 
 
-def test_db_first_lookup_flow_export_format(monkeypatch, tmp_path):
+def test_db_first_lookup_flow_export_format(lookup_world):
     """
     Verifies that dynamic TSV export from a session persisted directly to SQLite
     matches expected full column format (82+ columns when standard mapping is used).
     """
-    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
-    
-    # Use real anki-mapping.ini from workspace
-    repo_mapping = Path(__file__).resolve().parent.parent / "anki-mapping.ini"
-    resolved_paths["anki_mapping_file"] = str(repo_mapping)
-    
-    db_file = tmp_path / "kardenwort_export_test.db"
-    config.add_section("storage")
-    config.set("storage", "backend", "sqlite")
-    config.set("storage", "sqlite_db_path", str(db_file))
-    config.set("storage", "fallback_to_tsv", "true")
-    resolved_paths["storage_backend"] = "sqlite"
-    resolved_paths["sqlite_db_path"] = db_file.resolve()
-
-    def mock_run(*args, **kwargs):
-        cmd = args[0]
-        out_idx = cmd.index("--output-file") + 1
-        out_file = Path(cmd[out_idx])
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        headers = ["WordSource", "WordDestination", "SentenceSourceIndex", "SentenceSource", "SentenceDestination"]
-        rows = [["cherry", "", "1", "Cherries are red.", ""]]
-        import csv
-        with open(out_file, "w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f, delimiter="\t", lineterminator="\n")
-            writer.writerow(headers)
-            for row in rows:
-                writer.writerow(row)
-
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    monkeypatch.setattr(desk, "translate_source_text", lambda *a, **kw: {0: "Вишни красные."})
-    monkeypatch.setattr(desk, "translate_lemmas_fast_path", lambda lemmas, *a, **kw: {"cherry": "вишня"})
+    server = lookup_world
+    config, resolved_paths, goldendict = server.config, server.resolved_paths, server.goldendict
 
     test_zid = "20260822100002"
     desk.run_lookup_flow(

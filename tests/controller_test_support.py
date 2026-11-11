@@ -115,10 +115,14 @@ def controller_lifetime(owner, translator, backend='sqlite'):
 @pytest.fixture
 def controller_world(tmp_path, request):
     """A fresh controller and real database per contract; no domain replacements."""
+    profile = getattr(request, 'param', 'sqlite')
+    backend = profile['backend'] if isinstance(profile, dict) else profile
+    seed_cache = profile.get('seed_cache', True) if isinstance(profile, dict) else True
     with translation_service(DeterministicTranslationHandler) as translator, token_service() as tokenizer:
-        with controller_lifetime(tmp_path, translator, getattr(request, 'param', 'sqlite')) as world:
+        with controller_lifetime(tmp_path, translator, backend) as world:
             world[1].config.set('services', 'spacy_server_url', f'http://127.0.0.1:{tokenizer.server_port}')
-            seed_cached_lookup_inputs(world[1])
+            if seed_cache:
+                seed_cached_lookup_inputs(world[1])
             yield world
 
 

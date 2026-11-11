@@ -2,6 +2,11 @@ import pytest
 from pathlib import Path
 import json
 import kardenwort_desk
+from tests.render_test_support import seed_render_tsv
+from tests.controller_test_support import controller_world
+from tests.toolbar_test_support import component_configuration, component_page as page
+
+pytestmark = pytest.mark.usefixtures('component_configuration')
 
 def test_playwright_dom_validation(page, tmp_path):
     tsv_path = tmp_path / "test.tsv"
@@ -89,6 +94,7 @@ def test_handle_sent_text_rendered_html_scripts_load_without_syntax_errors(page,
     tsv_file = tmp_path / "20260815180100-archive.en.tsv"
     tsv_file.write_text("# comment\nWordSource\tWordSourceInflectedForm\tWordDestination\narchive/20260815131120\tarchive/20260815131120-token-mapping/\tархив\n", encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260815180100", "archive", "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text="archive",
         language="en",
@@ -126,6 +132,7 @@ def test_archive_click_does_not_highlight_unrelated_path_subtokens(page, tmp_pat
     tsv_file = tmp_path / "20260815183341-archive-complete-change-token.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260815183341", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -174,6 +181,7 @@ def test_bracket_spacing_normalized_in_rendered_html(page, tmp_path):
     tsv_file = tmp_path / "20260815185600-spec.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260815185600", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -213,6 +221,7 @@ def test_bracket_spacing_disabled_via_config(page, tmp_path):
     tsv_file = tmp_path / "20260815185601-spec.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260815185601", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -252,6 +261,7 @@ def test_rmb_flip_compound_with_leading_zid_preserves_zid(page, tmp_path):
     tsv_file = tmp_path / "20260815190000-zid-flip.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260815190000", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -308,6 +318,7 @@ def test_apostrophe_possessive_token_mapping_and_inflected_preservation(page, tm
     tsv_file = tmp_path / "20260815194500-apostrophe.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260815194500", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -345,6 +356,7 @@ def test_contractions_and_abbreviations_compatibility(page, tmp_path):
     tsv_file = tmp_path / "20260815195400-compat.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260815195400", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -396,6 +408,7 @@ def test_informal_apostrophe_less_contractions_decomposition(page, tmp_path):
     tsv_file = tmp_path / "20260920180930-informal.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260920180930", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -454,6 +467,7 @@ def test_lemma_strips_leading_zid_prefix(page, tmp_path):
     tsv_file = tmp_path / "20260815201400-zid-lemma.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260815201400", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -487,6 +501,7 @@ def test_contractions_inflected_expansion_dom_retention(page, tmp_path):
     tsv_file = tmp_path / "20260816005700-test-were.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260816005700", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -521,6 +536,7 @@ def test_rmb_flip_gray_untranslated_and_numeric_tokens_remain_visible(page, tmp_
     tsv_file = tmp_path / "20260816110000-gray-numeric.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260816110000", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -578,6 +594,7 @@ def test_quoted_word_rendering_and_rmb_flip(page, tmp_path):
     tsv_file = tmp_path / "20260816110100-quoted-word.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260816110100", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -614,6 +631,7 @@ def test_camel_case_identifier_adjacent_spans_and_rmb_flip(page, tmp_path):
     tsv_file = tmp_path / "20260816110200-camel-case.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260816110200", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -673,6 +691,7 @@ def test_subtoken_hover_selection_isolation(page, tmp_path):
     tsv_file = tmp_path / "20260816110300-subtoken-isolation.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260816110300", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -710,6 +729,7 @@ def test_terminal_payload_sets_dom_status_and_catches_ahk_errors(page, tmp_path)
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
     tsv_file = tmp_path / "20260818175000-test.de.tsv"
     tsv_file.write_text("# comment\nWordSource\tWordDestination\nHaus\tдом\n", encoding="utf-8")
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260818175000", "Das Haus", "de", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text="Das Haus",
         language="de",
@@ -749,6 +769,7 @@ def test_literal_template_placeholders_rendered_verbatim(page, tmp_path):
     tsv_file = tmp_path / "20260828233000-placeholder.en.tsv"
     tsv_file.write_text("# comment\nWordSource\tWordDestination\nlanguage\tязык\nstatus\tстатус\n", encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260828233000", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -780,6 +801,7 @@ def test_translation_token_hover_highlights_source_token(page, tmp_path):
     tsv_file = tmp_path / "20260831002500-hover-test.en.tsv"
     tsv_file.write_text("# comment\nWordSource\tWordDestination\nsynced\tсинхронизированы\n", encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260831002500", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -848,6 +870,7 @@ def test_progressive_lemma_update_replaces_skeleton_and_sets_provenance(page, tm
     tsv_file = tmp_path / "20260831004000-prog-test.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260831004000", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -898,15 +921,7 @@ def test_progressive_lemma_update_replaces_skeleton_and_sets_provenance(page, tm
 
 
 def test_rmb_flip_during_progressive_loading_does_not_flip_to_skeleton_text(page, tmp_path):
-    from kardenwort_db import KardenwortDB
-    db_path = tmp_path / "test_isol.db"
-    KardenwortDB(db_path=db_path).run_migrations()
-
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
-    if not config.has_section("storage"):
-        config.add_section("storage")
-    config.set("storage", "sqlite_db_path", str(db_path))
-    resolved_paths["sqlite_db_path"] = str(db_path)
 
     source_text = "xyzartifact unkwordflip."
     tsv_content = (
@@ -918,6 +933,7 @@ def test_rmb_flip_during_progressive_loading_does_not_flip_to_skeleton_text(page
     tsv_file = tmp_path / "20260831005500-skeleton-flip.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260831005500", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -963,6 +979,7 @@ def test_multisentence_container_tabs_progressive_lemma_sync(page, tmp_path):
     tsv_file = tmp_path / "20260831005501-multisync.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20260831005501", source_text, "en", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="en",
@@ -1015,6 +1032,7 @@ def test_rendered_html_scrollbar_gutter_stable(tmp_path):
         "# comment\nWordSource\tWordSourceInflectedForm\tWordDestination\nHaus\tHaus\tдом\n",
         encoding="utf-8",
     )
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20261012100000", "Haus", "de", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text="Haus",
         language="de",
@@ -1037,6 +1055,7 @@ def test_single_undo_redo_keystroke_and_space_key_high_row_id(page, tmp_path):
         "Haus\tHaus\tдом\t1\t0\n",
         encoding="utf-8",
     )
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20261012120000", "Haus", "de", text_mode="single")
     raw_html = kardenwort_desk.run_render_flow(
         text="Haus",
         language="de",
@@ -1092,6 +1111,7 @@ def test_table_metadata_and_inline_edit_tooltip_sync(page, tmp_path):
     tsv_file = tmp_path / "20261012170000-tooltip-sync.de.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20261012170000", "Der Hund läuft.", "de", text_mode="single")
     html_code = kardenwort_desk.run_render_flow(
         text="Der Hund läuft.",
         language="de",
@@ -1232,6 +1252,7 @@ def test_playwright_computed_style_token_and_row_highlight_states(page, tmp_path
     tsv_file = tmp_path / "20261017234000-highlight-style-test.de.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), "20261017234000", source_text, "de", text_mode="single")
     html = kardenwort_desk.run_render_flow(
         text=source_text,
         language="de",

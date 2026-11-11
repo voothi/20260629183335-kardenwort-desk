@@ -8008,6 +8008,8 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
                 row.append("")
             if padded_raw and isinstance(padded_raw, dict):
                 row[col_sentence_dest2] = padded_raw.get(abs_idx, "")
+            else:
+                row[col_sentence_dest2] = sentence_translations_raw.get(abs_idx, "")
 
         if eff_mode == 'single' and col_text_dest != -1:
             while len(row) <= col_text_dest:
@@ -10015,8 +10017,10 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     progressive_timeout_seconds = config.getint(SEC_PIPELINE, 'progressive_timeout_seconds', fallback=15)
     children_tsv_paths = []
     ahk_args = []
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
-    if tsv_path:
+    if tsv_path and not is_sqlite:
         try:
             p_tsv = Path(tsv_path)
             if p_tsv.exists():
@@ -10095,8 +10099,6 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     spawn_order = smc.spawn_order
     parent_mode = smc.parent_mode
     multi_mode_decompose = smc.multi_mode_decompose
-    storage_adapter = get_storage_adapter(config, resolved_paths)
-    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
     session_exists_in_storage = False
     if is_sqlite and zid and str(zid).strip() and str(zid).strip() != "00000000000000":
         try:
@@ -10129,6 +10131,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     translation_fast_failed = False
     translated_sentences = []
     translated_paragraph = ""
+    split_text_provenance = None
 
     if will_split:
         text_chain, _ = resolve_provider_chain(config, task_type='text')
@@ -10198,6 +10201,8 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
 
             master_tsv_path = do_core()
 
+        split_text_provenance = getattr(translated_paragraph, 'provenance', None)
+
         # Fallback to newline_join block translation when sentence-count alignment fails
         attempt_newline_join = run_text == 'auto' and not is_progressive_translation_enabled and not translation_fast_failed and ((len(translated_sentences) != len(source_sentences)) or (alignment_method == 'newline_join'))
         if attempt_newline_join and alignment_method != 'proportion':
@@ -10207,6 +10212,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                     config, resolved_paths, main_text_provider, zid=zid
                 )
                 translated_sentences = [translations_dict.get(i, "").strip() for i in range(len(source_sentences))]
+                split_text_provenance = getattr(translations_dict, 'provenance', None) or split_text_provenance
             except Exception as e:
                 logger.error(f"[{zid}] Newline-join alignment fallback failed: {e}")
 
@@ -10215,6 +10221,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             if not translated_paragraph:
                 try:
                     translated_paragraph = translate_text(text, language, target_lang, config, resolved_paths, main_text_provider, zid=zid)
+                    split_text_provenance = getattr(translated_paragraph, 'provenance', None)
                 except Exception:
                     translated_paragraph = "[Translation Error]"
             lengths = [len(s) for s in source_sentences]
@@ -10332,6 +10339,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                     "sentence_source": s_src,
                     "sentence_destination": s_dst,
                     "sentence_destination2": s_dst2,
+                    "text_provenance": split_text_provenance if s_dst else None,
                 })
             storage_adapter.save_session(
                 session_zid=zid,
@@ -10476,6 +10484,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                         "sentence_source": sub_text,
                         "sentence_destination": sub_trans,
                         "sentence_destination2": sub_trans_padded,
+                        "text_provenance": split_text_provenance if sub_trans else None,
                     }]
                     storage_adapter.save_session(
                         session_zid=sub_zid,
@@ -10783,6 +10792,7 @@ html, body {{
     # --- Word-fill early pre-fill step ---
     if not is_mismatch and wordfill_cfg and wordfill_cfg.get('enabled', False):
         try:
+            rows_before_wordfill = [row[:] for row in data_rows]
             col_lemma_wf = col_lemma if col_lemma != -1 else (headers.index('WordSource') if 'WordSource' in headers else -1)
             if col_lemma_wf != -1:
                 seen_lemmas = {}
@@ -10806,24 +10816,25 @@ html, body {{
                             f"wordfill (desk): pre-filled {len(match)} field(s) for lemma '{lemma_val}' "
                             f"from corpus."
                         )
-                if is_sqlite:
-                    storage_adapter.save_session(
-                        session_zid=zid,
-                        slug=tsv_slug,
-                        source_language=language,
-                        target_language=target_lang,
-                        text_mode=text_mode,
-                        source_raw_text=text,
-                        comments=comments,
-                        headers=headers,
-                        data_rows=_sanitize_rows(data_rows),
-                        working_tsv_path=None,
-                        row_provenances=row_provenances,
-                        zid=zid,
-                    )
-                else:
-                    with file_lock(working_tsv_path):
-                        save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+                if data_rows != rows_before_wordfill:
+                    if is_sqlite:
+                        storage_adapter.save_session(
+                            session_zid=zid,
+                            slug=tsv_slug,
+                            source_language=language,
+                            target_language=target_lang,
+                            text_mode=text_mode,
+                            source_raw_text=text,
+                            comments=comments,
+                            headers=headers,
+                            data_rows=_sanitize_rows(data_rows),
+                            working_tsv_path=None,
+                            row_provenances=row_provenances,
+                            zid=zid,
+                        )
+                    else:
+                        with file_lock(working_tsv_path):
+                            save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
         except Exception as wf_err:
             logger.warning(f"wordfill (desk): early pre-fill step failed, continuing: {wf_err}")
 
@@ -11066,8 +11077,8 @@ html, body {{
     if not sentence_translated and 'sentence_translations_raw' in locals():
         sentence_translations = sentence_translations_raw
         sentence_provenance = getattr(sentence_translations_raw, 'provenance', f"live:{main_text_provider}")
-    elif 'translated_paragraph' in locals() and translated_paragraph and str(translated_paragraph).strip() and not translation_fast_failed:
-        sentence_provenance = getattr(translated_paragraph, 'provenance', f"live:{main_text_provider}")
+    elif not is_sqlite and 'translated_paragraph' in locals() and translated_paragraph and str(translated_paragraph).strip() and not translation_fast_failed:
+        sentence_provenance = split_text_provenance or getattr(translated_paragraph, 'provenance', f"live:{main_text_provider}")
         if not is_sqlite and translation_text_path.exists():
             translation_lines = translation_text_path.read_text(encoding='utf-8').splitlines()
             if eff_mode == 'single':
@@ -15302,18 +15313,19 @@ def cmd_reprocess(args):
     cmd = [
         str(python_exe),
         str(desk_script),
+    ]
+    if args.config:
+        cmd.extend(["--config", args.config])
+    cmd.extend([
         "batch-worker",
         "--tsv", str(tsv_path),
         "--prompt", prompt_name,
         "--rows", ",".join(str(r) for r in selected_rows)
-    ]
+    ])
     if zid:
         cmd.extend(["--zid", str(zid)])
     if trace_id:
         cmd.extend(["--trace-id", str(trace_id)])
-    if args.config:
-        cmd.extend(["--config", args.config])
-
     log_path = tsv_path.with_suffix('.log')
     try:
         log_file = open(log_path, 'a', encoding='utf-8')
@@ -16006,11 +16018,20 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     return update_js_path
 
 class StageTranslationResult(list):
-    """List subclass holding stage rows along with active text translation provenance."""
-    def __init__(self, rows=None, active_text_prov=None):
+    """Legacy stage rows, provenance and any failed requested work."""
+    def __init__(self, rows=None, active_text_prov=None, error=None):
         super().__init__(rows or [])
         self.active_text_prov = active_text_prov
         self.text_provenance = active_text_prov
+        self.error = error
+
+
+def _translation_stage_error(error, failed_lemmas=()):
+    return getattr(error, 'envelope', None) or {
+        'code': 'ERR_TRANSLATION_FAILED', 'message': str(error),
+        'provider': 'desk', 'retryable': True,
+        'details': {'failed_lemmas': list(failed_lemmas)},
+    }
 
 def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, row_provenances=None):
     m = re.match(r'^(\d{14})', tsv_path.name)
@@ -16032,6 +16053,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
     run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
     run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
     active_text_prov = None
+    stage_error = None
 
     try:
         # check if sentence needs translation
@@ -16129,6 +16151,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov, config=config)
                 except Exception as e:
                     logger.warning(f"[{zid}] Sentence text translation failed (non-fatal, proceeding to lemma translation): {e}")
+                    stage_error = _translation_stage_error(e)
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
                     safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", translated_text="", zid=zid, trace_id=trace_id, text_translation_status="failed", text_translation_failed=True, config=config)
 
@@ -16255,6 +16278,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     for chunk in chunks:
                         record_worker_heartbeat(zid, getattr(storage_adapter, 'db', None), min_interval_seconds=hb_interval)
                         lemma_translations = translate_lemmas_fast_path(chunk, getattr(args, 'language', 'en'), target_l, config, resolved_paths, provider, zid=zid)
+                        reword.fast_provider_results(chunk, lemma_translations)
                         fast_prov = getattr(lemma_translations, 'provenance', f"live:{provider}")
                         if str(fast_prov).startswith("live:"):
                             p_from_prov = str(fast_prov)[5:].strip().lower()
@@ -16317,21 +16341,14 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
     except Exception as e:
         logger.error(f"Failing in translated stage: {e}")
         failed_lemmas = chunk if 'chunk' in locals() else (lemmas_to_translate if 'lemmas_to_translate' in locals() else [])
-        err_obj = getattr(e, 'envelope', None) or {
-            "code": "ERR_TRANSLATION_FAILED",
-            "message": str(e),
-            "provider": "desk",
-            "retryable": True,
-            "details": {
-                "failed_lemmas": failed_lemmas
-            }
-        }
+        err_obj = _translation_stage_error(e, failed_lemmas)
+        stage_error = err_obj
         results_dir = resolve_results_dir(resolved_paths, config)
         if zid and results_dir:
             sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
             sess_logger.error(f"Translation stage failed: [{err_obj.get('code')}] {err_obj.get('message')}")
         safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed", error=err_obj, zid=zid, trace_id=trace_id, config=config)
-    return StageTranslationResult(data_rows, active_text_prov)
+    return StageTranslationResult(data_rows, active_text_prov, stage_error)
 
 def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="enrichment", selected_rows=None):
     m = re.match(r'^(\d{14})', tsv_path.name)
@@ -16475,18 +16492,19 @@ def cmd_retext(args):
     cmd = [
         str(python_exe),
         str(desk_script),
+    ]
+    if args.config:
+        cmd.extend(["--config", args.config])
+    cmd.extend([
         "retext-worker",
         "--tsv", str(tsv_path),
         "--language", lang,
         "--text-mode", args.text_mode
-    ]
+    ])
     if zid:
         cmd.extend(["--zid", str(zid)])
     if trace_id:
         cmd.extend(["--trace-id", str(trace_id)])
-    if args.config:
-        cmd.extend(["--config", args.config])
-
     log_path = tsv_path.with_suffix('.log')
     try:
         log_file = open(log_path, 'a', encoding='utf-8')
@@ -16606,15 +16624,21 @@ def cmd_retext_worker(args):
         with storage_adapter.file_lock(tsv_path):
             comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
         col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+        if 'SentenceDestination' in headers:
+            col_sentence_dest = headers.index('SentenceDestination')
+        col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else -1
         col_text_dest = headers.index(role_fields['text_destination']) if 'text_destination' in role_fields and role_fields['text_destination'] in headers else -1
         col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
 
         resolve_translations(
             text, text_mode, data_rows, col_index, col_sentence_dest,
             sentence_translations, tsv_path, comments, headers,
-            col_text_dest=col_text_dest, persist=True, return_single=False,
+            col_text_dest=col_text_dest, col_sentence_dest2=col_sentence_dest2, persist=not is_sqlite, return_single=False,
             adapter=storage_adapter, config=config, resolved_paths=resolved_paths
         )
+        if is_sqlite:
+            storage_adapter.save_session(session_zid=zid, comments=comments, headers=headers, data_rows=data_rows,
+                text_provenance=getattr(sentence_translations, 'provenance', None), zid=zid)
         if sess_logger:
             sess_logger.info("Retext completed successfully")
     except Exception as e:
@@ -17036,6 +17060,9 @@ def cmd_progressive_worker(args):
                         active_text_prov = res.active_text_prov
                     else:
                         data_rows = res
+
+                    if isinstance(res, StageTranslationResult):
+                        worker_error = res.error
 
                 if not is_sqlite:
                     try:

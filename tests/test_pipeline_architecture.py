@@ -32,7 +32,8 @@ def test_canonical_enrichment_has_no_headless_or_file_calls():
 def test_new_shell_functions_keep_bounded_branch_complexity():
     root = Path(__file__).resolve().parents[1]
     slices = {
-        'kardenwort_desk.py': {'enrich_session_intellifiller', 'sqlite_provider_database', 'storage_backend_setting'},
+        'kardenwort_desk.py': {'enrich_session_intellifiller', 'sqlite_provider_database', 'storage_backend_setting',
+                             '_translation_stage_error'},
         'kardenwort_controller.py': {'committed_delivery', '_execute_enrich_lemma'},
     }
     for filename, names in slices.items():

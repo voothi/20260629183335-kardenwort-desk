@@ -2,6 +2,7 @@ import time
 import types
 import pytest
 import configparser
+import json
 from pathlib import Path
 import kardenwort_desk as desk
 from tests.controller_test_support import controller_world
@@ -111,70 +112,54 @@ def _write_worker_tsv(path):
     )
 
 
-def test_progressive_worker_lifecycle(monkeypatch, tmp_path):
+def run_tsv_cli_worker(owner, invalid_chunk=False):
+    """Actual deprecated TSV CLI inputs retain marker-order and failure contracts."""
+    from tests.controller_test_support import owned_configuration, translation_service, DeterministicTranslationHandler
+    translation_order = []
+
+    class Engine(DeterministicTranslationHandler):
+        def translate(self, provider, text, source, target):
+            translation_order.append('translation_called')
+            return super().translate(provider, text, source, target)
+
+    with translation_service(Engine) as translator:
+        config, paths, _ = owned_configuration(owner, f'http://127.0.0.1:{translator.server_port}', 'tsv')
+        config.read_dict({'settings': {'default_language': 'en', 'default_target_language': 'ru',
+                                      'anki_mapping_file': str(paths['anki_mapping_file'])},
+                         'server': {'update_delivery': 'desktop_file'},
+                         'wordfill': {'enabled': 'false'},
+                         'translation': {'translation_chunk_size': 'invalid' if invalid_chunk else '15'},
+                         'triggers': {'run_text_translation': 'manual', 'run_lemma_base_translation': 'auto',
+                                      'run_lemma_enrichment': 'manual'}})
+        configuration = owner/'config.ini'
+        with configuration.open('w', encoding='utf-8') as stream:
+            config.write(stream)
+        args = _make_worker_args(owner, configuration)
+        args.language, args.target_lang = 'en', 'ru'
+        tsv_path = Path(args.tsv)
+        _write_worker_tsv(tsv_path)
+        desk.cmd_progressive_worker(args)
+        updates = sorted(tsv_path.with_suffix('.updates').glob('*.js'))
+        payloads = [json.loads(path.read_text(encoding='utf-8').split('window.receiveUpdate(', 1)[1][:-4])
+                    for path in updates]
+        finished = next(payload for payload in reversed(payloads) if payload['stage'] == 'finished')
+        assert finished['status'] == ('failed' if invalid_chunk else 'success')
+        _, headers, rows = desk.load_tsv_rows(tsv_path)
+        assert rows[0][headers.index('WordSource')] == 'Haus'
+        assert rows[0][headers.index('WordDestination')] == ('' if invalid_chunk else 'google: Haus')
+        if invalid_chunk:
+            assert finished['error'] and translation_order == []
+        return tsv_path, translation_order
+
+
+def test_progressive_worker_lifecycle(tmp_path):
     """
     Verifies that cmd_progressive_worker:
     1. Calls the translation stage.
     2. Touches .base_translation_done BEFORE attempting enrichment.
     3. Touches .enrichment_done at the very end (in finally).
     """
-    config_path = tmp_path / "config.ini"
-    config_path.write_text(
-        "[settings]\ndefault_language=en\n"
-        "[pipeline]\nlemma_base_provider=google\nlemma_reprocess_provider=intellifiller\n"
-        "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
-        "[fields]\n",
-        encoding="utf-8",
-    )
-    mapping_path = tmp_path / "mapping.ini"
-    mapping_path.write_text(
-        "[fields_mapping.word]\nWordSource=lemma\nWordDestination=word_translation\nWordSourceIPA=word_ipa\n",
-        encoding="utf-8",
-    )
-
-    tsv_path = tmp_path / "20260809190000-test.en.tsv"
-    _write_worker_tsv(tsv_path)
-
-    translation_order = []
-
-    def mock_load_config(cfg_path):
-        config = configparser.ConfigParser()
-        config.read_string(
-            "[settings]\ndefault_language=en\n"
-            "[pipeline]\nlemma_base_provider=google\nlemma_reprocess_provider=intellifiller\n"
-            "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
-            "[fields]\n"
-        )
-        resolved = {
-            "results_dir": tmp_path,
-            "anki_mapping_file": mapping_path,
-            "kardenwort_workspace": tmp_path,
-            "settings_file": tmp_path / "settings.ini",
-        }
-        return config, resolved, None, None
-
-    def mock_translation_stage(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
-        translation_order.append("translation_called")
-        # Simulate: translation fills WordDestination
-        for row in data_rows:
-            if len(row) > 0 and row[0].strip() and len(row) < 2:
-                row.append("Haus-DE")
-            elif len(row) > 1 and not row[1].strip():
-                row[1] = "house"
-        return data_rows
-
-    monkeypatch.setattr(desk, "load_config", mock_load_config)
-    monkeypatch.setattr(desk, "_progressive_worker_stage_translation", mock_translation_stage)
-    monkeypatch.setattr(desk, "write_update_js", lambda *a, **kw: None)
-    monkeypatch.setattr(desk, "load_anki_mapping", lambda p: configparser.ConfigParser())
-    monkeypatch.setattr(desk, "get_role_fields", lambda m, h: {
-        "lemma": "WordSource",
-        "word_translation": "WordDestination",
-        "word_ipa": "WordSourceIPA",
-    })
-
-    args = _make_worker_args(tmp_path, config_path)
-    desk.cmd_progressive_worker(args)
+    tsv_path, translation_order = run_tsv_cli_worker(tmp_path)
 
     assert "translation_called" in translation_order, "Translation stage was not called"
 
@@ -194,61 +179,13 @@ def test_progressive_worker_lifecycle(monkeypatch, tmp_path):
 # Task 1.2: cmd_progressive_worker exception fallback — markers written on crash
 # ---------------------------------------------------------------------------
 
-def test_progressive_worker_exception_fallback(monkeypatch, tmp_path):
+def test_progressive_worker_exception_fallback(tmp_path):
     """
     Verifies that when cmd_progressive_worker crashes during translation,
     the finally block still creates both .base_translation_done and .enrichment_done
     so that waiting child windows are never left deadlocked.
     """
-    config_path = tmp_path / "config.ini"
-    config_path.write_text(
-        "[settings]\ndefault_language=en\n"
-        "[pipeline]\nlemma_base_provider=google\nlemma_reprocess_provider=intellifiller\n"
-        "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
-        "[fields]\n",
-        encoding="utf-8",
-    )
-    mapping_path = tmp_path / "mapping.ini"
-    mapping_path.write_text(
-        "[fields_mapping.word]\nWordSource=lemma\nWordDestination=word_translation\n",
-        encoding="utf-8",
-    )
-
-    tsv_path = tmp_path / "20260809190000-test.en.tsv"
-    _write_worker_tsv(tsv_path)
-
-    def mock_load_config(cfg_path):
-        config = configparser.ConfigParser()
-        config.read_string(
-            "[settings]\ndefault_language=en\n"
-            "[pipeline]\nlemma_base_provider=google\nlemma_reprocess_provider=intellifiller\n"
-            "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
-            "[fields]\n"
-        )
-        resolved = {
-            "results_dir": tmp_path,
-            "anki_mapping_file": mapping_path,
-            "kardenwort_workspace": tmp_path,
-            "settings_file": tmp_path / "settings.ini",
-        }
-        return config, resolved, None, None
-
-    def mock_crashing_translation_stage(*args, **kwargs):
-        raise RuntimeError("Simulated crash in translation stage")
-
-    monkeypatch.setattr(desk, "load_config", mock_load_config)
-    monkeypatch.setattr(desk, "_progressive_worker_stage_translation", mock_crashing_translation_stage)
-    monkeypatch.setattr(desk, "write_update_js", lambda *a, **kw: None)
-    monkeypatch.setattr(desk, "load_anki_mapping", lambda p: configparser.ConfigParser())
-    monkeypatch.setattr(desk, "get_role_fields", lambda m, h: {
-        "lemma": "WordSource",
-        "word_translation": "WordDestination",
-    })
-
-    args = _make_worker_args(tmp_path, config_path)
-
-    # Must NOT propagate — the inner exception is caught by the worker's except block
-    desk.cmd_progressive_worker(args)
+    tsv_path, _ = run_tsv_cli_worker(tmp_path, invalid_chunk=True)
 
     base_done = tsv_path.with_suffix(".base_translation_done")
     enrich_done = tsv_path.with_suffix(".enrichment_done")
@@ -543,100 +480,36 @@ de_prompt=
     assert 'id="kardenwort-children"' in html_out, "Master window must contain children div for AHK hierarchy tracking"
 
 
-def test_child_window_does_not_claim_younger_siblings_as_children(monkeypatch, tmp_path):
-    """
-    Verify that a child window (which has older siblings in the temporal cluster)
-    does NOT claim younger siblings as its children, does NOT set is_master_window=True,
-    and does NOT inject <div id='kardenwort-children'>.
-    """
-    config = configparser.ConfigParser()
-    config.read_string("""
-[settings]
-default_target_language=ru
-[rendering]
-display_mode=progressive
-[pipeline]
-progressive_text_translation=true
-progressive_timeout_seconds=15
-lemma_base_provider=google
-lemma_reprocess_provider=intellifiller
-[triggers]
-run_text_translation=auto
-run_lemma_base_translation=auto
-run_lemma_enrichment=manual
-[sentences_mode]
-enabled=true
-parent_mode=table
-[languages]
-de_prompt=
-[fields]
-""")
+def test_child_window_does_not_claim_younger_siblings_as_children(controller_world):
+    """Stored child restoration must not infer ownership from temporal neighbors."""
+    from tests.render_test_support import seed_render_rows
+    from tests.test_structured_enrichment import control_writes, prohibited
+    _, server = controller_world
+    config, paths = server.config, server.resolved_paths
+    config.read_dict({'rendering': {'display_mode': 'progressive'},
+        'sentences_mode': {'enabled': 'true', 'parent_mode': 'table'},
+        'triggers': {'run_text_translation': 'manual', 'run_lemma_base_translation': 'manual',
+                     'run_lemma_enrichment': 'manual'}})
+    headers = ['WordSource', 'WordDestination', 'SentenceSourceIndex',
+               'SentenceSource', 'SentenceDestination', 'DeskSelected']
+    identities = ['20260814120000', '20260814120001', '20260814120002']
+    for identity, text in zip(identities, ['Older master.', 'Haus ist gut.', 'Younger sibling.']):
+        seed_render_rows(config, paths, identity, text, 'de', headers,
+            [['Haus', 'house', '1', text, 'Stored translation.', '0']])
+        (paths['results_dir']/f'{identity}-neighbor.de.tsv').write_text(
+            '\t'.join(headers)+'\n', encoding='utf-8')
+    cold = desk.SqliteStorageAdapter(config, paths)
+    before = {identity: cold.db.get_session_bundle(identity) for identity in identities}
+    with control_writes() as writes:
+        html_out = desk.run_render_flow('Haus ist gut.', 'de', identities[1], 'single',
+            config, paths, spawn_children=False, wordfill_cfg={'enabled': False})
 
-    mapping_file = tmp_path / "mapping.ini"
-    mapping_file.write_text(
-        "[fields]\n"
-        "WordSource=\nWordDestination=\n"
-        "SentenceSourceIndex=\nSentenceDestination=\nDeskSelected=\n"
-        "[fields_mapping.word]\n"
-        "WordSource=lemma\nWordDestination=word_translation\n"
-        "SentenceSourceIndex=sentence_index\n"
-        "SentenceDestination=sentence_destination\nDeskSelected=selected\n",
-        encoding="utf-8",
-    )
-
-    resolved_paths = {
-        'results_dir': tmp_path,
-        'kardenwort_core_py': tmp_path / 'dummy.py',
-        'kardenwort_python': tmp_path / 'python',
-        'anki_mapping_file': mapping_file,
-        'kardenwort_workspace': tmp_path,
-        'settings_file': tmp_path / 'settings.ini',
-    }
-
-    headers = ["WordSource", "WordDestination", "SentenceSourceIndex", "SentenceDestination", "DeskSelected"]
-    data_rows = [["Haus", "", "1", "", "0"]]
-
-    role_fields = {
-        "lemma": "WordSource",
-        "word_translation": "WordDestination",
-        "sentence_index": "SentenceSourceIndex",
-        "sentence_destination": "SentenceDestination",
-        "selected": "DeskSelected",
-    }
-
-    # Sibling files in the same batch
-    master_tsv = tmp_path / "20260814120000-master.de.tsv"
-    master_tsv.write_text("\t".join(headers) + "\n", encoding="utf-8")
-    child1_tsv = tmp_path / "20260814120001-child1.de.tsv"
-    child1_tsv.write_text("\t".join(headers) + "\n" + "\t".join(data_rows[0]) + "\n", encoding="utf-8")
-    child2_tsv = tmp_path / "20260814120002-child2.de.tsv"
-    child2_tsv.write_text("\t".join(headers) + "\n", encoding="utf-8")
-
-    monkeypatch.setattr(desk, 'load_anki_mapping', lambda p: configparser.ConfigParser())
-    monkeypatch.setattr(desk, 'load_tsv_rows', lambda p: ([""], headers, [list(r) for r in data_rows]))
-    monkeypatch.setattr(desk, 'is_tsv_llm_filled', lambda *a, **kw: False)
-    monkeypatch.setattr(desk, 'get_role_fields', lambda m, h: role_fields)
-    monkeypatch.setattr(desk, 'load_kardenwort_config', lambda w: configparser.ConfigParser())
-    monkeypatch.setattr(desk, 'resolve_results_dir', lambda rp, kw: tmp_path)
-    monkeypatch.setattr(desk, 'run_progressive_worker_async', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'write_update_js', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'spawn_ahk', lambda *a, **kw: None)
-    monkeypatch.setattr(desk, 'translate_source_text', lambda *a, **kw: {0: "Haus-DE"})
-    monkeypatch.setattr(desk, 'resolve_translations', lambda *a, **kw: None)
-
-    # Render child1
-    html_out = desk.run_render_flow(
-        "Haus ist gut.",
-        "de",
-        "20260814120001",
-        "single",
-        config,
-        resolved_paths,
-        tsv_path=str(child1_tsv),
-    )
-
-    # Child 1 must NOT have kardenwort-children div containing child 2
     assert 'id="kardenwort-children"' not in html_out, "Child window must NOT contain kardenwort-children div"
+    assert 'Stored translation.' in html_out
+    assert server.translation_service.provider_calls == []
+    cold = desk.SqliteStorageAdapter(config, paths)
+    assert {identity: cold.db.get_session_bundle(identity) for identity in identities} == before
+    assert prohibited(writes) == []
 
 
 def test_the_cut_respects_sentence_source_index_no_word_bleeding(monkeypatch, tmp_path):
@@ -1139,84 +1012,65 @@ def test_translate_text_deepl_failover_to_google(monkeypatch, tmp_path):
     assert result == "Google(Hello world)"
 
 
-def test_progressive_worker_lifecycle_db_status_finished(monkeypatch, tmp_path):
+def run_sqlite_cli_worker(owner, sess_zid, fail_provider=False, task='lemma'):
+    """Retained CLI edge; provider HTTP, configuration reload and SQLite are real."""
+    from tests.controller_test_support import owned_configuration, translation_service, DeterministicTranslationHandler
+    from tests.render_test_support import seed_render_rows
+    from translate_server import TranslationServerException
+
+    class Engine(DeterministicTranslationHandler):
+        def translate(self, provider, text, source, target):
+            if fail_provider and (fail_provider != 'text' or text != 'sample'):
+                self.server.provider_calls.append((text, source, target))
+                raise TranslationServerException(503, 'ERR_NETWORK_UNREACHABLE', 'Owned provider unavailable')
+            return super().translate(provider, text, source, target)
+
+    with translation_service(Engine) as translator:
+        config, paths, _ = owned_configuration(owner, f'http://127.0.0.1:{translator.server_port}', 'sqlite')
+        config.read_dict({'settings': {'default_language': 'en', 'default_target_language': 'ru',
+                                      'anki_mapping_file': str(paths['anki_mapping_file'])},
+                         'server': {'update_delivery': 'desktop_file'},
+                         'wordfill': {'enabled': 'false'},
+                         'triggers': {'run_text_translation': 'auto' if task in ('text', 'both') else 'manual',
+                                      'run_lemma_base_translation': 'auto' if task in ('lemma', 'both') else 'manual',
+                                      'run_lemma_enrichment': 'manual'}})
+        configuration = owner/'config.ini'
+        with configuration.open('w', encoding='utf-8') as stream:
+            config.write(stream)
+        seed_render_rows(config, paths, sess_zid, 'Sample text for worker test.', 'en',
+            ['TokenOrder', 'WordSource', 'WordDestination', 'SentenceSourceIndex', 'SentenceSource', 'SentenceDestination'],
+            [['0', 'sample', '', '1', 'Sample text for worker test.', '']])
+        tsv_path = paths['results_dir']/f'{sess_zid}-worker-test.en.tsv'
+        args = types.SimpleNamespace(tsv=str(tsv_path), config=str(configuration), text_mode='single',
+            skip_intellifiller=True, zid=sess_zid, trace_id=f'{sess_zid}:test', language='en', target_lang='ru')
+        desk.cmd_progressive_worker(args)
+        requested = ['Sample text for worker test.', 'sample'] if task == 'both' else [
+            'Sample text for worker test.' if task == 'text' else 'sample']
+        assert translator.provider_calls == [(value, 'en', 'ru') for value in requested]
+        cold = desk.SqliteStorageAdapter(config, paths)
+        words = cold.db.get_words_by_session(sess_zid)
+        assert len(words) == 1 and words[0]['lemma'] == 'sample'
+        expected_word = 'google: sample' if not fail_provider or (fail_provider == 'text' and task == 'both') else ''
+        assert (words[0]['word_destination'] or '') == expected_word
+        if expected_word:
+            assert words[0]['word_provenance'] == 'live:google'
+        assert cold.db.get_sentences_by_session(sess_zid)[0]['sentence_source'] == 'Sample text for worker test.'
+        updates = sorted(tsv_path.with_suffix('.updates').glob('*.js'))
+        payloads = [json.loads(path.read_text(encoding='utf-8').split('window.receiveUpdate(', 1)[1][:-4])
+                    for path in updates]
+        finished = next(payload for payload in reversed(payloads) if payload['stage'] == 'finished')
+        assert finished['status'] == ('failed' if fail_provider else 'success')
+        if fail_provider:
+            assert finished['error']
+        return cold.db
+
+
+def test_progressive_worker_lifecycle_db_status_finished(tmp_path):
     """
     Verifies that cmd_progressive_worker records worker_status = 'finished' in SQLite upon successful completion.
     """
-    from kardenwort_db import KardenwortDB
-    db_file = tmp_path / "kardenwort.db"
-    db = KardenwortDB(db_path=db_file)
-    db.run_migrations()
-
-    sess_zid = "20260830234001"
-    db.insert_session({
-        "zid": sess_zid,
-        "slug": "worker-finish-test",
-        "source_language": "en",
-        "source_raw_text": "Sample text for worker test.",
-    })
-    db.insert_sentence({
-        "session_zid": sess_zid,
-        "sentence_index": 1,
-        "sentence_source": "Sample text for worker test.",
-    })
-    db.insert_words([{
-        "session_zid": sess_zid,
-        "sentence_index": 1,
-        "token_order": 0,
-        "quotation": "Sample",
-        "lemma": "sample",
-    }])
-
-    mapping_path = tmp_path / "mapping.ini"
-    mapping_path.write_text(
-        "[fields_mapping.word]\nWordSource=lemma\nWordDestination=word_translation\nWordSourceIPA=word_ipa\n",
-        encoding="utf-8",
-    )
-
-    def mock_load_config(cfg_path):
-        config = configparser.ConfigParser()
-        config.read_string(
-            f"[storage]\nbackend=sqlite\nsqlite_db_path={db_file.as_posix()}\n"
-            "[settings]\ndefault_language=en\n"
-            "[pipeline]\nlemma_base_provider=google\n"
-            "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
-        )
-        resolved = {
-            "results_dir": tmp_path,
-            "anki_mapping_file": mapping_path,
-            "kardenwort_workspace": tmp_path,
-            "settings_file": tmp_path / "settings.ini",
-            "sqlite_db_path": db_file,
-        }
-        return config, resolved, None, None
-
-    tsv_path = tmp_path / f"{sess_zid}-test.en.tsv"
-    _write_worker_tsv(tsv_path)
-
-    monkeypatch.setattr(desk, "load_config", mock_load_config)
-    monkeypatch.setattr(desk, "write_update_js", lambda *a, **kw: None)
-    monkeypatch.setattr(desk, "safe_write_update_js", lambda *a, **kw: None)
-    monkeypatch.setattr(desk, "translate_lemmas_fast_path", lambda lemmas, *a, **kw: {l: f"{l}_TRANS" for l in lemmas})
-    monkeypatch.setattr(desk, "load_anki_mapping", lambda p: configparser.ConfigParser())
-    monkeypatch.setattr(desk, "get_role_fields", lambda m, h: {
-        "lemma": "WordSource",
-        "word_translation": "WordDestination",
-        "word_ipa": "WordSourceIPA",
-    })
-
-    args = types.SimpleNamespace(
-        tsv=str(tsv_path),
-        config=str(tmp_path / "config.ini"),
-        text_mode="single",
-        skip_intellifiller=True,
-        zid=sess_zid,
-        trace_id=f"{sess_zid}:test",
-        language="en",
-        target_lang="ru",
-    )
-
-    desk.cmd_progressive_worker(args)
+    sess_zid = '20260830234001'
+    db = run_sqlite_cli_worker(tmp_path, sess_zid, fail_provider=False)
 
     st = db.get_worker_status(sess_zid)
     assert st["worker_status"] == "finished"
@@ -1224,87 +1078,13 @@ def test_progressive_worker_lifecycle_db_status_finished(monkeypatch, tmp_path):
     assert st["worker_finished_at"] is not None
 
 
-def test_progressive_worker_lifecycle_db_status_failed(monkeypatch, tmp_path):
+@pytest.mark.parametrize('task,fail_provider', [('lemma', True), ('text', True), ('both', True), ('both', 'text')])
+def test_progressive_worker_lifecycle_db_status_failed(tmp_path, task, fail_provider):
     """
-    Verifies that cmd_progressive_worker records worker_status = 'failed' in SQLite when an unhandled exception occurs.
+    The retained worker records a real failed provider stage in SQLite and its final event.
     """
-    from kardenwort_db import KardenwortDB
-    db_file = tmp_path / "kardenwort.db"
-    db = KardenwortDB(db_path=db_file)
-    db.run_migrations()
-
-    sess_zid = "20260830234002"
-    db.insert_session({
-        "zid": sess_zid,
-        "slug": "worker-fail-test",
-        "source_language": "en",
-        "source_raw_text": "Sample text for failure test.",
-    })
-    db.insert_sentence({
-        "session_zid": sess_zid,
-        "sentence_index": 1,
-        "sentence_source": "Sample text for failure test.",
-    })
-    db.insert_words([{
-        "session_zid": sess_zid,
-        "sentence_index": 1,
-        "token_order": 0,
-        "quotation": "Sample",
-        "lemma": "sample",
-    }])
-
-    mapping_path = tmp_path / "mapping.ini"
-    mapping_path.write_text(
-        "[fields_mapping.word]\nWordSource=lemma\nWordDestination=word_translation\nWordSourceIPA=word_ipa\n",
-        encoding="utf-8",
-    )
-
-    def mock_load_config(cfg_path):
-        config = configparser.ConfigParser()
-        config.read_string(
-            f"[storage]\nbackend=sqlite\nsqlite_db_path={db_file.as_posix()}\n"
-            "[settings]\ndefault_language=en\n"
-            "[pipeline]\nlemma_base_provider=google\n"
-            "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
-        )
-        resolved = {
-            "results_dir": tmp_path,
-            "anki_mapping_file": mapping_path,
-            "kardenwort_workspace": tmp_path,
-            "settings_file": tmp_path / "settings.ini",
-            "sqlite_db_path": db_file,
-        }
-        return config, resolved, None, None
-
-    tsv_path = tmp_path / f"{sess_zid}-test.en.tsv"
-    _write_worker_tsv(tsv_path)
-
-    def mock_crashing_stage(*args, **kwargs):
-        raise RuntimeError("Simulated unhandled worker crash")
-
-    monkeypatch.setattr(desk, "load_config", mock_load_config)
-    monkeypatch.setattr(desk, "_progressive_worker_stage_translation", mock_crashing_stage)
-    monkeypatch.setattr(desk, "write_update_js", lambda *a, **kw: None)
-    monkeypatch.setattr(desk, "safe_write_update_js", lambda *a, **kw: None)
-    monkeypatch.setattr(desk, "load_anki_mapping", lambda p: configparser.ConfigParser())
-    monkeypatch.setattr(desk, "get_role_fields", lambda m, h: {
-        "lemma": "WordSource",
-        "word_translation": "WordDestination",
-        "word_ipa": "WordSourceIPA",
-    })
-
-    args = types.SimpleNamespace(
-        tsv=str(tsv_path),
-        config=str(tmp_path / "config.ini"),
-        text_mode="single",
-        skip_intellifiller=True,
-        zid=sess_zid,
-        trace_id=f"{sess_zid}:test",
-        language="en",
-        target_lang="ru",
-    )
-
-    desk.cmd_progressive_worker(args)
+    sess_zid = '20260830234002'
+    db = run_sqlite_cli_worker(tmp_path, sess_zid, fail_provider=fail_provider, task=task)
 
     st = db.get_worker_status(sess_zid)
     assert st["worker_status"] == "failed"
