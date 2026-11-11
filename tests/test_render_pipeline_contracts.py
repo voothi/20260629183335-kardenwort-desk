@@ -1,10 +1,67 @@
 """Real extraction subprocess, provider HTTP, renderer, and durable SQLite effects."""
 import kardenwort_desk as desk
+import re
 import pytest
 from tests.controller_test_support import controller_world
 from tests.render_pipeline_support import configure_render_pipeline
 from tests.render_test_support import seed_render_rows
 from tests.test_structured_enrichment import control_writes, prohibited
+
+
+@pytest.mark.parametrize('parallel', [True, False])
+@pytest.mark.parametrize('delivery', ['container', 'multi_window'])
+@pytest.mark.parametrize('fail_primary', [False, True])
+def test_split_render_retains_actual_provider_in_master_children_and_cold_html(
+        controller_world, monkeypatch, parallel, delivery, fail_primary):
+    from tests.controller_test_support import DeterministicTranslationHandler
+    from translate_server import TranslationServerException
+    _, server = controller_world
+    config, paths = server.config, server.resolved_paths
+    configure_render_pipeline(server)
+    config.read_dict({
+        'pipeline': {'parallelize_core_and_translation': str(parallel).lower(),
+                     'text_provider_chain': 'deepl, google', 'text_base_provider': 'deepl',
+                     'failover_strategy': 'chain'},
+        'sentences_mode': {'delivery_mode': delivery,
+                          'alignment_method': 'newline_join' if parallel else 'proportion'}})
+    calls = []
+
+    def translate(handler, provider, text, source, target):
+        calls.append(provider)
+        if fail_primary and provider == 'deepl':
+            raise TranslationServerException(503, 'ERR_NETWORK_UNREACHABLE', 'Owned primary unavailable')
+        handler.server.provider_calls.append((text, source, target))
+        return 'Bonjour.\nAu revoir.' if '\n' in text else 'Bonjour. Au revoir.'
+
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', translate)
+    zid = '20261111161800'
+    cold = desk.SqliteStorageAdapter(config, paths)
+    unrelated = cold.db.get_words_by_session('20261108113001')
+    with control_writes() as writes:
+        html = desk.run_render_flow('Hello. Goodbye.', 'und', zid, 'single', config, paths,
+                                   spawn_children=False, wordfill_cfg={'enabled': False})
+    provider = 'google' if fail_primary else 'deepl'
+    expected = f'live:{provider}'
+    sentences = cold.db.get_sentences_by_session(zid)
+    assert [(row['sentence_destination'], row['text_provenance']) for row in sentences] == [
+        ('Bonjour.', expected), ('Au revoir.', expected)]
+    assert calls[0] == 'deepl' and provider in calls
+    assert prohibited(writes) == []
+    assert cold.db.get_words_by_session('20261108113001') == unrelated
+    provenance = re.search(r'<script id="sentence-provenance"[^>]*>([^<]*)</script>', html)
+    assert provenance and provenance.group(1).strip() == expected
+    before = list(calls)
+    identities = [zid] if delivery == 'container' else [zid, '20261111161801', '20261111161802']
+    with control_writes() as restored_writes:
+        for identity in identities:
+            stored = cold.db.get_sentences_by_session(identity)
+            assert stored and all(row['text_provenance'] == expected for row in stored)
+            restored = desk.run_render_flow('', 'und', identity, 'single', config, paths,
+                                           spawn_children=False, wordfill_cfg={'enabled': False})
+            projection = re.search(r'<script id="sentence-provenance"[^>]*>([^<]*)</script>', restored)
+            assert projection and projection.group(1).strip() == expected
+    assert calls == before
+    assert prohibited(restored_writes) == []
 
 
 def test_real_split_render_persists_extraction_and_translation(controller_world):

@@ -72,57 +72,36 @@ def test_slow_translation_triggers_fast_fail(controller_world, monkeypatch):
                 ('google: First sentence.', 'live:google'), ('google: Second sentence.', 'live:google')]
 
 
-def test_fast_translation_completes_within_timeout(tmp_path, monkeypatch):
-    config = configparser.ConfigParser()
-    config.read_string("""
-[settings]
-default_target_language=ru
-[pipeline]
-parallelize_core_and_translation=true
-translation_fast_fail_timeout=2.0
-text_base_provider=deepl
-[sentences_mode]
-enabled=true
-parent_mode=table
-""")
-    _migrate_config(config)
+def test_fast_translation_completes_within_timeout(controller_world, monkeypatch):
+    from tests.controller_test_support import DeterministicTranslationHandler
+    from tests.render_pipeline_support import configure_render_pipeline
+    from tests.thread_support import executor_tasks
 
-    resolved_paths = {
-        'results_dir': tmp_path,
-        'kardenwort_core_py': Path('dummy.py'),
-        'kardenwort_python': Path('python'),
-        'anki_mapping_file': Path('dummy.json'),
-        'kardenwort_workspace': tmp_path
-    }
+    _, server = controller_world
+    config, resolved_paths = server.config, server.resolved_paths
+    configure_render_pipeline(server)
+    config.read_dict({'pipeline': {'translation_fast_fail_timeout': '2.0',
+        'text_base_provider': 'deepl', 'text_provider_chain': 'deepl'}})
 
-    def mock_prepare_lookup_tsv(*args, **kwargs):
-        p = tmp_path / "mock.tsv"
-        p.write_text("SentenceSourceIndex\tWordSource\tWordDestination\n1\tapple\tyabloko", encoding='utf-8')
-        return p
+    def translate(handler, provider, text, source, target):
+        handler.server.provider_calls.append((text, source, target))
+        return 'Первое предложение.\nВторое предложение.' if '\n' in text else 'Первое предложение. Второе предложение.'
 
-    def mock_fast_translate_text(text, *args, **kwargs):
-        if "\n" in text:
-            return "Первое предложение.\nВторое предложение."
-        return "Первое предложение. Второе предложение."
+    # Only the unmanaged engine supplies deterministic translated strings.
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', translate)
+    with executor_tasks(monkeypatch):
+        start_time = time.time()
+        html = run_render_flow("First sentence. Second sentence.", "und", "20260829013001", "single",
+            config, resolved_paths, spawn_children=False, wordfill_cfg={'enabled': False})
+        elapsed = time.time() - start_time
 
-    monkeypatch.setattr(kardenwort_desk, 'prepare_lookup_tsv', mock_prepare_lookup_tsv)
-    monkeypatch.setattr(kardenwort_desk, 'translate_text', mock_fast_translate_text)
-    monkeypatch.setattr(kardenwort_desk, 'load_anki_mapping', lambda x: configparser.ConfigParser())
-    monkeypatch.setattr(kardenwort_desk, 'get_role_fields', lambda m, h: {})
-    monkeypatch.setattr(kardenwort_desk, 'load_tsv_rows', lambda p: ([], ["SentenceSourceIndex", "WordSource"], [["1", "apple"]]))
-    monkeypatch.setattr(kardenwort_desk, 'resolve_translations', lambda *args, **kwargs: None)
-    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
-    monkeypatch.setattr(kardenwort_desk, 'write_update_js', lambda *args, **kwargs: None)
-    monkeypatch.setattr(kardenwort_desk, 'load_kardenwort_config', lambda x: configparser.ConfigParser())
-    monkeypatch.setattr(kardenwort_desk, 'resolve_results_dir', lambda a, b: tmp_path)
-    monkeypatch.setattr(kardenwort_desk, 'spawn_ahk', lambda *args, **kwargs: None)
-
-    start_time = time.time()
-    html = run_render_flow("First sentence. Second sentence.", "en", "20260829013001", "single", config, resolved_paths)
-    elapsed = time.time() - start_time
-
-    assert elapsed < 1.0
-    assert "Первое предложение" in html
+        assert elapsed < 1.0
+        assert "Первое предложение" in html
+    cold = kardenwort_desk.SqliteStorageAdapter(config, resolved_paths)
+    assert [(row['sentence_destination'], row['text_provenance'])
+            for row in cold.db.get_sentences_by_session('20260829013001')] == [
+                ('Первое предложение.', 'live:deepl'), ('Второе предложение.', 'live:deepl')]
+    assert server.translation_service.provider_calls
 
 
 def test_circuit_breaker_record_and_cooldown_expiration(monkeypatch):

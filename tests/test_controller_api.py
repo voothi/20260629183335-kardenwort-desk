@@ -17,6 +17,46 @@ def running_controller(controller_world):
     yield controller_world
 
 
+@pytest.fixture
+def language_processing(running_controller, monkeypatch):
+    """Observe real render arguments; extraction, translation and SQLite execute."""
+    import kardenwort_controller as controller
+    _, server = running_controller
+    server.config.read_dict({
+        'rendering': {'display_mode': 'monolithic'},
+        'sentences_mode': {'enabled': 'false'},
+        'wordfill': {'enabled': 'false'},
+        'triggers': {'run_text_translation': 'auto', 'run_lemma_base_translation': 'manual',
+                     'run_lemma_enrichment': 'manual'}})
+    calls = []
+    original = controller.run_render_flow
+
+    def observe(**kwargs):
+        calls.append(kwargs)
+        return original(**kwargs)
+
+    monkeypatch.setattr(controller, 'run_render_flow', observe)
+    return calls
+
+
+def assert_confirmed_session(server, zid, language):
+    """Read actual committed text and then recover it through public HTTP."""
+    cold = kardenwort_desk.SqliteStorageAdapter(server.config, server.resolved_paths)
+    with cold.db.get_connection(read_only=True) as connection:
+        stored = connection.execute('SELECT source_language FROM sessions WHERE zid = ?', (zid,)).fetchone()
+    assert stored['source_language'] == language
+    sentences = cold.db.get_sentences_by_session(zid)
+    assert sentences and all(row['sentence_destination'].startswith('google: ') for row in sentences)
+    assert all(row['text_provenance'] == 'live:google' for row in sentences)
+    server.arbiter.sessions.pop(zid, None)
+    request = urllib.request.Request(f'http://127.0.0.1:{server.server_port}/session/status?zid={zid}',
+        headers={'X-API-Token': server.api_key})
+    with urllib.request.urlopen(request, timeout=5) as response:
+        restored = json.load(response)['data']
+    assert restored['text_provenance'] == 'live:google'
+    assert all(row['sentence_destination'] in restored['translatedText'] for row in sentences)
+
+
 def test_spawn_tabs_endpoint(running_controller, monkeypatch):
     """
     Verify POST /api/v1/spawn-tabs opens URLs via webbrowser.open_new_tab and returns 200 with spawned list.
@@ -111,6 +151,7 @@ def test_session_status_fallback_to_persistent_storage(running_controller):
             pass
 
 
+@pytest.mark.parametrize('controller_world', ['tsv'], indirect=True)
 def test_session_status_tsv_fallback(running_controller):
     """
     Verify GET /session/status falls back to TSV session file when present
@@ -379,7 +420,7 @@ def test_confirm_language_switch_and_reverse_tab_spawning(running_controller, mo
     assert "20260827010101-01" in opened_urls[3] and "seq_num=2" in opened_urls[3]  # Opened LAST -> Active focus!
 
 
-def test_confirm_language_process_action(running_controller, monkeypatch):
+def test_confirm_language_process_action(running_controller, monkeypatch, language_processing):
     """
     Verify POST /api/v1/confirm-language with action=process:
     1. Processes under selected_language='und' without modifying global config.
@@ -405,12 +446,7 @@ def test_confirm_language_process_action(running_controller, monkeypatch):
             }
         }
 
-    render_calls = []
-    monkeypatch.setattr(
-        "kardenwort_controller.run_render_flow",
-        lambda **kwargs: render_calls.append(kwargs) or ("<html>mock</html>", [])
-    )
-    monkeypatch.setattr("kardenwort_controller.persist_default_language", lambda language, base_dir=None: True)
+    render_calls = language_processing
     monkeypatch.setattr("kardenwort_controller.spawn_ahk", lambda args, base_dir=None: True)
     import webbrowser
     monkeypatch.setattr(webbrowser, "open_new_tab", lambda url: None)
@@ -441,6 +477,7 @@ def test_confirm_language_process_action(running_controller, monkeypatch):
     # Ensure default_language setting was not touched
     cur_lang = server.config.get("settings", "default_language") if server.config.has_option("settings", "default_language") else "en"
     assert cur_lang == orig_default_lang
+    assert_confirmed_session(server, session_zid, 'und')
 
     # 2. Test processing under 'de'
     session_zid_de = "20261006120102"
@@ -480,9 +517,10 @@ def test_confirm_language_process_action(running_controller, monkeypatch):
 
     assert len(render_calls) == 2
     assert render_calls[1]["language"] == "de"
+    assert_confirmed_session(server, session_zid_de, 'de')
 
 
-def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypatch):
+def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypatch, language_processing):
     """
     Verify POST /api/v1/confirm-language:
     1. Confirming a different study language persists configuration and signals AutoHotkey.
@@ -498,10 +536,6 @@ def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypat
     monkeypatch.setattr(
         "kardenwort_controller.spawn_ahk",
         lambda args, base_dir=None: spawn_calls.append((args, base_dir)) or True,
-    )
-    monkeypatch.setattr(
-        "kardenwort_controller.run_render_flow",
-        lambda **kwargs: ("<html>mock</html>", []),
     )
     import webbrowser
     monkeypatch.setattr(webbrowser, "open_new_tab", lambda url: None)
@@ -538,6 +572,7 @@ def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypat
     assert store.snapshot()["revisions"]["default_language"] == revision+1
     assert len(spawn_calls) == 1
     assert spawn_calls[0][0] == ["--set-language", "de"]
+    assert_confirmed_session(server, session_zid_diff, 'de')
 
     # 2. Confirming 'und' bypasses persistence and AutoHotkey signaling
     spawn_calls.clear()
@@ -569,6 +604,7 @@ def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypat
     assert server.config.get("settings", "default_language") == "de"
     assert store.snapshot()["revisions"]["default_language"] == revision+1
     assert len(spawn_calls) == 0
+    assert_confirmed_session(server, session_zid_und, 'und')
 
     # 3. Confirming the already-active language avoids redundant writes and process invocations
     spawn_calls.clear()
@@ -600,6 +636,8 @@ def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypat
     assert server.config.get("settings", "default_language") == "de"
     assert store.snapshot()["revisions"]["default_language"] == revision+1
     assert len(spawn_calls) == 0
+    assert_confirmed_session(server, session_zid_same, 'de')
+    assert len(language_processing) == 3
 
 
 def test_confirm_language_validation_errors(running_controller):
@@ -640,6 +678,7 @@ def test_confirm_language_validation_errors(running_controller):
     assert exc_info.value.code == 404
 
 
+@pytest.mark.parametrize('controller_world', ['tsv'], indirect=True)
 def test_session_status_worker_sentinel_lock_busy(running_controller):
     """
     Assert that active worker sentinel locks report is_busy = True (is_finished = False, stage = 'translating').
@@ -659,6 +698,7 @@ def test_session_status_worker_sentinel_lock_busy(running_controller):
         sentences=[{"sentence_index": 0, "sentence_source": "Das Buch liegt hier.", "sentence_destination": "The book lies here."}],
         headers=["WordSource", "WordDestination", "TokenOrder"],
         data_rows=[["Buch", "book", "0"], ["liegt", "lies", "1"]],
+        working_tsv_path=results_dir / f'{storage_zid}.tsv',
     )
     sentinel_path = (results_dir / f"{storage_zid}.worker.lock") if results_dir else Path(f"{storage_zid}.worker.lock")
     try:
@@ -719,24 +759,23 @@ def test_progressive_enqueue_endpoint_and_queue_status(running_controller, monke
     """
     server_url, server = running_controller
     sess_zid = kardenwort_desk.generate_unique_zid()
+    from tests.controller_test_support import DeterministicTranslationHandler
+    from tests.render_test_support import seed_render_rows
+    entered, release, completed = threading.Event(), threading.Event(), threading.Event()
+    original = DeterministicTranslationHandler.translate
 
-    monkeypatch.setattr(server.arbiter.enrichment_queue, "_execute_progressive_task", lambda *a, **kw: None)
+    def held(handler, provider, text, source, target):
+        entered.set()
+        assert release.wait(5), 'Owned translation response was not released'
+        return original(handler, provider, text, source, target)
 
-    # Pre-create session in arbiter
-    server.arbiter.sessions[sess_zid] = {
-        "session_zid": sess_zid,
-        "language": "de",
-        "target_lang": "ru",
-        "text": "Das ist ein Test.",
-        "tsv_path": None,
-        "comments": [],
-        "headers": ["WordSource", "WordDestination", "TokenOrder"],
-        "data_rows": [["Test", "", "0"]],
-        "sentence_translation": "",
-        "fingerprint": "fp1",
-        "lock": threading.Lock(),
-        "created_at": time.time(),
-    }
+    monkeypatch.setattr(DeterministicTranslationHandler, 'translate', held)
+    server.config.read_dict({'triggers': {'run_text_translation': 'auto',
+        'run_lemma_base_translation': 'manual', 'run_lemma_enrichment': 'manual'}})
+    seed_render_rows(server.config, server.resolved_paths, sess_zid, 'Das ist ein Test.', 'de',
+        ['TokenOrder', 'WordSource', 'SentenceSourceIndex', 'SentenceSource', 'SentenceDestination', 'WordDestination'],
+        [['0', 'Test', '1', 'Das ist ein Test.', '', '']])
+    future = None
 
     # Test enqueue
     req_body = {
@@ -750,25 +789,48 @@ def test_progressive_enqueue_endpoint_and_queue_status(running_controller, monke
         data=json.dumps(req_body).encode('utf-8'),
         headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
     )
-    with urllib.request.urlopen(req, timeout=5.0) as resp:
-        assert resp.status == 200
-        res = json.loads(resp.read().decode('utf-8'))
-        data = res.get("data", res)
-        assert data.get("status") in ("queued", "in_progress")
-        assert data.get("session_zid") == sess_zid
+    try:
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            assert resp.status == 200
+            res = json.loads(resp.read().decode('utf-8'))
+            data = res.get("data", res)
+            assert data.get("status") in ("queued", "in_progress")
+            assert data.get("session_zid") == sess_zid
+        assert entered.wait(5), 'The real queued worker did not reach the provider'
+        queue = server.arbiter.enrichment_queue
+        with queue._lock:
+            future = queue._active_progressive_sessions[sess_zid]
+        future.add_done_callback(lambda _: completed.set())
+        assert not future.done()
+        cold = kardenwort_desk.SqliteStorageAdapter(server.config, server.resolved_paths)
+        assert not cold.db.get_sentences_by_session(sess_zid)[0]['sentence_destination']
 
-    # Test queue status endpoint
-    req_status = urllib.request.Request(
-        f"{server_url}/api/v1/queue/status",
-        headers={"X-API-Token": server.api_key}
-    )
-    with urllib.request.urlopen(req_status, timeout=5.0) as resp:
-        assert resp.status == 200
-        res = json.loads(resp.read().decode('utf-8'))
-        data = res.get("data", res)
-        assert "max_workers" in data
-        assert "translation_max_workers" in data
-        assert "translation_cache_size" in data
+        # Test queue status endpoint while the actual provider is held.
+        req_status = urllib.request.Request(
+            f"{server_url}/api/v1/queue/status",
+            headers={"X-API-Token": server.api_key}
+        )
+        with urllib.request.urlopen(req_status, timeout=5.0) as resp:
+            assert resp.status == 200
+            res = json.loads(resp.read().decode('utf-8'))
+            data = res.get("data", res)
+            assert "max_workers" in data
+            assert "translation_max_workers" in data
+            assert "translation_cache_size" in data
+        request = urllib.request.Request(f'{server_url}/session/status?zid={sess_zid}',
+            headers={'X-API-Token': server.api_key})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            pending = json.load(response)['data']
+        assert pending['is_finished'] is False and pending['stage'] == 'translating'
+    finally:
+        release.set()
+        if future is not None:
+            future.result(timeout=5)
+            assert completed.wait(5), 'Actual Future completion was not projected'
+    assert_confirmed_session(server, sess_zid, 'de')
+    assert not queue._active_progressive_sessions
+    assert not [path for path in server.resolved_paths['results_dir'].rglob('*')
+                if path.suffix in {'.tsv', '.txt', '.lock', '.js'} or path.name.endswith('.updates')]
 
 
 def test_progressive_in_flight_deduplication_and_sibling_sse_broadcast(running_controller):

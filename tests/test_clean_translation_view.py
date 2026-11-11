@@ -432,47 +432,57 @@ def test_write_update_js_omits_text_provenance_when_not_provided(tmp_path):
 
 
 def test_progressive_worker_finished_preserves_live_text_provenance(mock_clean_context_env, monkeypatch):
-    """Task 1.1: cmd_progressive_worker passes active_text_prov to safe_write_update_js at stage='finished'."""
+    """The retained file-host worker carries real provider provenance to its output."""
+    from types import SimpleNamespace
+    from tests.controller_test_support import owned_configuration, translation_service, DeterministicTranslationHandler
+
     env = mock_clean_context_env
-    config = env["config"]
-    resolved_paths = env["resolved_paths"]
     session_zid = "20260830205231"
-    tsv_path = env["results_dir"] / f"{session_zid}-test.de.tsv"
-    headers = ["WordSource", "WordDestination", "SentenceSourceIndex", "SentenceDestination"]
-    data_rows = [["Katze", "", "1", ""]]
-
-    with open(tsv_path, 'w', encoding='utf-8', newline='') as f:
-        f.write("\t".join(headers) + "\n")
-        f.write("\t".join(data_rows[0]) + "\n")
-
-    txt_path = tsv_path.with_suffix('.txt')
-    txt_path.write_text("Die Katze schläft.", encoding='utf-8')
-
     captured_updates = []
-    def mock_safe_write_update_js(t_path, rows, h, rf, **kw):
+    original = desk.safe_write_update_js
+
+    def observe(t_path, rows, h, rf, **kw):
         captured_updates.append(kw)
+        return original(t_path, rows, h, rf, **kw)
 
-    monkeypatch.setattr(desk, "load_config", lambda *a, **kw: (config, resolved_paths, {}, {}))
-    monkeypatch.setattr(desk, "safe_write_update_js", mock_safe_write_update_js)
-    monkeypatch.setattr(desk, "translate_source_text", lambda *a, **kw: {0: "The cat sleeps", "FULL_TEXT": "The cat sleeps"})
-    monkeypatch.setattr(desk, "translate_lemmas_fast_path", lambda *a, **kw: {"Katze": "cat"})
-
-    class MockArgs:
-        zid = session_zid
-        tsv = str(tsv_path)
-        config = None
-        language = "de"
-        target_lang = "en"
-        text_mode = "single"
-        skip_intellifiller = True
-
-    desk.cmd_progressive_worker(MockArgs())
+    owner = env['tmp_path'] / 'worker'
+    owner.mkdir()
+    with translation_service(DeterministicTranslationHandler) as translator:
+        config, resolved_paths, _ = owned_configuration(owner, f'http://127.0.0.1:{translator.server_port}', 'sqlite')
+        config.read_dict({
+            'settings': {'anki_mapping_file': env['resolved_paths']['anki_mapping_file'], 'default_target_language': 'en'},
+            'server': {'update_delivery': 'desktop_file'},
+            'triggers': {'run_text_translation': 'auto', 'run_lemma_base_translation': 'auto',
+                         'run_lemma_enrichment': 'manual'}})
+        configuration = owner / 'config.ini'
+        with configuration.open('w', encoding='utf-8') as stream:
+            config.write(stream)
+        tsv_path = resolved_paths['results_dir'] / f'{session_zid}-test.de.tsv'
+        adapter = desk.get_storage_adapter(config, resolved_paths)
+        adapter.save_session(session_zid=session_zid, slug='test', source_language='de', target_language='en',
+            text_mode='single', source_raw_text='Die Katze schläft.',
+            headers=['TokenOrder', 'WordSource', 'SentenceSourceIndex', 'SentenceSource', 'SentenceDestination', 'WordDestination'],
+            data_rows=[['0', 'Katze', '1', 'Die Katze schläft.', '', '']])
+        monkeypatch.setattr(desk, 'safe_write_update_js', observe)
+        desk.cmd_progressive_worker(SimpleNamespace(zid=session_zid, tsv=str(tsv_path), config=str(configuration),
+            language='de', target_lang='en', text_mode='single', skip_intellifiller=True))
 
     # Verify stage="finished" captured live text provenance
     expected_prov = f"live:{config.get('pipeline', 'text_base_provider', fallback='google')}"
     finished_updates = [u for u in captured_updates if u.get("stage") == "finished"]
     assert len(finished_updates) > 0
     assert finished_updates[-1].get("text_provenance") == expected_prov
+    outputs = sorted(tsv_path.with_suffix('.updates').glob('*.js'))
+    assert outputs
+    payloads = [json.loads(path.read_text(encoding='utf-8').split('window.receiveUpdate(', 1)[1][:-4])
+                for path in outputs]
+    finished = next(payload for payload in reversed(payloads) if payload['stage'] == 'finished')
+    assert finished['status'] == 'success' and finished['textProvenance'] == expected_prov
+    cold = desk.SqliteStorageAdapter(config, resolved_paths)
+    sentences = cold.db.get_sentences_by_session(session_zid)
+    assert [(row['sentence_destination'], row['text_provenance']) for row in sentences] == [
+        ('google: Die Katze schläft.', 'live:google')]
+    assert cold.db.get_words_by_session(session_zid)[0]['word_destination'] == 'google: Katze'
 
 
 def test_translation_container_word_span_zero_padding_and_window_tokenization(mock_clean_context_env):
@@ -669,7 +679,7 @@ SentenceSourceIndex = sentence_index
         ("de", "# Kapitel\nEr ging nach Hause.\nSie las ein Buch.", ["# Kapitel", "He went home.", "She read a book."]),
         ("en", "# Chapter\nHe went home.\nShe read a book.", ["# Chapter", "Он пошел домой.", "Она читала книгу."])
     ]:
-        zid = f"2026100612000{lang}"
+        zid = {'de': '20261006120000', 'en': '20261006120001'}[lang]
         tsv_path = results_dir / f"{zid}-reg.{lang}.tsv"
 
         pad_calls = []
