@@ -45,6 +45,24 @@ def failed_sentence_text(value):
     return value.strip() == '[FAILED]' or value.strip().startswith('[Error')
 
 
+def unresolved_sentences(records):
+    result = []
+    for record in records:
+        value = record.get('sentence_destination') or ''
+        if not value.strip() or failed_sentence_text(value):
+            result.append(record)
+    return result
+
+
+def align_retry_sentences(raw, records):
+    main, padded = normalize_sentence_result(raw, single_unit=len(records) == 1)
+    if set(main) != set(range(1, len(records) + 1)):
+        raise ValueError('Retry translation does not match requested sentence units')
+    mapped = {record['sentence_index']: main[index+1] for index, record in enumerate(records)}
+    context = {record['sentence_index']: padded[index+1] for index, record in enumerate(records) if index+1 in padded}
+    return mapped, context
+
+
 def display_sentence_text(entries):
     present = {key: value for key, value in entries.items() if value not in (None, '')}
     main = numeric_sentence_entries(present, ('FULL_TEXT', 'PADDED'))

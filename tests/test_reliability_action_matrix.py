@@ -39,7 +39,7 @@ def test_occurrence_projection_branch_upper_bound():
                      'committedSelectionRows', 'resetDeletionSelection', 'selectedTokenOrder',
                      'getSelectedRowsArray', 'getSelectedTokenOrdersArray', 'applyAction',
                      'scalarDeletionTarget', 'deletionRowTargets', 'collectDeletionTargets',
-                     'exportCardCount', 'exportFeedback']}
+                     'exportCardCount', 'exportFeedback', 'rowRetryPayload']}
     assert max(measured.values()) <= 7, measured
 
 

@@ -394,6 +394,16 @@ async function exportProjectDeck(projectId, title) {
 // ---------------------------------------------------------------------------
 let confirmModalResolver = null;
 
+async function copyInspectorText(viewer) {
+    try {
+        await navigator.clipboard.writeText(viewer.value);
+        return;
+    } catch (error) {
+        viewer.select();
+    }
+    if (!document.execCommand('copy')) throw new Error('Clipboard copy was rejected');
+}
+
 function showConfirmDialog(message, options = {}) {
     const modal = document.getElementById('confirm-modal');
     const titleEl = document.getElementById('confirm-modal-title');
@@ -457,12 +467,10 @@ function initModals() {
             const viewer = document.getElementById('tsv-raw-viewer');
             if (!viewer || !viewer.value) return;
             try {
-                await navigator.clipboard.writeText(viewer.value);
+                await copyInspectorText(viewer);
                 showToast('TSV content copied to clipboard', 'success');
             } catch (err) {
-                viewer.select();
-                document.execCommand('copy');
-                showToast('TSV content copied to clipboard', 'success');
+                showToast(`Copy failed: ${err.message}`, 'error');
             }
         });
     }

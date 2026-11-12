@@ -22,6 +22,14 @@ from typing import Dict, Any, List, Optional, Tuple, Union, Generator
 logger = logging.getLogger("kardenwort.desk.db")
 
 
+def _wal_size(path: Path) -> int:
+    """A checkpoint may remove the transient WAL before its metadata is read."""
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
 def _normalize_sentence_text(text: str) -> str:
     """
     Normalizes sentence text for flexible matching across markdown headers,
@@ -515,7 +523,7 @@ class KardenwortDB:
         """
         exists = self.db_path.exists()
         size_bytes = self.db_path.stat().st_size if exists else 0
-        wal_size_bytes = self.wal_path.stat().st_size if self.wal_path.exists() else 0
+        wal_size_bytes = _wal_size(self.wal_path)
 
         status: Dict[str, Any] = {
             "ok": True,

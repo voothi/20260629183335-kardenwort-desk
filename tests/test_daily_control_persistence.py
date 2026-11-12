@@ -26,6 +26,9 @@ def daily_page(page, controller_world, request):
                        for index in [1, 2]],
             sentences=[dict(sentence_index=index, sentence_source='Haus.', sentence_destination='House.')
                        for index in [1, 2]])
+    if getattr(request, 'param', '') in ['retry-text', 'retry-text-second']:
+        for index in ([2] if request.param == 'retry-text-second' else [1, 2]):
+            adapter.update_sentence_translation(ZID, index, '')
     server.config.set('pipeline', 'text_reprocess_provider', 'google')
     page.route(url+'/', lambda route: route.fulfill(content_type='text/html', body=render_document(world, case, text)))
     page.set_extra_http_headers({'X-API-Token': TOKEN})

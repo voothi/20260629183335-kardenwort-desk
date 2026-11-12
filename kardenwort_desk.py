@@ -4670,9 +4670,9 @@ class SqliteStorageAdapter(StorageAdapter):
         placeholders = ','.join('?' * len(columns))
         conn.execute(f'INSERT INTO words ({names}) VALUES ({placeholders})', list(map(record.__getitem__, columns)))
 
-    def persist_retext(self, session_zid, main, padded, provenance=None, zid=None):
+    def persist_retext(self, session_zid, main, padded, provenance=None, zid=None, *, connection=None):
         """Commit a translation patch, context fields and provenance together."""
-        with self.db.get_connection(zid=zid) as conn:
+        with (contextlib.nullcontext(connection) if connection is not None else self.db.get_connection(zid=zid)) as conn:
             self._persist_retext_sentences(conn, session_zid, main, 'sentence_destination', provenance)
             self._persist_retext_sentences(conn, session_zid, padded, 'sentence_destination2', provenance)
             self._persist_retext_context(conn, session_zid, main, padded)
@@ -18672,6 +18672,13 @@ def cmd_vacuum_db(args):
     sys.exit(0 if ok else 1)
 
 
+def require_import_lemma(lemma: str, row_number: int) -> str:
+    if not lemma.strip():
+        raise StructuredError(ErrorCode.INVALID_PAYLOAD,
+            f"TSV data row {row_number} requires WordSource, Quotation or WordSourceInflectedForm")
+    return lemma
+
+
 def parse_tsv_to_bundle(
     tsv_content_or_path: Union[str, Path, List[str]],
     filename: Optional[str] = None,
@@ -18827,7 +18834,7 @@ def parse_tsv_to_bundle(
             or get_col_val(row, "wordsource")
             or ""
         )
-        lemma = get_col_val(row, "wordsource") or quotation
+        lemma = require_import_lemma(get_col_val(row, "wordsource") or quotation, row_idx + 1)
         inflected = get_col_val(row, "wordsourceinflectedform")
         morph = get_col_val(row, "wordsourcemorphologyai")
         ipa = get_col_val(row, "wordsourceipa")

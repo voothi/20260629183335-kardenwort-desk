@@ -8941,6 +8941,20 @@
         }
         window.getApiToken = getApiToken;
 
+        function rowRetryPayload(sessionZid, rowId, row) {
+            var targets = getLookupRowTargets(row);
+            if (targets.length) return {session_zid: sessionZid, language: getSessionLang(),
+                target_lang: getSessionTargetLang(), target_coordinates: targets};
+            if (SESSION_ZID) throw new Error('Retry requires an occurrence identity');
+            var payload = {session_zid: sessionZid, row_ids: [parseInt(String(rowId), 10)]};
+            var token = row && row.getAttribute('data-token-order');
+            if (token) {
+                if (!/^[0-9]+$/.test(token)) throw new Error('Invalid retry token order');
+                payload.token_orders = [Number(token)];
+            }
+            return payload;
+        }
+
         /** @param {number|string} rowId @param {HTMLButtonElement} btnElement */
         function retryRow(rowId, btnElement) {
             if (isServerDisabled()) {
@@ -8958,9 +8972,15 @@
             }
 
             var tr = (document.querySelector('tr[data-row-id="' + rowId + '"]'));
+            var retryPayload;
+            try { retryPayload = rowRetryPayload(curZid, rowId, tr); }
+            catch (error) {
+                window.showToast('Retry unavailable: ' + error.message, 'error');
+                return;
+            }
              var cellDiv = null;
             if (tr) {
-                var cell = (tr.querySelector('td.col-translation, td[data-col="WordDestination"], td[data-col="word_translation"]')) || tr.getElementsByTagName('td')[2];
+                var cell = tr.querySelector('td.col-translation, td[data-col="WordDestination"], td[data-col="word_translation"]');
                 if (cell) {
                     cellDiv = (cell.querySelector('.scrollable-cell')) || cell;
                 }
@@ -8978,19 +8998,6 @@
                 'Accept': 'application/json'
             };
             if (token) headers['X-API-Token'] = token;
-
-            var retryPayload = {
-                session_zid: curZid,
-                row_ids: [parseInt(String(rowId), 10)]
-            };
-            var trElem = (document.querySelector('tr[data-row-id="' + rowId + '"]'));
-            if (trElem) {
-                var tOrdAttr = trElem.getAttribute('data-token-order');
-                if (tOrdAttr !== null && tOrdAttr !== undefined && tOrdAttr !== '') {
-                    var parsedTOrd = parseInt(String(tOrdAttr), 10);
-                    retryPayload.token_orders = [!isNaN(parsedTOrd) ? parsedTOrd : tOrdAttr];
-                }
-            }
 
             fetch(resolveBackendUrl('/session/retry'), {
                 method: 'POST',

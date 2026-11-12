@@ -36,6 +36,31 @@ def temp_db(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+def test_status_survives_wal_disposal_during_metadata_read(temp_db, monkeypatch):
+    owner = temp_db.get_connection()
+    owner.execute('CREATE TABLE metadata_probe (value TEXT)')
+    owner.execute("INSERT INTO metadata_probe VALUES ('retained')")
+    owner.commit()
+    assert temp_db.wal_path.exists()
+    exists = Path.exists
+
+    def observed_exists(path):
+        result = exists(path)
+        if path == temp_db.wal_path and result:
+            # Close the real last SQLite owner after an optional existence probe.
+            owner.close()
+        return result
+
+    monkeypatch.setattr(Path, 'exists', observed_exists)
+    try:
+        status = temp_db.get_status()
+        assert status['ok'] is True
+        assert status['tables']['metadata_probe'] == 1
+        assert status['wal_size_bytes'] >= 0
+    finally:
+        owner.close()
+
+
 # Section 1: Database Initialization & Pragmas
 # ---------------------------------------------------------------------------
 def test_db_init_and_pragmas(temp_db):
