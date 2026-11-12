@@ -1454,13 +1454,17 @@ function initMaintenance() {
     });
 
     btnVacuum.addEventListener('click', async () => {
-        vacStatus.textContent = 'Dispatched...';
+        vacStatus.textContent = 'Running...';
+        btnVacuum.disabled = true;
         try {
             const res = await apiFetch('/api/v1/admin/db/vacuum', { method: 'POST', body: JSON.stringify({}) });
-            vacStatus.textContent = `${res.status || 'Running'}`;
-            showToast('Vacuum triggered', 'success');
+            if (res.completed !== true) throw new Error('Vacuum completion was not acknowledged');
+            vacStatus.textContent = 'Finished';
+            showToast('Vacuum completed', 'success');
         } catch (e) {
             vacStatus.textContent = 'Failed';
+        } finally {
+            btnVacuum.disabled = false;
         }
     });
 }

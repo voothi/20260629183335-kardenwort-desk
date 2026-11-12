@@ -996,7 +996,7 @@ body {
 }
 
 .batch-toolbar.hidden {
-    display: none;
+    visibility: hidden;
 }
 
 .batch-count-badge {
@@ -1026,7 +1026,7 @@ body {
 }
 
 .selection-banner.hidden {
-    display: none;
+    visibility: hidden;
 }
 
 .btn-banner-action {
@@ -1050,6 +1050,6 @@ body {
 }
 
 .data-table tr.row-selected {
-    border-left: 3px solid #f5b700;
+    box-shadow: inset 3px 0 #f5b700;
 }
 

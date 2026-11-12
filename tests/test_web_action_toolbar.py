@@ -150,7 +150,8 @@ window.fetch = async function(url, options) {
         };
     }
     if (url === '/session/export') {
-        return { ok: true, status: 200, json: async () => ({ ok: true, status: 'success', import_complete: true }) };
+        return { ok: true, status: 200, json: async () => ({ ok: true, status: 'success', import_complete: true,
+            delivery_state: 'import_complete', exported_count: bodyObj.row_ids.length }) };
     }
     return { ok: true, status: 200, json: async () => ({ ok: true }) };
 };

@@ -208,6 +208,29 @@ def test_browser_gesture_resolution_mouseup_and_suppression(page,button,mode,sou
     assert page.evaluate('urls.length === revoked.length')
 
 
+@pytest.mark.parametrize('mode,expected', [('joined', 'at the'), ('separate', 'at')])
+def test_rmb_contraction_engine_failure_then_unflip_stays_silent(page, mode, expected):
+    page.set_content(gesture_document())
+    page.add_style_tag(content=get_bundled_css())
+    page.evaluate(DEVICE)
+    page.evaluate(extract_desk_js(lmb_play=False, rmb_play=True, rmb_chain_mode=mode))
+    token = page.get_by_test_id('token')
+    token.click(button='right')
+    page.wait_for_function('requests.length === 1')
+    assert page.evaluate('JSON.parse(requests[0].options.body)') == {'text': expected, 'language': 'en'}
+    geometry = token.bounding_box()
+    page.evaluate("requests[0].resolve({ok:false,status:503,json:()=>Promise.resolve({message:'Owned engine unavailable'})})")
+    page.wait_for_function("audioPlayback.getState() === 'failed'")
+    assert page.evaluate('requests.length') == 1
+    assert page.evaluate('players.length') == 0
+    assert token.bounding_box() == geometry
+    token.click(button='right')
+    assert page.evaluate('requests.length') == 1
+    assert 'at the' not in token.inner_text()
+    page.evaluate("dispatchEvent(new Event('pagehide'))")
+    assert page.evaluate('urls.length === revoked.length')
+
+
 @pytest.mark.parametrize('area,range_mode,ctrl,chain,expected',[
     ('source','all',False,'joined',['Haus Baum']),
     ('source','all',False,'separate',['Haus','Baum']),

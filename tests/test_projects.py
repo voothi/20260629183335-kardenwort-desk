@@ -692,9 +692,10 @@ def test_sort_rows_by_frequency_strict_compound_integration():
     import sys
     from pathlib import Path
     import configparser
-    from kardenwort_desk import sort_rows_by_frequency
+    from kardenwort_desk import sort_rows_by_frequency, load_config
 
-    kardenwort_ws = Path(__file__).resolve().parent.parent.parent / "20241223170748-kardenwort"
+    _, capabilities, _, _ = load_config(Path(__file__).resolve().parents[1] / 'config.ini')
+    kardenwort_ws = Path(capabilities['kardenwort_workspace'])
     kardenwort_script = kardenwort_ws / "src" / "kardenwort" / "core" / "kardenwort.py"
     if not kardenwort_script.exists():
         pytest.skip("Kardenwort workspace not found")

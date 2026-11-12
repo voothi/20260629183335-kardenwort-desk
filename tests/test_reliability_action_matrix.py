@@ -18,6 +18,7 @@ from tests.enrichment_test_support import enrichment_engine
 from tests.reword_contract_support import HEADERS, ROWS, TOKEN, ZID
 from tests.test_release_boundary_contracts import post, wait_for_held
 from tests.test_preference_js_structure import function_body
+from kardenwort_events import EventDispatcher
 
 
 MATRIX = json.loads((Path(__file__).parent/'fixtures/reliability-action-matrix.json').read_text())
@@ -34,7 +35,11 @@ def test_occurrence_projection_branch_upper_bound():
     source = (Path(__file__).resolve().parents[1]/'web/js/app.js').read_text(encoding='utf-8')
     measured = {name: 1+len(re.findall(r'\b(?:if|for|while|case|catch)\b|&&|\|\||\?', function_body(source, name)))
         for name in ['occurrenceRowIds', 'normalizeOccurrenceRowDeltas', 'projectCellValue',
-                     'projectEditedValue', 'projectPendingEdits']}
+                     'projectEditedValue', 'projectPendingEdits', 'deletedRowIds',
+                     'committedSelectionRows', 'resetDeletionSelection', 'selectedTokenOrder',
+                     'getSelectedRowsArray', 'getSelectedTokenOrdersArray', 'applyAction',
+                     'scalarDeletionTarget', 'deletionRowTargets', 'collectDeletionTargets',
+                     'exportCardCount', 'exportFeedback']}
     assert max(measured.values()) <= 7, measured
 
 
@@ -363,3 +368,130 @@ def test_provider_completion_and_old_status_preserve_unrelated_pending_edit(page
             for route in held:
                 route.abort()
             page.close()
+
+
+def test_two_clients_keep_distinct_focus_through_shared_selection_and_stream_gap(page, controller_world):
+    case = next(row for row in MATRIX['rows'] if row['audio'] == 'disabled')
+    url, server = controller_world
+    adapter, world = configure(server, case)
+    page.context.route(url+'/', lambda route: route.fulfill(content_type='text/html', body=render_document(world, case)))
+    page.context.set_extra_http_headers({'X-API-Token': TOKEN})
+    other = page.context.new_page()
+    clients = [page, other]
+    try:
+        for client, seq in zip(clients, [2, 3]):
+            client.set_default_timeout(6000)
+            client.goto(url+'/')
+            open_card(client, seq)
+            client.evaluate('args => SSEBridge.connect(args.zid,args.url,args.token)',
+                dict(zid=ZID, url=url, token=TOKEN))
+            client.wait_for_function("document.getElementById('sse-status-indicator').dataset.sync === 'synced'")
+            client.locator('#source-container .word:visible').first.click()
+            flush(client)
+        focus = [client.evaluate('AppState.activeTokenSelections') for client in clients]
+        assert focus[0] and focus[1] and focus[0] != focus[1]
+        assert adapter.get_shared_selection(ZID) == {'haus': True, 'baum': True}
+        connections = [client.evaluate('SSEBridge.getActiveConnectionId()') for client in clients]
+        EventDispatcher.get_instance().publish(ZID, {'type': 'resync_required'})
+        for client, old, expected in zip(clients, connections, focus):
+            client.wait_for_function('old => SSEBridge.getActiveConnectionId() !== old', arg=old)
+            client.wait_for_function("document.getElementById('sse-status-indicator').dataset.sync === 'synced'")
+            assert client.evaluate('AppState.activeTokenSelections') == expected
+            assert client.evaluate('Object.values(AppState.selectedLemmas).filter(Boolean).length') == 2
+            flush(client)
+        for client, seq, expected in zip(clients, [2, 3], focus):
+            client.reload()
+            open_card(client, seq)
+            assert client.evaluate('WorkspaceTabs.getActiveTabSeq()') == seq
+            assert client.evaluate('AppState.activeTokenSelections') == expected
+        cold = desk.SqliteStorageAdapter(server.config, server.resolved_paths)
+        assert cold.get_shared_selection(ZID) == {'haus': True, 'baum': True}
+    finally:
+        other.close()
+        page.close()
+
+
+@pytest.mark.parametrize('key,button,field', [
+    ('highlight_same_lemma', 'kw-btn-same-lemma', 'highlightSameLemma'),
+    ('filter_selected_only', 'kw-btn-filter-selected', 'filterSelectedOnly'),
+])
+@pytest.mark.parametrize('first_status', [200, 503])
+def test_rapid_preference_intents_survive_old_ack_and_cold_reload(page, controller_world, key, button, field, first_status):
+    case = next(row for row in MATRIX['rows'] if row['audio'] == 'disabled')
+    url, server = controller_world
+    adapter, world = configure(server, case)
+    page.route(url+'/', lambda route: route.fulfill(content_type='text/html', body=render_document(world, case)))
+    page.set_extra_http_headers({'X-API-Token': TOKEN})
+    page.goto(url+'/')
+    open_card(page)
+    held = []
+    page.route('**/api/v1/config', lambda route: held.append(route)
+               if route.request.method == 'POST' else route.continue_())
+    try:
+        control = page.locator('#'+button)
+        before = control.bounding_box()
+        control.click()
+        wait_for_held(page, held, 1)
+        control.click()
+        assert page.evaluate('field => AppState[field]', field) is False
+        assert len(held) == 1
+        first = held.pop(0)
+        committed = first.fetch()
+        assert committed.ok
+        first.fulfill(response=committed, status=first_status)
+        wait_for_held(page, held, 1)
+        expect(control).to_have_attribute('data-preference-state', 'pending')
+        second = held.pop(0)
+        second.fulfill(response=second.fetch())
+        expect(control).to_have_attribute('data-preference-state', 'saved')
+        assert control.bounding_box() == before
+        flush(page)
+        with adapter.db.get_connection(read_only=True) as connection:
+            assert json.loads(connection.execute('SELECT value FROM preferences WHERE key=?', (key,)).fetchone()[0]) is False
+        page.reload()
+        open_card(page)
+        assert page.evaluate('field => AppState[field]', field) is False
+        assert control.get_attribute('data-preference-state') not in ('pending', 'failed')
+        assert not any(adapter.get_shared_selection(ZID).values())
+    finally:
+        for route in held:
+            route.abort()
+        page.close()
+
+
+@pytest.mark.parametrize('theme', ['dark', 'light', 'white', 'compact'])
+@pytest.mark.parametrize('zoom', [1, 1.25])
+def test_selected_drag_and_deselect_keep_source_geometry_with_empty_filter(page, controller_world, theme, zoom):
+    case = dict(next(row for row in MATRIX['rows'] if row['audio'] == 'disabled'), theme=theme)
+    url, server = controller_world
+    adapter, world = configure(server, case)
+    page.route(url+'/', lambda route: route.fulfill(content_type='text/html', body=render_document(world, case)))
+    page.set_extra_http_headers({'X-API-Token': TOKEN})
+    page.goto(url+'/')
+    open_card(page, 1)
+    page.evaluate('zoom => document.body.style.zoom = zoom', zoom)
+    page.locator('#kw-btn-filter-selected').click()
+    flush(page)
+    tokens = page.locator('#source-container .word:visible')
+    expect(tokens).to_have_count(2)
+    boxes = tokens.evaluate_all('tokens => tokens.map(token => {const r=token.getBoundingClientRect();return [r.x,r.y,r.width,r.height];})')
+    first, last = tokens.first.bounding_box(), tokens.last.bounding_box()
+    page.mouse.move(first['x']+first['width']/2, first['y']+first['height']/2)
+    page.mouse.down()
+    page.mouse.move(last['x']+last['width']/2, last['y']+last['height']/2, steps=4)
+    page.mouse.up()
+    flush(page)
+    assert adapter.get_shared_selection(ZID) == {'haus': True, 'baum': True}
+    assert tokens.evaluate_all('tokens => tokens.map(token => {const r=token.getBoundingClientRect();return [r.x,r.y,r.width,r.height];})') == boxes
+    expect(page.locator('#lemma-table tbody tr[data-row-id]:visible')).to_have_count(2)
+    tokens.first.click()
+    tokens.last.click()
+    flush(page)
+    assert adapter.get_shared_selection(ZID) == {'haus': False, 'baum': False}
+    expect(page.locator('#lemma-table tbody tr[data-row-id]:visible')).to_have_count(0)
+    assert tokens.evaluate_all('tokens => tokens.map(token => {const r=token.getBoundingClientRect();return [r.x,r.y,r.width,r.height];})') == boxes
+    page.reload()
+    open_card(page, 1)
+    assert page.evaluate('AppState.filterSelectedOnly') is True
+    expect(page.locator('#lemma-table tbody tr[data-row-id]:visible')).to_have_count(0)
+    assert not any(adapter.get_shared_selection(ZID).values())

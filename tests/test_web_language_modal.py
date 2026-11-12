@@ -45,7 +45,9 @@ def inject_mock_fetch(html: str) -> str:
         return Promise.resolve({
             ok: true,
             status: 200,
-            json: function() { return Promise.resolve({ ok: true, html: null }); }
+            json: function() { return Promise.resolve(url === '/api/v1/set-language'
+                ? {ok: true, persisted: true, language: bodyData.language, revision: 1}
+                : {ok: true, html: null}); }
         });
     };
     </script>"""
@@ -376,6 +378,9 @@ def test_language_modal_multi_sentence_child_tab_spawning(page, tmp_path):
             ok: true,
             status: 200,
             json: function() {{
+                if (url === '/api/v1/set-language') return Promise.resolve({{
+                    ok: true, persisted: true, language: JSON.parse(options.body).language, revision: 1
+                }});
                 return Promise.resolve({{
                     ok: true,
                     data: {{
@@ -418,6 +423,9 @@ def test_language_modal_multi_sentence_child_tab_spawning(page, tmp_path):
             ok: true,
             status: 200,
             json: function() {{
+                if (url === '/api/v1/set-language') return Promise.resolve({{
+                    ok: true, persisted: true, language: JSON.parse(options.body).language, revision: 1
+                }});
                 return Promise.resolve({{
                     ok: true,
                     data: {{
@@ -473,6 +481,9 @@ def test_language_modal_reverse_ordered_child_tab_spawning(page, tmp_path):
             ok: true,
             status: 200,
             json: function() {{
+                if (url === '/api/v1/set-language') return Promise.resolve({{
+                    ok: true, persisted: true, language: JSON.parse(options.body).language, revision: 1
+                }});
                 return Promise.resolve({{
                     ok: true,
                     data: {{

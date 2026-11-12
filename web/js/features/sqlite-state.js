@@ -109,6 +109,7 @@
         });
     }
     function start(state) {
+        if (state.phase === 'draft') { state.ready = Promise.resolve(); return state.ready; }
         if (!state.enabled) { state.phase = 'static'; return Promise.resolve(); }
         state.ready = readView(state).then(migrate.bind(null, state)).then(readView.bind(null, state)).then(function(view) {
             state.viewRevision = view.revision;
@@ -122,7 +123,7 @@
         state.phase = 'failed'; state.failure = error; state.options.failure(error);
     }
     function save(state) {
-        if (!state.enabled) return Promise.resolve();
+        if (!state.enabled || state.phase === 'draft') return Promise.resolve();
         var intent = state.options.capture();
         state.tail = state.tail.then(function() { return state.ready; }).then(function() {
             state.phase = 'pending';
@@ -167,9 +168,9 @@
     }
     function create(options) {
         var enabled = options.ui.state_authority === 'sqlite';
-        var state = {options: options, enabled: enabled, client: enabled ? clientSlot() : null,
+        var state = {options: options, enabled: enabled, client: enabled && !options.draft ? clientSlot() : null,
             revisions: Object.assign({}, options.ui.preference_revisions || {}), viewRevision: 0,
-            phase: 'initializing', failure: null, tail: Promise.resolve(), ready: null};
+            phase: options.draft ? 'draft' : 'initializing', failure: null, tail: Promise.resolve(), ready: null};
         return {start: start.bind(null, state), save: save.bind(null, state), flush: flush.bind(null, state),
             sendPreference: sendPreference.bind(null, state), receive: receive.bind(null, state)};
     }

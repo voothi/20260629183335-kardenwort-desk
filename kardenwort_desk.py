@@ -31,7 +31,7 @@ import http.client
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
-from typing import Optional, Any, Union, List, FrozenSet, TypedDict, Tuple, Dict, Set
+from typing import Optional, Any, Union, List, FrozenSet, TypedDict, Tuple, Dict, Set, Literal
 from enum import Enum, auto
 
 from kardenwort_grammar import (
@@ -266,7 +266,12 @@ class ExportSkippedPayload(TypedDict):
     message: str         # Human-readable warning message for the UI
 
 
-class ExportImportStartedPayload(TypedDict):
+class ExportDeliveryPayload(TypedDict, total=False):
+    delivery_state: Literal['import_started', 'import_complete', 'favorites_saved', 'ready']
+    exported_count: int
+
+
+class ExportImportStartedPayload(ExportDeliveryPayload):
     """
     Emitted by execute_export when a detached Anki import process is
     successfully launched in the background (detach_import_on_send=True).
@@ -281,7 +286,7 @@ class ExportImportStartedPayload(TypedDict):
     note: str             # Advisory message for the UI (e.g. "safe to close")
 
 
-class ExportImportCompletePayload(TypedDict):
+class ExportImportCompletePayload(ExportDeliveryPayload):
     """
     Emitted by execute_export when a synchronous Anki import completes
     successfully, or when a favorites file is saved without sending to Anki.
@@ -293,7 +298,7 @@ class ExportImportCompletePayload(TypedDict):
     output: str            # Import result message or success path description
 
 
-class ExportSuccessPayload(TypedDict):
+class ExportSuccessPayload(ExportDeliveryPayload):
     """
     Emitted by execute_export when send_to_anki=False and save_to_favorites=False
     — indicating the export was prepared for Anki but no favorites file was created.
@@ -4940,6 +4945,8 @@ class SqliteStorageAdapter(StorageAdapter):
                     "log": log_path,
                     "tsv": str(import_path),
                     "note": "safe to close the window",
+                    "delivery_state": "import_started",
+                    "exported_count": len(exported_rows),
                 }
             else:
                 success, output = run_synchronous_import(import_path, self.config, self.resolved_paths, zid=zid, trace_id=trace_id)
@@ -4948,6 +4955,8 @@ class SqliteStorageAdapter(StorageAdapter):
                         "import_complete": True,
                         "show_window": show_window,
                         "output": output,
+                        "delivery_state": "import_complete",
+                        "exported_count": len(exported_rows),
                     }
                 else:
                     raise StructuredError(ErrorCode.DESK_FAILED, "Anki import failed synchronously", {"details": output})
@@ -4960,11 +4969,15 @@ class SqliteStorageAdapter(StorageAdapter):
                     "import_complete": True,
                     "show_window": show_window,
                     "output": f"SUCCESS: Exported to {import_path}",
+                    "delivery_state": "favorites_saved",
+                    "exported_count": len(exported_rows),
                 }
             else:
                 return {
                     "status": "success",
                     "message": "SUCCESS: Ready for Anki (no favorites file created)",
+                    "delivery_state": "ready",
+                    "exported_count": len(exported_rows),
                 }
 
 
@@ -15001,6 +15014,8 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
                     "log": log_path,
                     "tsv": str(import_path),
                     "note": "safe to close the window",
+                    "delivery_state": "import_started",
+                    "exported_count": len(exported_rows),
                 }
                 if is_from_ui:
                     emit_payload(response)
@@ -15012,6 +15027,8 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
                         "import_complete": True,
                         "show_window": show_window,
                         "output": output,
+                        "delivery_state": "import_complete",
+                        "exported_count": len(exported_rows),
                     }
                     if is_from_ui:
                         emit_payload(import_complete_payload)
@@ -15030,6 +15047,8 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
                     "import_complete": True,
                     "show_window": show_window,
                     "output": f"SUCCESS: Exported to {import_path}",
+                    "delivery_state": "favorites_saved",
+                    "exported_count": len(exported_rows),
                 }
                 if is_from_ui:
                     emit_payload(import_complete_payload)
@@ -15038,6 +15057,8 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
                 success_payload: ExportSuccessPayload = {
                     "status": "success",
                     "message": "SUCCESS: Ready for Anki (no favorites file created)",
+                    "delivery_state": "ready",
+                    "exported_count": len(exported_rows),
                 }
                 if is_from_ui:
                     emit_payload(success_payload)

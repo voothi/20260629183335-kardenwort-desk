@@ -7911,51 +7911,39 @@
         }
         window.updateBidirectionalHighlights = updateBidirectionalHighlights;
 
+        function deletedRowIds() {
+            var deleted = {};
+            Array.prototype.forEach.call(document.querySelectorAll('#lemma-table tr[data-deleted="true"]'), function(row) {
+                deleted[String(row.getAttribute('data-row-id'))] = true;
+            });
+            return deleted;
+        }
         /** @param {boolean=} extractTokenOrders */
         function getSelectedRowsArray(extractTokenOrders) {
             if (extractTokenOrders) {
                 return getSelectedTokenOrdersArray();
             }
-            var arr = [];
-            for (var k in selectedRowIdsMap) {
-                if (selectedRowIdsMap.hasOwnProperty(k)) {
-                    var num = parseInt(String(k), 10);
-                    if (!isNaN(num) && arr.indexOf(num) === -1) {
-                        arr.push(num);
-                    }
-                }
-            }
+            var ids = Object.keys(selectedRowIdsMap), seen = {}, deleted = deletedRowIds();
             var selRows = (document.querySelectorAll('#lemma-table tbody tr.kw-row-selected, #lemma-table tbody tr.selected, #lemma-table tbody tr[data-selected="1"]'));
-            for (var r = 0; r < selRows.length; r++) {
-                var rId = selRows[r].getAttribute('data-row-id');
-                if (rId !== null && rId !== '') {
-                    var num = parseInt(String(rId), 10);
-                    if (!isNaN(num) && arr.indexOf(num) === -1) {
-                        arr.push(num);
-                    }
-                }
-            }
-            return arr;
+            Array.prototype.forEach.call(selRows, function(row) { ids.push(row.getAttribute('data-row-id')); });
+            return ids.map(function(id) { return parseInt(String(id), 10); }).filter(function(id) {
+                if (isNaN(id) || seen[id] || deleted[id]) return false;
+                seen[id] = true;
+                return true;
+            });
         }
 
+        /** @deprecated Legacy token-order projection; canonical mutations carry occurrence coordinates. */
+        function selectedTokenOrder(rowId) {
+            var row = document.querySelector('tr[data-row-id="' + rowId + '"]');
+            var value = row && row.getAttribute('data-token-order');
+            if (value === null || value === undefined || value === '') value = rowId;
+            var parsed = parseInt(String(value), 10);
+            return isNaN(parsed) ? value : parsed;
+        }
         function getSelectedTokenOrdersArray() {
-            var arr = [];
-            for (var k in selectedRowIdsMap) {
-                if (selectedRowIdsMap.hasOwnProperty(k)) {
-                    var tr = (document.querySelector('tr[data-row-id="' + k + '"]'));
-                    if (tr) {
-                        var tOrd = tr.getAttribute('data-token-order');
-                        if (tOrd !== null && tOrd !== undefined && tOrd !== '') {
-                            var parsed = parseInt(String(tOrd), 10);
-                            arr.push(!isNaN(parsed) ? parsed : tOrd);
-                            continue;
-                        }
-                    }
-                    var kNum = parseInt(String(k), 10);
-                    arr.push(!isNaN(kNum) ? kNum : k);
-                }
-            }
-            return arr;
+            var deleted = deletedRowIds();
+            return Object.keys(selectedRowIdsMap).filter(function(id) { return !deleted[id]; }).map(selectedTokenOrder);
         }
         window.getSelectedRowsArray = getSelectedRowsArray;
         window.getSelectedTokenOrdersArray = getSelectedTokenOrdersArray;
@@ -8216,32 +8204,43 @@
             } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
         };
 
-        window.deleteSelectedRows = function() {
-             var selected = getSelectedRowsArray();
-            if (selected.length === 0) return;
-            var tOrders = [];
-            var sIndices = [];
-            for (var i = 0; i < selected.length; i++) {
-                var rId = selected[i];
-                var tOrd = rId;
-                var sIdx = 1;
-                for (var k = 0; k < tableRows.length; k++) {
-                    if (parseInt(String(tableRows[k].getAttribute('data-row-id')), 10) === rId) {
-                        var toAttr = tableRows[k].getAttribute('data-token-order');
-                        if (toAttr !== null && toAttr !== '') tOrd = parseInt(String(toAttr), 10);
-                        var siAttr = tableRows[k].getAttribute('data-sentence-idx');
-                        if (siAttr !== null && siAttr !== '') sIdx = parseInt(String(siAttr), 10);
-                        break;
-                    }
-                }
-                tOrders.push(tOrd);
-                sIndices.push(sIdx);
+        function scalarDeletionTarget(row) {
+            var sentence = row.getAttribute('data-sentence-idx'), token = row.getAttribute('data-token-order');
+            if (sentence === null && token === null && isServerDisabled()) {
+                return {sentence_idx: 1, token_order: Number(row.getAttribute('data-row-id'))};
             }
+            if (!/^[0-9]+$/.test(String(sentence)) || Number(sentence) < 1 || !/^[0-9]+$/.test(String(token))) {
+                throw new Error('Deletion requires an occurrence identity');
+            }
+            return {sentence_idx: Number(sentence), token_order: Number(token)};
+        }
+        function deletionRowTargets(row) {
+            if (row.hasAttribute('data-occurrence-targets')) return getLookupRowTargets(row);
+            return [scalarDeletionTarget(row)];
+        }
+        function collectDeletionTargets(selected) {
+            var selectedIds = {}, seen = {}, targets = [];
+            selected.forEach(function(id) { selectedIds[String(id)] = true; });
+            tableRows.forEach(function(row) {
+                if (row.getAttribute('data-deleted') === 'true' || !getRowGroupIds(row).some(function(id) { return selectedIds[String(id)]; })) return;
+                deletionRowTargets(row).forEach(function(target) {
+                    var key = target.sentence_idx + ':' + target.token_order;
+                    if (seen[key]) return;
+                    seen[key] = true;
+                    targets.push({row_id: Number(row.getAttribute('data-row-id')),
+                        sentence_idx: Number(target.sentence_idx), token_order: Number(target.token_order)});
+                });
+            });
+            return targets;
+        }
+        window.deleteSelectedRows = function() {
+            var targets = collectDeletionTargets(getSelectedRowsArray());
+            if (targets.length === 0) return;
             var action = {
                 type: 'delete',
-                rowIds: selected,
-                tokenOrders: tOrders,
-                sentenceIndices: sIndices
+                rowIds: targets.map(function(target) { return target.row_id; }),
+                tokenOrders: targets.map(function(target) { return target.token_order; }),
+                sentenceIndices: targets.map(function(target) { return target.sentence_idx; })
             };
             pushHistory(action);
             applyAction(action);
@@ -8288,12 +8287,39 @@
         }
         window.projectPendingEdits = projectPendingEdits;
 
+        function committedSelectionRows() {
+            var card = window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function'
+                ? window.WorkspaceTabs.getActiveCard() : null;
+            if (card) return card.words.map(function(word) {
+                return {row_ids: [String(word.row_id)].concat(word.all_row_ids || []), selected: word.selected === '1' || word.selected === 1};
+            });
+            return tableRows.map(function(row) {
+                var id = String(row.getAttribute('data-row-id'));
+                return {row_ids: getRowGroupIds(row), selected: !!initialHighlights[id]};
+            });
+        }
+        function resetDeletionSelection(action) {
+            var committed = {};
+            committedSelectionRows().forEach(function(row) {
+                row.row_ids.forEach(function(id) {
+                    if (Object.prototype.hasOwnProperty.call(committed, String(id)) && committed[String(id)] !== row.selected) throw new Error('Ambiguous deletion selection identity');
+                    committed[String(id)] = row.selected;
+                });
+            });
+            action.rowIds.forEach(function(id) {
+                if (!Object.prototype.hasOwnProperty.call(committed, String(id))) throw new Error('Missing deletion selection identity');
+                var lemma = getLemmaByRowId(id);
+                if (lemma) window.AppState.selectedLemmas[lemma] = committed[String(id)];
+            });
+            syncSelectionsToCardsAndState();
+        }
         /** @param {HistoryAction} action */
         function applyAction(action) {
             recordUserIntent(action, true, false);
             if (action.type === 'edit') {
                 projectEditedValue(action, action.newValue);
             } else if (action.type === 'delete') {
+                resetDeletionSelection(action);
                 for (var j = 0; j < action.rowIds.length; j++) {
                     var rId = action.rowIds[j];
                     for (var i = 0; i < tableRows.length; i++) {
@@ -8304,7 +8330,9 @@
                         }
                     }
                 }
-                clearAllSelections();
+                clearTokenSelections();
+                if (window.clearMVPBookmarks) window.clearMVPBookmarks();
+                updateBidirectionalHighlights();
             }
         }
 
@@ -9791,7 +9819,7 @@
                     var tr = tableRows[i];
                     var trId = String(tr.getAttribute('data-row-id'));
                     var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(trId));
-                    if (isTrSel) {
+                    if (isTrSel && tr.getAttribute('data-deleted') !== 'true') {
                         var grp = getRowGroupIds(tr);
                         for (var p = 0; p < grp.length; p++) {
                             var pInt = parseInt(String(grp[p]), 10);
@@ -9862,7 +9890,7 @@
                         var tr = tableRows[i];
                         var trId = String(tr.getAttribute('data-row-id'));
                         var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(trId));
-                        if (isTrSel) {
+                        if (isTrSel && tr.getAttribute('data-deleted') !== 'true') {
                             if (isLookupMode()) {
                                 var rowTargets = getLookupRowTargets(tr);
                                 if (!rowTargets.length) {
@@ -9963,6 +9991,21 @@
         };
         window.onSelectedClick = window.onRewordClick;
 
+        function exportCardCount(payload) {
+            var count = payload.exported_count;
+            if (typeof count !== 'number' || count < 1 || Math.floor(count) !== count) throw new Error('Invalid acknowledged export count');
+            return count + (count === 1 ? ' card' : ' cards');
+        }
+        function exportFeedback(payload) {
+            if (payload.status === 'skipped') {
+                if (typeof payload.message !== 'string') throw new Error('Missing export skip reason');
+                return {message: payload.message, kind: 'warning'};
+            }
+            var outcomes = {import_started: 'queued for Anki import', import_complete: 'exported to Anki',
+                favorites_saved: 'saved to favorites', ready: 'prepared for export'};
+            if (!Object.prototype.hasOwnProperty.call(outcomes, payload.delivery_state)) throw new Error('Export outcome was not acknowledged');
+            return {message: exportCardCount(payload) + ' ' + outcomes[payload.delivery_state], kind: 'success'};
+        }
         window.onSendToAnkiClick = function() {
             if (isServerDisabled()) {
                 window.showToast("Action unavailable: server interaction is disabled", "warning");
@@ -9978,7 +10021,7 @@
                     var tr = tableRows[i];
                     var trId = String(tr.getAttribute('data-row-id'));
                     var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(trId));
-                    if (isTrSel) {
+                    if (isTrSel && tr.getAttribute('data-deleted') !== 'true') {
                         var grp = getRowGroupIds(tr);
                         for (var p = 0; p < grp.length; p++) {
                             var pInt = parseInt(String(grp[p]), 10);
@@ -10040,7 +10083,7 @@
                         var tr = tableRows[i];
                         var trId = String(tr.getAttribute('data-row-id'));
                         var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(trId));
-                        if (isTrSel) {
+                    if (isTrSel && tr.getAttribute('data-deleted') !== 'true') {
                             var grp = getRowGroupIds(tr);
                             for (var p = 0; p < grp.length; p++) {
                                 var pInt = parseInt(String(grp[p]), 10);
@@ -10098,9 +10141,9 @@
                 return;
             }
             var exportBtn = (document.getElementById('kw-btn-export'));
-            setButtonLoading(exportBtn, true, "Sending...", "Send to Anki");
+            setButtonLoading(exportBtn, true, "Exporting...", "Send to Anki");
 
-            window.showToast("Exporting to Anki...", "info");
+            window.showToast("Exporting selection...", "info");
             var tok = getApiToken();
             var headers = { 'Content-Type': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
@@ -10123,10 +10166,9 @@
             })
             .then(function(resObj) {
                 setButtonLoading(exportBtn, false, "", "Send to Anki");
-                if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success' || resObj.data.import_complete || resObj.data.import_started)) {
-                    var cardCount = rows.length;
-                    var cardWord = cardCount === 1 ? "card" : "cards";
-                    window.showToast("✓ " + cardCount + " " + cardWord + " exported to Anki", "success");
+                if (resObj.ok) {
+                    var feedback = exportFeedback(resObj.data.data || resObj.data);
+                    window.showToast(feedback.message, feedback.kind);
                 } else {
                     window.showToast("Export failed: " + formatErrorWithTrace(resObj, "Server error"), "error");
                 }
@@ -10332,6 +10374,28 @@
         /* WorkspaceTabs component dynamically bundled from web/js/components/WorkspaceTabs.js */
         /* WorkspaceTabs loaded from WorkspaceTabs.js */
 
+        function isCommittedLanguage(data, language) {
+            return data.ok === true && data.persisted === true && data.language === language &&
+                typeof data.revision === 'number' && data.revision > 0 && Math.floor(data.revision) === data.revision;
+        }
+        function requireLanguageCommit(response, language) {
+            if (!response.ok) throw new Error('Language preference save failed (HTTP ' + response.status + ')');
+            return response.json().then(function(raw) {
+                var data = raw.data || raw;
+                if (!data || !isCommittedLanguage(data, language)) throw new Error('Language preference was not acknowledged as committed');
+            });
+        }
+        function renderWithCommittedLanguage(language, renderPayload, headers) {
+            return fetch(resolveBackendUrl('/api/v1/set-language'), {
+                method: 'POST', headers: headers, body: JSON.stringify({language: language})
+            }).then(function(response) {
+                return requireLanguageCommit(response, language);
+            }).then(function() {
+                return fetch(resolveBackendUrl('/api/v1/render'), {
+                    method: 'POST', headers: headers, body: JSON.stringify(renderPayload)
+                });
+            });
+        }
         window.onLangYes = function() {
             var yesBtn = (document.getElementById('kw-btn-lang-yes'));
             if (yesBtn && yesBtn.disabled) return;
@@ -10373,16 +10437,6 @@
                 var headers = { 'Content-Type': 'application/json' };
                 if (tok) headers['X-API-Token'] = tok;
 
-                var langPayload = { language: detLang };
-
-                fetch(resolveBackendUrl('/api/v1/set-language'), {
-                    method: 'POST',
-                    headers: headers,
-                    body: JSON.stringify(langPayload)
-                }).catch(function(e) {
-                    console.warn("Failed to synchronize language with controller:", e);
-                });
-
                 var renderPayload = {
                     session_zid: sZid,
                     zid: sZid,
@@ -10393,11 +10447,7 @@
                     text_mode: effMode
                 };
 
-                fetch(resolveBackendUrl('/api/v1/render'), {
-                    method: 'POST',
-                    headers: headers,
-                    body: JSON.stringify(renderPayload)
-                })
+                renderWithCommittedLanguage(detLang, renderPayload, headers)
                 .then(function(res) {
                     return res.json().then(function(data) { return { ok: res.ok, status: res.status, data: data }; });
                 })
@@ -10405,11 +10455,12 @@
                     setLangModalLoading(false);
                     window.hideLanguageVerificationModal();
                     if (resObj.ok && resObj.data) {
-                        var childrenList = resObj.data.children || (resObj.data.data && resObj.data.data.children) || [];
+                        var payload = resObj.data.data || resObj.data;
+                        var childrenList = payload.children || [];
                         if (childrenList && childrenList.length > 0) {
                             spawnChildTabs(childrenList);
                         }
-                        var html = resObj.data.html || (resObj.data.html_b64 ? decodeURIComponent(escape(atob(resObj.data.html_b64))) : null);
+                        var html = payload.html || (payload.html_b64 ? decodeURIComponent(escape(atob(payload.html_b64))) : null);
                         if (html) {
                             document.open();
                             document.write(html);
@@ -10489,11 +10540,12 @@
                     setLangModalLoading(false);
                     window.hideLanguageVerificationModal();
                     if (resObj.ok && resObj.data) {
-                        var childrenList = resObj.data.children || (resObj.data.data && resObj.data.data.children) || [];
+                        var payload = resObj.data.data || resObj.data;
+                        var childrenList = payload.children || [];
                         if (childrenList && childrenList.length > 0) {
                             spawnChildTabs(childrenList);
                         }
-                        var html = resObj.data.html || (resObj.data.html_b64 ? decodeURIComponent(escape(atob(resObj.data.html_b64))) : null);
+                        var html = payload.html || (payload.html_b64 ? decodeURIComponent(escape(atob(payload.html_b64))) : null);
                         if (html) {
                             document.open();
                             document.write(html);
@@ -10879,6 +10931,7 @@
             window.rebindMVPBookmarks();
         }
         stateClient = window.SqliteState.create({ui: window.__CONFIG__ || {}, zid: getSessionZid(), send: stateRequest,
+            draft: !!(bData && bData.mismatch_info && bData.mismatch_info.is_mismatch),
             current: preferenceCommands.current, unresolved: preferenceCommands.unresolved,
             failure: function(error) { window.showToast('View state not saved: '+error.message, 'error'); },
             project: projectCommittedPreference, capture: captureClientView, restore: restoreClientView});

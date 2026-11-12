@@ -5655,24 +5655,16 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._authenticate_token(body)
             req_zid = generate_server_zid(self.server)
 
-            def run_vacuum_worker(server_config, resolved_paths, req_zid):
-                try:
-                    from kardenwort_db import KardenwortDB
-                    db = KardenwortDB(config=server_config, resolved_paths=resolved_paths)
-                    db.vacuum(zid=req_zid)
-                except Exception as e:
-                    logger.error(f"Background vacuum worker failed (ZID: {req_zid}): {e}")
-
-            threading.Thread(
-                target=run_vacuum_worker,
-                args=(self.server.config, self.server.resolved_paths, req_zid),
-                daemon=True
-            ).start()
+            # The threaded HTTP server already owns this worker and its disposal.
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            db.vacuum(zid=req_zid)
 
             self._send_json(200, {
                 "ok": True,
                 "status": "dispatched",
-                "message": "Database VACUUM and PRAGMA optimize running asynchronously in background worker",
+                "completed": True,
+                "message": "Database VACUUM and PRAGMA optimize completed",
                 "zid": req_zid
             })
             return
