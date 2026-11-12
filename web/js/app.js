@@ -8206,7 +8206,7 @@
 
         function scalarDeletionTarget(row) {
             var sentence = row.getAttribute('data-sentence-idx'), token = row.getAttribute('data-token-order');
-            if (sentence === null && token === null && isServerDisabled()) {
+            if (sentence === null && token === null && !SESSION_ZID) {
                 return {sentence_idx: 1, token_order: Number(row.getAttribute('data-row-id'))};
             }
             if (!/^[0-9]+$/.test(String(sentence)) || Number(sentence) < 1 || !/^[0-9]+$/.test(String(token))) {

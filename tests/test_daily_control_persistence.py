@@ -89,6 +89,32 @@ def test_hand_delete_history_save_and_reload_restore_exact_record(daily_page):
     assert cold.db.get_words_by_session(ZID) == selected
 
 
+@pytest.mark.parametrize('identity', ['missing', 'zero-sentence', 'invalid-token'])
+def test_server_delete_rejects_missing_or_invalid_occurrence_before_effects(daily_page, identity):
+    page, server, adapter = daily_page
+    page.locator('#source-container .word:visible').first.click()
+    flush(page)
+    before = adapter.db.get_session_bundle(ZID)
+    result = page.evaluate('''identity => {
+        const row = document.querySelector('#lemma-table tbody tr[data-row-id]');
+        row.removeAttribute('data-occurrence-targets');
+        if (identity === 'missing') {
+            row.removeAttribute('data-sentence-idx');
+            row.removeAttribute('data-token-order');
+        } else if (identity === 'zero-sentence') {
+            row.setAttribute('data-sentence-idx', '0');
+        } else {
+            row.setAttribute('data-token-order', 'invalid');
+        }
+        try { window.deleteSelectedRows(); return 'accepted'; }
+        catch (error) { return error.message; }
+    }''', identity)
+    assert result == 'Deletion requires an occurrence identity'
+    assert not page.evaluate('isDirty()')
+    expect(page.locator('#lemma-table tbody tr[data-row-id]').first).to_be_visible()
+    assert adapter.db.get_session_bundle(ZID) == before
+
+
 def test_retext_button_commits_provider_projection_and_reloads(daily_page):
     page, server, adapter = daily_page
     before = adapter.db.get_words_by_session(ZID)
