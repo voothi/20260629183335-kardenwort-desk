@@ -72,7 +72,15 @@ def owned_configuration(owner, translation_url, backend):
     results = owner / 'results'
     results.mkdir()
     database = owner / 'controller.db'
+    for key in config['environment']:
+        config.set('environment', key, str(paths[key]))
+    settings = owner / 'provider-settings.ini'
+    secrets = owner / 'provider-secrets.ini'
+    settings.write_text('[Security]\nSecretsPath=provider-secrets.ini\n', encoding='utf-8')
+    secrets.write_text('[DeepL]\nKey=fixture-only-deepl-key\n', encoding='utf-8')
+    config.set('environment', 'deepl_settings_file', str(settings))
     config.read_dict({
+        'settings': {'anki_mapping_file': str(paths['anki_mapping_file'])},
         'storage': {'backend': backend, 'sqlite_db_path': str(database)},
         'project_structure': {'generated_results_dir': str(results)},
         'services': {'translation_server_url': translation_url, 'spacy_server_url': '',

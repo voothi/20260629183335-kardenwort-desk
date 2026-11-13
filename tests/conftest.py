@@ -5,6 +5,29 @@ import urllib.request
 import urllib.error
 import pytest
 
+
+def pytest_configure(config):
+    import tempfile
+    from pathlib import Path
+    import kardenwort_desk as desk
+    from tests.owned_config_support import DefaultConfiguration
+    config._owned_default_directory = tempfile.TemporaryDirectory(prefix='desk-pytest-')
+    config._owned_default_config = DefaultConfiguration(
+        Path(desk.__file__).resolve().parent,
+        Path(config._owned_default_directory.name), desk.load_config)
+    config._owned_default_patch = pytest.MonkeyPatch()
+    config._owned_default_patch.setattr(desk, 'load_config', config._owned_default_config)
+
+
+@pytest.fixture(autouse=True)
+def owned_default_configuration(tmp_path, monkeypatch, pytestconfig):
+    monkeypatch.setattr(pytestconfig._owned_default_config, 'owner', tmp_path.with_name(tmp_path.name+'-default-config'))
+
+
+def pytest_unconfigure(config):
+    config._owned_default_patch.undo()
+    config._owned_default_directory.cleanup()
+
 LIVE_DAEMON_PORTS = {8081, 8082, 8083, 59999}
 
 
