@@ -17370,6 +17370,19 @@ def resolve_occurrence_rows(rows, headers, coordinates, sentence_field="Sentence
     return result
 
 
+def edit_save_projection(adapter, session_zid, deltas, selected_column, fingerprint):
+    """Read the pre-edit projection only for stale checks or inline word edits."""
+    direct_columns = (selected_column, "DeskSelected", "selected", "_delete")
+    if not fingerprint and all(delta.get("column") in direct_columns for delta in deltas):
+        return None
+    restored = adapter.restore_session(session_zid)
+    if fingerprint:
+        current_fp = compute_content_fingerprint(restored.get("data_rows", []))
+        if fingerprint != current_fp:
+            raise StructuredError(ErrorCode.ROW_STALE, f"Row content hash mismatch. Rendered: {fingerprint}, Current: {current_fp}")
+    return restored
+
+
 def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerprint=None, zid=None, language=None, trace_id=None):
     if zid is None:
         zid = generate_unique_zid()
@@ -17399,12 +17412,7 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
             if selected_col_name not in editable_cols:
                 editable_cols.append(selected_col_name)
 
-            restored = storage_adapter.restore_session(session_zid)
-            current_data_rows = restored.get("data_rows", [])
-            if fingerprint:
-                current_fp = compute_content_fingerprint(current_data_rows)
-                if fingerprint != current_fp:
-                    raise StructuredError(ErrorCode.ROW_STALE, f"Row content hash mismatch. Rendered: {fingerprint}, Current: {current_fp}")
+            restored = edit_save_projection(storage_adapter, session_zid, deltas, selected_col_name, fingerprint)
 
             deleted_rows = []
             # Validate the complete request and apply it under one write transaction.
