@@ -1,7 +1,6 @@
 """Owned, bounded CLI audio execution. HTTP and UI depend inward on this slice."""
 from contextlib import contextmanager
 from pathlib import Path
-import json
 import os
 import select
 import signal
@@ -14,7 +13,6 @@ import time
 from kardenwort_audio import AudioError, MAX_BYTES, audio_request, media_type
 
 _SLOTS = threading.BoundedSemaphore(2)
-_GATE = "import json,runpy,sys; sys.argv=json.load(sys.stdin); runpy.run_path(sys.argv[0],run_name='__main__')"
 
 
 def capability(paths):
@@ -40,14 +38,12 @@ def process_owner(python, arguments, directory, job_factory):
     job = job_factory() if os.name == 'nt' else None
     process = None
     try:
-        process = subprocess.Popen([python, '-c', _GATE], stdin=subprocess.PIPE,
+        process = subprocess.Popen([python, *arguments], stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=directory, **options)
         if job is not None and not job.assign_process(process):
             raise AudioError('Cannot own synthesis process tree')
+        # Windows resumes only after job assignment; POSIX creates its session before exec.
         resume_launcher(process)
-        # The child cannot execute the configured capability before ownership succeeds.
-        process.stdin.write(json.dumps(arguments).encode('utf-8'))
-        process.stdin.close()
         yield process
     finally:
         close_process(process, job)
@@ -72,8 +68,6 @@ def close_process(process, job):
     if process.poll() is None:
         process.kill()
     process.wait(timeout=5)
-    if process.stdin is not None:
-        process.stdin.close()
 
 
 def drain_windows_job(job):

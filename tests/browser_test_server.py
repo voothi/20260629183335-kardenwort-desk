@@ -254,6 +254,8 @@ def allocation_collision(error, port):
 def create_browser_test_server(handler, server_class=_BrowserTestHTTPServer, **server_options):
     for attempt in range(128):
         port = random.randrange(49152, 65536)
+        if port == 59999:  # Reserved for the harness's intentionally offline service.
+            continue
         try:
             return server_class(('127.0.0.1', port), handler, **server_options)
         except OSError as error:
