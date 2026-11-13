@@ -1079,21 +1079,6 @@
                     removeClass(tabButtons[i2], 'active');
                 }
             }
-            if (activeBtn) {
-                if (activeBtn.scrollIntoView) {
-                    try {
-                        if (isImmediate) {
-                            activeBtn.scrollIntoView({ behavior: 'auto', inline: 'nearest', block: 'nearest' });
-                        } else {
-                            activeBtn.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
-                        }
-                    } catch(e) {
-                        activeBtn.scrollIntoView(false);
-                    }
-                }
-            }
-            updateNavButtons();
-
             var srcContainer = document.getElementById('source-container');
             var transContainer = document.getElementById('translation-container');
 
@@ -1174,7 +1159,6 @@
                 }
             }
 
-            if (typeof w.tokenizeTranslation === 'function') w.tokenizeTranslation();
             if (typeof w.buildLcIndex === 'function') w.buildLcIndex();
             if (typeof w.updateBidirectionalHighlights === 'function') w.updateBidirectionalHighlights();
             if (typeof w.updateRowStyles === 'function') w.updateRowStyles();
@@ -1206,6 +1190,20 @@
             updateFavicon(activeTabSeq);
             updateTitle(targetCard);
             if (typeof w.updateToolbarState === 'function') w.updateToolbarState();
+            if (activeBtn) {
+                if (activeBtn.scrollIntoView) {
+                    try {
+                        if (isImmediate) {
+                            activeBtn.scrollIntoView({ behavior: 'auto', inline: 'nearest', block: 'nearest' });
+                        } else {
+                            activeBtn.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+                        }
+                    } catch(e) {
+                        activeBtn.scrollIntoView(false);
+                    }
+                }
+            }
+            updateNavButtons();
             if (w.forceRepaint) w.forceRepaint();
 
             if (!isImmediate && w.saveClientView) w.saveClientView();

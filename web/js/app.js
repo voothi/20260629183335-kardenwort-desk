@@ -124,6 +124,44 @@
         return result;
     }
 
+    /** Keep document-order precedence for duplicate and grouped row identities. */
+    function firstProjectionRow(index, key, row) {
+        if (!Object.prototype.hasOwnProperty.call(index, key)) index[key] = row;
+    }
+
+    /** Build one ephemeral DOM index for an incoming projection, never across rebinds. */
+    function indexProjectionRows() {
+        var index = {byRow: Object.create(null), byToken: Object.create(null),
+            byOccurrence: Object.create(null), byGroup: Object.create(null)};
+        var rows = document.querySelectorAll('tr[data-row-id], tr[data-token-order], tr[data-all-row-ids]');
+        Array.prototype.forEach.call(rows, function(row) {
+            var id = row.getAttribute('data-row-id');
+            if (id !== null) firstProjectionRow(index.byRow, id, row);
+            var token = row.getAttribute('data-token-order');
+            if (token !== null) {
+                firstProjectionRow(index.byToken, token, row);
+                var sentence = row.getAttribute('data-sentence-idx');
+                if (sentence !== null) firstProjectionRow(index.byOccurrence, JSON.stringify([sentence, token]), row);
+            }
+            var grouped = row.getAttribute('data-all-row-ids');
+            if (grouped !== null) grouped.split(',').forEach(function(value) {
+                firstProjectionRow(index.byGroup, value.trim(), row);
+            });
+        });
+        return index;
+    }
+
+    /** @param {Record<string, Record<string, HTMLElement>>} index @param {number|string} rowId @param {VocabularyRow} data */
+    function resolveProjectionRow(index, rowId, data) {
+        var row;
+        if (data.token_order != null && String(data.token_order) !== '') {
+            var token = String(data.token_order);
+            row = data.sentence_idx == null ? index.byToken[token]
+                : index.byOccurrence[JSON.stringify([String(data.sentence_idx), token])];
+        }
+        return row || index.byRow[String(rowId)] || index.byGroup[String(rowId)] || null;
+    }
+
     function normalizeLegacyRowDeltas(rows, payload) {
         var tabs = window.WorkspaceTabs;
         var cards = tabs && tabs.getCards ? tabs.getCards() : [];
@@ -1249,7 +1287,7 @@
 
     /** @param {Element|null|undefined} el @param {string} name */
     function removeClass(el, name) {
-        if (el && el.classList) {
+        if (el && el.classList && el.classList.contains(name)) {
             el.classList.remove(name);
         }
     }
@@ -2756,9 +2794,10 @@
                             }
                         }
                     }
+                    var projectionRows = indexProjectionRows();
                     for (var rowId in rowsData) {
                         if (rowsData.hasOwnProperty(rowId)) {
-                            if (window.AppView.renderRow(rowId, data.stage)) {
+                            if (window.AppView.renderRow(rowId, data.stage, projectionRows)) {
                                 updated = true;
                             }
                         }
@@ -3047,34 +3086,12 @@
                 }
                 return projectGlobalTranslation(container, globalStage);
             },
-            renderRow: /** @param {number|string} rowId @param {string=} globalStage */ function(rowId, globalStage) {
+            renderRow: /** @param {number|string} rowId @param {string=} globalStage @param {Record<string, Record<string, HTMLElement>>=} projectionRows */ function(rowId, globalStage, projectionRows) {
                  var targetVal;
                 var updated = false;
                 var rowData = window.AppState.rows[rowId];
                 if (!rowData) return false;
-                var tr = null;
-                if (rowData.token_order !== undefined && rowData.token_order !== null && String(rowData.token_order) !== "") {
-                    var identitySelector = 'tr[data-token-order="' + rowData.token_order + '"]';
-                    if (rowData.sentence_idx !== undefined && rowData.sentence_idx !== null) {
-                        identitySelector += '[data-sentence-idx="' + rowData.sentence_idx + '"]';
-                    }
-                    tr = document.querySelector(identitySelector);
-                } else {
-                    tr = (document.querySelector('tr[data-row-id="' + rowId + '"]'));
-                }
-                if (!tr) {
-                    tr = (document.querySelector('tr[data-row-id="' + rowId + '"]'));
-                }
-                if (!tr) {
-                    var allTrs = (document.querySelectorAll('tr[data-all-row-ids]'));
-                    for (var at = 0; at < allTrs.length; at++) {
-                        var parts = (allTrs[at].getAttribute('data-all-row-ids') || '').split(',').map(function(s) { return s.trim(); });
-                        if (parts.indexOf(String(rowId)) !== -1) {
-                            tr = allTrs[at];
-                            break;
-                        }
-                    }
-                }
+                var tr = resolveProjectionRow(projectionRows || indexProjectionRows(), rowId, rowData);
                 if (!tr) return false;
                 if (rowData.occurrence_data) {
                     tr.setAttribute('data-occ', JSON.stringify(rowData.occurrence_data));
@@ -7461,10 +7478,10 @@
                 var sk = String(span.getAttribute('data-word-idx'));
                 if (!spanByVidx.hasOwnProperty(sk)) spanByVidx[sk] = span;
                 try {
-                    span.classList.remove('highlight-orange-active');
-                    span.classList.remove('highlight-purple-active');
-                    span.classList.remove('active-subtoken');
-                    span.classList.remove('lemma-peer-highlight');
+                    removeClass(span, 'highlight-orange-active');
+                    removeClass(span, 'highlight-purple-active');
+                    removeClass(span, 'active-subtoken');
+                    removeClass(span, 'lemma-peer-highlight');
                 } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             }
 
@@ -8452,7 +8469,6 @@
                 catch (err) { console.error('[Save] Native dirty-state notification failed', err); }
             }
             updateToolbarState();
-            window.forceRepaint();
         }
 
         function rebuildDeltas() {
