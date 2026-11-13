@@ -100,7 +100,7 @@ def test_visual_then_row_then_visual_keeps_requested_scope(world, provider_name)
 @pytest.mark.parametrize('backend', ['sqlite', 'tsv'])
 def test_existing_same_field_policy_keeps_last_completed_write(world, monkeypatch, provider_name):
     entered, release = threading.Event(), threading.Event()
-    original = world.provider.translate if provider_name == 'google' else world.provider.enrich
+    original = world.provider.translate if provider_name == 'google' else (world.provider.query if world.backend == 'sqlite' else world.provider.enrich)
 
     def held(*args, **kwargs):
         entered.set()
@@ -108,7 +108,7 @@ def test_existing_same_field_policy_keeps_last_completed_write(world, monkeypatc
         return original(*args, **kwargs)
 
     module = controller if provider_name == 'google' or world.backend == 'tsv' else desk
-    method = 'translate_lemmas_fast_path' if provider_name == 'google' else 'run_headless_intellifiller'
+    method = 'translate_lemmas_fast_path' if provider_name == 'google' else ('query_intellifiller_server' if world.backend == 'sqlite' else 'run_headless_intellifiller')
     monkeypatch.setattr(module, method, held)
     with ThreadPoolExecutor(max_workers=1) as pool:
         pending = pool.submit(world.post, row_request(world))
@@ -132,6 +132,11 @@ def test_repeat_row_action_preserves_natural_punctuation_and_other_sentence(worl
         def respond(lemmas, **kwargs):
             return {lemma: translated for lemma in lemmas}
         monkeypatch.setattr(controller, 'translate_lemmas_fast_path', respond)
+    elif world.backend == 'sqlite':
+        def respond(rows, **kwargs):
+            return dict(status='success', enriched_rows=[
+                dict(row_id=row['row_id'], WordDestination=translated) for row in reversed(rows)])
+        monkeypatch.setattr(desk, 'query_intellifiller_server', respond)
     else:
         def respond(tsv_path, *args, selected_rows=None, **kwargs):
             comments, headers, rows = desk.load_tsv_rows(tsv_path)
@@ -165,14 +170,14 @@ def test_provider_completion_preserves_unrelated_committed_edit(world, monkeypat
         'editable_columns=WordDestination', 'editable_columns=WordDestination,WordSourceIPA'), encoding='utf-8')
     world.paths['anki_mapping_file'] = mapping
     entered, release = threading.Event(), threading.Event()
-    original = world.provider.enrich
+    original = world.provider.query if world.backend == 'sqlite' else world.provider.enrich
 
-    def held_provider(tsv_path, *args, **kwargs):
+    def held_provider(*args, **kwargs):
         entered.set()
         assert release.wait(10), 'Provider completion was never released'
-        return original(tsv_path, *args, **kwargs)
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(desk if world.backend == 'sqlite' else controller, 'run_headless_intellifiller', held_provider)
+    monkeypatch.setattr(desk if world.backend == 'sqlite' else controller, 'query_intellifiller_server' if world.backend == 'sqlite' else 'run_headless_intellifiller', held_provider)
     with ThreadPoolExecutor(max_workers=1) as pool:
         pending = pool.submit(world.post, row_request(world))
         try:

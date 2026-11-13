@@ -56,7 +56,7 @@ with audit.owned_runtime(audit.OUT/'scratch',isolation):
 
     def run(*args):
         env = dict(os.environ, PYTHONPATH=str(ROOT), SSLKEYLOGFILE='',
-                   GIT_DIR=str(ROOT / '.git'), GIT_WORK_TREE=str(repository),
+                   GIT_DIR=os.environ.get('KARDENWORT_TEST_GIT_DIR', str(ROOT / '.git')), GIT_WORK_TREE=str(repository),
                    GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='safe.directory',
                    GIT_CONFIG_VALUE_0=repository.as_posix())
         return subprocess.run([sys.executable, '-c', bootstrap, str(owner), str(script),

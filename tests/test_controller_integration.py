@@ -41,6 +41,7 @@ def running_controller(tmp_path, request):
             server.resolved_paths = resolved_paths
             server.goldendict = goldendict
             server.api_key = "test-controller-api-key"
+            config.set("server", "api_key", server.api_key)
             server.seq_counter = 0
             server.seq_lock = threading.Lock()
             server.start_time = time.time()

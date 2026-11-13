@@ -1,3 +1,4 @@
+from tests.render_test_support import seed_render_tsv
 import pytest
 import configparser
 from pathlib import Path
@@ -9,6 +10,7 @@ def test_native_html_styles_and_scripts(tmp_path):
     tsv_path.write_text("SentenceSourceIndex\tWordSource\tWordSourceMorphologyAI\tWordSourceIPA\tWordDestination\n1\tAuto\t\t\tCar\n", encoding='utf-8')
     
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({"triggers": {"run_text_translation": "manual", "run_lemma_base_translation": "manual", "run_lemma_enrichment": "manual"}})
     if not config.has_section(SEC_RENDERING):
         config.add_section(SEC_RENDERING)
     config.set(SEC_RENDERING, 'hover_highlight', 'true')
@@ -16,6 +18,7 @@ def test_native_html_styles_and_scripts(tmp_path):
     config.set(SEC_RENDERING, 'hover_highlight_rainbow', 'true')
     
     # 1. Test Dark Theme
+    seed_render_tsv(config, resolved_paths, tsv_path, '20260826000001', 'Das Auto fährt schnell.', 'de', text_mode='single')
     html_dark = run_render_flow(
         text="Das Auto fährt schnell.",
         language="de",
@@ -24,7 +27,7 @@ def test_native_html_styles_and_scripts(tmp_path):
         config=config,
         resolved_paths=resolved_paths,
         theme="dark",
-        tsv_path=tsv_path
+        tsv_path='20260826000001'
     )
     
     assert 'id="hl-mvp-style"' in html_dark
@@ -39,6 +42,7 @@ def test_native_html_styles_and_scripts(tmp_path):
     assert '#b78cf7' in html_dark  # Dark slot 1
     
     # 2. Test Light Theme
+    seed_render_tsv(config, resolved_paths, tsv_path, '20260826000002', 'Das Auto fährt schnell.', 'de', text_mode='single')
     html_light = run_render_flow(
         text="Das Auto fährt schnell.",
         language="de",
@@ -47,7 +51,7 @@ def test_native_html_styles_and_scripts(tmp_path):
         config=config,
         resolved_paths=resolved_paths,
         theme="light",
-        tsv_path=tsv_path
+        tsv_path='20260826000002'
     )
     
     assert 'id="hl-mvp-style"' in html_light
@@ -59,12 +63,14 @@ def test_playwright_hover_and_rainbow_interaction(page, tmp_path):
     tsv_path.write_text("SentenceSourceIndex\tWordSource\tWordSourceMorphologyAI\tWordSourceIPA\tWordDestination\n1\tAuto\t\t\tCar\n", encoding='utf-8')
     
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({"triggers": {"run_text_translation": "manual", "run_lemma_base_translation": "manual", "run_lemma_enrichment": "manual"}})
     if not config.has_section(SEC_RENDERING):
         config.add_section(SEC_RENDERING)
     config.set(SEC_RENDERING, 'hover_highlight', 'true')
     config.set(SEC_RENDERING, 'hover_highlight_bookmarks', '3')
     config.set(SEC_RENDERING, 'hover_highlight_rainbow', 'true')
     
+    seed_render_tsv(config, resolved_paths, tsv_path, '20260826000003', 'Das rote Auto fährt schnell.', 'de', text_mode='single')
     html = run_render_flow(
         text="Das rote Auto fährt schnell.",
         language="de",
@@ -73,7 +79,7 @@ def test_playwright_hover_and_rainbow_interaction(page, tmp_path):
         config=config,
         resolved_paths=resolved_paths,
         theme="dark",
-        tsv_path=tsv_path
+        tsv_path='20260826000003'
     )
     
     page.set_content(html)
@@ -144,9 +150,11 @@ def test_rebind_mvp_on_appstate_deltas(page, tmp_path):
     tsv_path.write_text("SentenceSourceIndex\tWordSource\tWordSourceMorphologyAI\tWordSourceIPA\tWordDestination\n1\tAuto\t\t\tCar\n", encoding='utf-8')
     
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({"triggers": {"run_text_translation": "manual", "run_lemma_base_translation": "manual", "run_lemma_enrichment": "manual"}})
     if not config.has_section(SEC_RENDERING):
         config.add_section(SEC_RENDERING)
     
+    seed_render_tsv(config, resolved_paths, tsv_path, '20260826000004', 'Das Haus', 'de', text_mode='single')
     html = run_render_flow(
         text="Das Haus",
         language="de",
@@ -155,7 +163,7 @@ def test_rebind_mvp_on_appstate_deltas(page, tmp_path):
         config=config,
         resolved_paths=resolved_paths,
         theme="dark",
-        tsv_path=tsv_path
+        tsv_path='20260826000004'
     )
     
     page.set_content(html)
@@ -177,6 +185,8 @@ def test_selectable_text_mode_toggle(page, tmp_path):
     tsv_path.write_text("SentenceSourceIndex\tWordSource\tWordSourceMorphologyAI\tWordSourceIPA\tWordDestination\n1\tAuto\t\t\tCar\n", encoding='utf-8')
     
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({"triggers": {"run_text_translation": "manual", "run_lemma_base_translation": "manual", "run_lemma_enrichment": "manual"}})
+    seed_render_tsv(config, resolved_paths, tsv_path, '20260826000005', 'Das Haus', 'de', text_mode='single')
     html = run_render_flow(
         text="Das Haus",
         language="de",
@@ -185,7 +195,7 @@ def test_selectable_text_mode_toggle(page, tmp_path):
         config=config,
         resolved_paths=resolved_paths,
         theme="dark",
-        tsv_path=tsv_path
+        tsv_path='20260826000005'
     )
     page.set_content(html)
     
@@ -239,6 +249,8 @@ def test_hierarchical_target_resolution_unit(page, tmp_path):
     tsv_path = tmp_path / "test_unit.tsv"
     tsv_path.write_text("SentenceSourceIndex\tWordSource\tWordDestination\n1\tAuto\tCar\n", encoding='utf-8')
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({"triggers": {"run_text_translation": "manual", "run_lemma_base_translation": "manual", "run_lemma_enrichment": "manual"}})
+    seed_render_tsv(config, resolved_paths, tsv_path, '20260911000001', 'Das Auto.', 'de', text_mode='single')
     html = run_render_flow(
         text="Das Auto.",
         language="de",
@@ -247,7 +259,7 @@ def test_hierarchical_target_resolution_unit(page, tmp_path):
         config=config,
         resolved_paths=resolved_paths,
         theme="dark",
-        tsv_path=tsv_path
+        tsv_path='20260911000001'
     )
     page.set_content(html)
 
@@ -321,6 +333,7 @@ def test_playwright_child_tab_hover_alignment_and_pinning(page, tmp_path):
     KardenwortDB(db_path=db_path).run_migrations()
 
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({"triggers": {"run_text_translation": "manual", "run_lemma_base_translation": "manual", "run_lemma_enrichment": "manual"}})
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     if not config.has_section("storage"):
@@ -338,6 +351,7 @@ def test_playwright_child_tab_hover_alignment_and_pinning(page, tmp_path):
         encoding="utf-8"
     )
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), unique_zid, text, 'de', text_mode='single')
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -385,11 +399,13 @@ def test_playwright_unpunctuated_auto_subtitles_cue_alignment(page, tmp_path):
     )
 
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({"triggers": {"run_text_translation": "manual", "run_lemma_base_translation": "manual", "run_lemma_enrichment": "manual"}})
     config.set("sentences_mode", "enabled", "false")
     config.set(SEC_RENDERING, 'hover_highlight', 'true')
     config.set(SEC_RENDERING, 'hover_highlight_rainbow', 'true')
 
     subs_text = "welcome everyone\ntoday we are speaking"
+    seed_render_tsv(config, resolved_paths, tsv_path, '20260911000003', subs_text, 'en', text_mode='multi')
     html = run_render_flow(
         text=subs_text,
         language="en",
@@ -398,7 +414,7 @@ def test_playwright_unpunctuated_auto_subtitles_cue_alignment(page, tmp_path):
         config=config,
         resolved_paths=resolved_paths,
         theme="dark",
-        tsv_path=tsv_path
+        tsv_path='20260911000003'
     )
     page.set_content(html)
 
@@ -433,11 +449,13 @@ def test_coordinated_single_pass_pinning_and_table_coexistence(page, tmp_path):
     )
 
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({"triggers": {"run_text_translation": "manual", "run_lemma_base_translation": "manual", "run_lemma_enrichment": "manual"}})
     config.set(SEC_RENDERING, 'filter_selected_only', 'false')
     config.set(SEC_RENDERING, 'hover_highlight', 'true')
     config.set(SEC_RENDERING, 'hover_highlight_rainbow', 'true')
     config.set(SEC_RENDERING, 'hover_highlight_bookmarks', '3')
 
+    seed_render_tsv(config, resolved_paths, tsv_path, '20261004113000', 'Er fängt heute mit der Arbeit an.', 'de', text_mode='single')
     html = run_render_flow(
         text="Er fängt heute mit der Arbeit an.",
         language="de",
@@ -446,7 +464,7 @@ def test_coordinated_single_pass_pinning_and_table_coexistence(page, tmp_path):
         config=config,
         resolved_paths=resolved_paths,
         theme="dark",
-        tsv_path=tsv_path
+        tsv_path='20261004113000'
     )
     page.set_content(html)
     page.evaluate("""
@@ -527,11 +545,13 @@ def test_table_selected_token_click_deselection_and_two_step_esc(page, tmp_path)
     )
 
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({"triggers": {"run_text_translation": "manual", "run_lemma_base_translation": "manual", "run_lemma_enrichment": "manual"}})
     config.set(SEC_RENDERING, 'filter_selected_only', 'false')
     config.set(SEC_RENDERING, 'hover_highlight', 'true')
     config.set(SEC_RENDERING, 'hover_highlight_rainbow', 'true')
     config.set(SEC_RENDERING, 'hover_highlight_bookmarks', '3')
 
+    seed_render_tsv(config, resolved_paths, tsv_path, '20261004121500', 'Er fängt heute mit der Arbeit an.', 'de', text_mode='single')
     html = run_render_flow(
         text="Er fängt heute mit der Arbeit an.",
         language="de",
@@ -540,7 +560,7 @@ def test_table_selected_token_click_deselection_and_two_step_esc(page, tmp_path)
         config=config,
         resolved_paths=resolved_paths,
         theme="dark",
-        tsv_path=tsv_path
+        tsv_path='20261004121500'
     )
     page.set_content(html)
     page.evaluate("""
@@ -618,11 +638,13 @@ def test_table_selected_word_deselection_with_concurrent_active_text_bookmarks(p
     )
 
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({"triggers": {"run_text_translation": "manual", "run_lemma_base_translation": "manual", "run_lemma_enrichment": "manual"}})
     config.set(SEC_RENDERING, 'filter_selected_only', 'false')
     config.set(SEC_RENDERING, 'hover_highlight', 'true')
     config.set(SEC_RENDERING, 'hover_highlight_rainbow', 'true')
     config.set(SEC_RENDERING, 'hover_highlight_bookmarks', '4')
 
+    seed_render_tsv(config, resolved_paths, tsv_path, '20261004150559', 'Er fängt heute mit der Arbeit an, die ihm gefällt.', 'de', text_mode='single')
     html = run_render_flow(
         text="Er fängt heute mit der Arbeit an, die ihm gefällt.",
         language="de",
@@ -631,7 +653,7 @@ def test_table_selected_word_deselection_with_concurrent_active_text_bookmarks(p
         config=config,
         resolved_paths=resolved_paths,
         theme="dark",
-        tsv_path=tsv_path
+        tsv_path='20261004150559'
     )
     page.set_content(html)
     page.evaluate("""

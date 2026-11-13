@@ -1,6 +1,7 @@
 import sys
 import kardenwort_reword as reword
 from kardenwort_alignment import display_sentence_text
+from kardenwort_restore_projection import case_insensitive_fields
 from kardenwort_theme import resolve_theme_colors, theme_style
 
 import argparse
@@ -4062,6 +4063,7 @@ class SqliteStorageAdapter(StorageAdapter):
 
             # Preserve and append any unmapped custom columns found in extra_fields
             extra_headers = []
+            seen_headers = {header.lower() for header in headers}
             for word in db_words:
                 ef = word.get("extra_fields")
                 if isinstance(ef, str):
@@ -4074,9 +4076,11 @@ class SqliteStorageAdapter(StorageAdapter):
                         k_norm = k.strip().lower().replace("_", "")
                         if k_norm in ("extrafields", "occurrencedata"):
                             continue
-                        if not any(h.lower() == k.lower() for h in headers) and not any(eh.lower() == k.lower() for eh in extra_headers):
+                        if k.lower() not in seen_headers:
                             extra_headers.append(k)
+                            seen_headers.add(k.lower())
             headers.extend(extra_headers)
+            header_pairs = [(header, header.lower()) for header in headers]
 
             # Dynamic Context Reconstruction
             context_window_left = 1
@@ -4166,10 +4170,10 @@ class SqliteStorageAdapter(StorageAdapter):
                         extra_fields = json.loads(extra_fields)
                     except Exception:
                         extra_fields = {}
+                indexed_extra_fields = case_insensitive_fields(extra_fields)
 
                 row_cells = []
-                for h in headers:
-                    h_lower = h.lower()
+                for h, h_lower in header_pairs:
                     if h_lower == "quotation":
                         row_cells.append(str(word.get("quotation") or ""))
                     elif h_lower in ("wordsource", "lemma"):
@@ -4244,10 +4248,7 @@ class SqliteStorageAdapter(StorageAdapter):
                     else:
                         val = extra_fields.get(h)
                         if val is None:
-                            for k, v in extra_fields.items():
-                                if k.lower() == h_lower:
-                                    val = v
-                                    break
+                            val = indexed_extra_fields.get(h_lower)
                         row_cells.append(str(val) if val is not None else "")
 
                 data_rows.append(row_cells)

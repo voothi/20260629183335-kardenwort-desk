@@ -494,7 +494,6 @@ def test_sqlite_update_sentence_translation_rejects_non_positive_and_non_int_ind
 
 def test_progressive_translation_filters_full_text_from_overwriting_sentence_1(tmp_path, monkeypatch):
     import threading
-    from unittest.mock import MagicMock
     from kardenwort_controller import EnrichmentQueue
 
     db_path = tmp_path / "kardenwort.db"
@@ -544,6 +543,13 @@ def test_progressive_translation_filters_full_text_from_overwriting_sentence_1(t
         {"session_zid": session_zid, "sentence_index": 3, "sentence_source": s3, "sentence_destination": None},
     ]
 
+    Path(resolved_paths['anki_mapping_file']).write_text('[desk_columns]\nWordSource=lemma\nWordDestination=word_translation\nSentenceSourceIndex=sentence_index\nSentenceSource=sentence\nSentenceDestination=sentence_destination\n', encoding='utf-8')
+    headers.append('TokenOrder')
+    for row in data_rows:
+        row.append('0')
+    cfg.set('triggers', 'run_lemma_base_translation', 'manual')
+    cfg.set('triggers', 'run_lemma_enrichment', 'manual')
+
     adapter.save_session(
         session_zid=session_zid,
         slug="amazon-packages",
@@ -568,7 +574,7 @@ def test_progressive_translation_filters_full_text_from_overwriting_sentence_1(t
     monkeypatch.setattr("kardenwort_controller.translate_source_text", lambda *a, **kw: mock_payload)
 
     # Arbiter mock
-    arbiter = MagicMock()
+    arbiter = SessionArbiter(config=cfg, resolved_paths=resolved_paths)
     arbiter._lock = threading.Lock()
     arbiter.storage_adapter = adapter
     arbiter.config = cfg

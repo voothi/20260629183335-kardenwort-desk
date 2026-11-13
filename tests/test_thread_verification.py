@@ -21,7 +21,7 @@ def test_worker_failure_is_raised_by_test_thread():
 def test_unexpected_worker_failure_fails_pytest(tmp_path):
     # Execute an intentionally failing test in a separate pytest process.
     probe = tmp_path / 'test_worker_failure.py'
-    probe.write_text('import threading\n'
+    probe.write_text('import threading, configparser\n'
                      'from unittest.mock import patch\n'
                      'from kardenwort_desk import run_render_flow\n'
                      'from tests.thread_support import Worker\n'
@@ -34,7 +34,7 @@ def test_unexpected_worker_failure_fails_pytest(tmp_path):
                      '    def render(*args, **kwargs):\n'
                      '        return fail()\n'
                      '    def run():\n'
-                     '        return run_render_flow("text", "de", "failure-probe", "single", None, {})\n'
+                     '        return run_render_flow("text", "de", "failure-probe", "single", configparser.ConfigParser(), {})\n'
                      '    with patch("kardenwort_desk._run_render_flow_impl", side_effect=render):\n'
                      '        first = Worker(run)\n'
                      '        try:\n'

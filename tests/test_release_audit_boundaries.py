@@ -450,7 +450,7 @@ def test_select_switch_update_delayed_ack_reload_with_sqlite(page, tmp_path, run
     with page.expect_request('**/session/save'):
         page.locator('#lemma-table tr[data-row-id="1"]').click()
     page.wait_for_function('window.__heldSaveCount === 1')
-    assert pending[0].request.post_data_json['deltas'][0]['sentence_idx'] == 0
+    assert pending[0].request.post_data_json['deltas'][0]['sentence_idx'] == 2
     page.locator('.kw-tab-chip[data-tab-seq="2"]').click()
     page.locator('#lemma-table tr[data-row-id="0"]').click()
     page.evaluate("SSEBridge.connect('20261023223509'); __raceSSE.onmessage({data:JSON.stringify({stage:'translating'})})")
@@ -461,8 +461,8 @@ def test_select_switch_update_delayed_ack_reload_with_sqlite(page, tmp_path, run
         first.fulfill(response=first.fetch())
     page.wait_for_function('window.__heldSaveCount === 2')
     assert not any(request['updating'] for request in status)
-    # Shared selection writes overview and child identities (September 28 contract).
-    assert {delta['sentence_idx'] for delta in pending[0].request.post_data_json['deltas']} == {0, 1}
+    # Selection writes the stored sentence identity; overview is a projection.
+    assert {delta['sentence_idx'] for delta in pending[0].request.post_data_json['deltas']} == {1}
     with page.expect_request('**/session/status?*'):
         second = pending.pop(0)
         second.fulfill(response=second.fetch())

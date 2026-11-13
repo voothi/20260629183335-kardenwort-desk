@@ -1,5 +1,6 @@
 """Retained AHK command functions execute real HTTP; only tray drawing is replaced."""
 from pathlib import Path
+import os
 import subprocess
 
 import kardenwort_desk as desk
@@ -7,7 +8,7 @@ from kardenwort_state_runtime import preference_store
 from tests.test_preference_commands import preference_world  # noqa: F401
 
 
-NATIVE = Path(__file__).resolve().parents[2]/'20240411110510-autohotkey/kardenwort-window/kardenwort-window.ahk'
+NATIVE = Path(os.environ.get('KARDENWORT_NATIVE_REPO', Path(__file__).resolve().parents[2]/'20240411110510-autohotkey'))/'kardenwort-window/kardenwort-window.ahk'
 
 
 def ahk_function(source, name):

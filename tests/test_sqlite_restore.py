@@ -326,7 +326,7 @@ DeskSelected
 
 
 def test_sqlite_restore_legacy_tsv_fallback(tmp_path):
-    """Verifies that missing SQLite sessions fallback to reading legacy TSV from disk when fallback_to_tsv=True."""
+    """SQLite rejects implicit TSV fallback; explicit legacy reading is retained."""
     results_dir = tmp_path / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -343,7 +343,7 @@ def test_sqlite_restore_legacy_tsv_fallback(tmp_path):
 
     db_path = tmp_path / "fallback.db"
 
-    # 1. Fallback enabled (default)
+    # 1. The obsolete flag cannot reactivate implicit file ownership.
     router_fallback = StorageRouter(
         config=None,
         resolved_paths={
@@ -353,7 +353,11 @@ def test_sqlite_restore_legacy_tsv_fallback(tmp_path):
             "results_dir": results_dir,
         }
     )
-    restored = router_fallback.restore_session("20260816202409", results_dir=results_dir)
+    with pytest.raises(StructuredError) as enabled_error:
+        router_fallback.restore_session("20260816202409", results_dir=results_dir)
+    assert enabled_error.value.error_code == ErrorCode.NOT_FOUND
+    # Explicit legacy reading remains available without canonical fallback.
+    restored = tsv_adapter.restore_session("20260816202409", results_dir=results_dir)
     assert restored is not None
     assert restored["headers"] == headers
     assert restored["data_rows"] == data_rows
@@ -374,8 +378,9 @@ def test_sqlite_restore_legacy_tsv_fallback(tmp_path):
     assert exc_info.value.error_code == ErrorCode.NOT_FOUND
 
 
-def test_sqlite_performance_tracing(tmp_path):
-    """Verifies that TraceTimer instruments sqlite_save and sqlite_restore into speed_trace.jsonl."""
+def test_sqlite_performance_tracing(tmp_path, caplog):
+    """SQLite tracing records both phases through logging without a state file."""
+    caplog.set_level("INFO", logger="kardenwort.desk.performance")
     (tmp_path / "anki-mapping.ini").write_text("""[fields]
 Quotation
 WordSource
@@ -418,8 +423,9 @@ sqlite_db_path = {db_path.name}
     adapter.restore_session(session_zid)
 
     trace_file = results_dir / "speed_trace.jsonl"
-    assert trace_file.exists()
-    lines = [json.loads(line) for line in trace_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert not trace_file.exists()
+    lines = [json.loads(record.message) for record in caplog.records
+             if record.name == "kardenwort.desk.performance"]
 
     save_entries = [e for e in lines if e.get("phase") == "sqlite_save" and e.get("zid") == session_zid]
     assert len(save_entries) >= 1

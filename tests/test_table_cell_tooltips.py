@@ -1,3 +1,4 @@
+from tests.render_test_support import seed_render_tsv
 import html
 import pytest
 from kardenwort_desk import (
@@ -494,6 +495,7 @@ def test_inflected_column_gray_color_styling(page, tmp_path):
     """Verifies that INFLECTED column text is rendered in text_muted gray matching IPA and Morphology, while Lemma and Translation use main text color."""
     import kardenwort_desk
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    config.read_dict({"triggers": {"run_text_translation": "manual", "run_lemma_base_translation": "manual", "run_lemma_enrichment": "manual"}})
     zid = "20260913001500"
     tsv_file = tmp_path / f"{zid}-colors.de.tsv"
     tsv_content = (
@@ -503,6 +505,7 @@ def test_inflected_column_gray_color_styling(page, tmp_path):
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, 'Häuser', 'de', text_mode='single')
     html_code = kardenwort_desk.run_render_flow(
         text="Häuser",
         language="de",
@@ -547,6 +550,7 @@ def test_sentence_cards_inflected_tooltip_serialization(tmp_path):
     import re
     import kardenwort_desk
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({"triggers": {"run_text_translation": "manual", "run_lemma_base_translation": "manual", "run_lemma_enrichment": "manual"}})
     zid = "20261009193000"
     tsv_file = tmp_path / f"{zid}-test.en.tsv"
     tsv_content = (
@@ -556,6 +560,7 @@ def test_sentence_cards_inflected_tooltip_serialization(tmp_path):
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, 'All tasks are complete. tasks.md has been updated.', 'en', text_mode='single')
     html_code = kardenwort_desk.run_render_flow(
         text="All tasks are complete. tasks.md has been updated.",
         language="en",
@@ -604,6 +609,7 @@ def test_client_row_binding_preserves_numbered_tooltip_and_subtoken_isolation(pa
     """Verifies that client bindCardWordsToTbody and AppView.renderRow preserve multi-sentence numbered tooltips and do not clobber them with unformatted single-line text."""
     import kardenwort_desk
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({"triggers": {"run_text_translation": "manual", "run_lemma_base_translation": "manual", "run_lemma_enrichment": "manual"}})
     zid = "20261009193100"
     tsv_file = tmp_path / f"{zid}-slug.en.tsv"
     slug = "20261009000137-harden-bifurcated-failover-and-task-scoped-cooldowns"
@@ -613,6 +619,7 @@ def test_client_row_binding_preserves_numbered_tooltip_and_subtoken_isolation(pa
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
+    seed_render_tsv(config, resolved_paths, str(tsv_file), zid, f'All tasks are complete. You can archive with {slug}.', 'en', text_mode='single')
     html_code = kardenwort_desk.run_render_flow(
         text=f"All tasks are complete. You can archive with {slug}.",
         language="en",
