@@ -17,13 +17,20 @@
     function project(phase, error) {
         root.setAttribute('data-workspace-phase', phase);
         var workspace = document.querySelector('.kw-lookup-container');
-        if (workspace) workspace.inert = phase !== 'ready';
+        if (workspace) {
+            workspace.inert = phase !== 'ready';
+            workspace.setAttribute('aria-busy', String(phase === 'initializing'));
+        }
         var message = document.getElementById('kw-workspace-message');
         if (message) message.textContent = phase === 'failed' ? 'Workspace unavailable: '+error.message : 'Loading workspace...';
         if (phase === 'ready') readyMetadata();
     }
+    function isSelectionKey(event) {
+        if (root.getAttribute('data-workspace-scope') !== 'focus') return false;
+        return event.key === 'Alt' || event.key === 'Escape';
+    }
     function blockPendingKey(event) {
-        if (root.getAttribute('data-workspace-phase') === 'ready') return;
+        if (root.getAttribute('data-workspace-phase') === 'ready' || isSelectionKey(event)) return;
         if (event.target.closest && event.target.closest('dialog, #kw-workspace-status')) return;
         event.preventDefault(); event.stopImmediatePropagation();
     }
@@ -51,8 +58,10 @@
     }
     window.addEventListener('pagehide', suspend);
     window.addEventListener('pageshow', resume);
-    document.title = 'Kardenwort - Loading workspace';
-    if (icon) icon.setAttribute('href', '/favicon.ico');
+    if (root.getAttribute('data-workspace-scope') === 'cards') {
+        document.title = 'Kardenwort - Loading workspace';
+        if (icon) icon.setAttribute('href', '/favicon.ico');
+    }
     project('initializing');
     window.WorkspacePresentation = {project: project, bind: bind, dispose: dispose};
 })();

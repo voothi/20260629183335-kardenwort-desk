@@ -360,12 +360,16 @@ def test_view_read_deadline_offers_retry_without_guessing_a_card(sqlite_page):
 
 
 def test_initialization_functions_retain_the_branch_ceiling():
+    import ast
+    import inspect
     from pathlib import Path
     import re
     from tests.test_preference_js_structure import function_body
+    from tests.test_intent_architecture import complexity
+    assert complexity(ast.parse(inspect.getsource(desk.format_initial_card_translations)).body[0]) <= 7
     root = Path(__file__).resolve().parents[1]
     sources = {
-        'features/workspace-presentation.js': ['readyMetadata','project','blockPendingKey','retry','bind','resume','suspend','dispose'],
+        'features/workspace-presentation.js': ['readyMetadata','project','isSelectionKey','blockPendingKey','retry','bind','resume','suspend','dispose'],
         'features/sqlite-state.js': ['checkRun','readView','migrate','start','commitView','enqueueView','dispose','present'],
         'app.js': ['initialWorkspaceBusy','applyInitialWorkspaceStatus','probeInitialWorkspace','restoreClientView'],
         'components/WorkspaceTabs.js': ['metadataReady','projectActiveMetadata'],
@@ -375,3 +379,50 @@ def test_initialization_functions_retain_the_branch_ceiling():
         for name in names:
             body = function_body(source,name)
             assert 1+len(re.findall(r'\b(?:if|for|while|case|catch)\b|&&|\|\||\?',body)) <= 7, (path,name)
+
+
+@pytest.mark.parametrize('host', ['browser', 'native'])
+def test_single_card_keeps_safe_content_and_metadata_during_focus_restore(sqlite_page, host):
+    page, url, server, adapter, path = sqlite_page
+    page.goto(url+'/'); ready(page)
+    boot = json.loads(page.locator('#kardenwort-bootstrap').text_content())
+    boot['sentence_cards'] = []
+    source = page.locator('#source-container').inner_html()
+    html = desk.render_declarative_web_shell(boot, source_html=source,
+        page_title='Authoritative single-card title', favicon_href='/assets/numbers/3.ico')
+    if host == 'native':
+        page = page.context.new_page()
+        html = html.replace('<head>', '<head><script>window.ahkCall=function(){};</script>')
+    else:
+        page.context.route(url+'/', lambda route: route.fulfill(content_type='text/html',body=html))
+    held, writes = [], []
+    gate_phase = 'held'
+    def boundary(route):
+        if 'expected_revision' in route.request.post_data_json:
+            writes.append(route.request.post_data_json); route.continue_()
+        elif not held: held.append(route)
+        else: route.continue_()
+    page.route('**/api/v1/client-view', boundary)
+    try:
+        if host == 'native': page.set_content(html)
+        else: page.goto(url+'/')
+        page.wait_for_function('window.__stateReady !== undefined')
+        page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+        assert page.title() == 'Authoritative single-card title'
+        assert page.locator("link[rel='icon']").get_attribute('href') == '/assets/numbers/3.ico'
+        assert page.locator('#source-container').is_visible()
+        assert page.locator('#translation-container').is_visible()
+        assert page.locator('#kw-action-toolbar').is_visible()
+        assert page.locator('.kw-lookup-container').evaluate('(element) => element.inert')
+        page.keyboard.down('Alt')
+        assert page.evaluate("document.body.classList.contains('text-selection-mode-active')")
+        page.keyboard.up('Alt')
+        page.keyboard.press('Control+s')
+        held[0].continue_(); gate_phase = 'released'; ready(page)
+        assert not page.locator('.kw-lookup-container').evaluate('(element) => element.inert')
+        assert writes == []
+    finally:
+        if gate_phase == 'held':
+            for route in held: route.abort()
+        page.unroute_all(behavior='ignoreErrors')
+        if host == 'native': page.close()

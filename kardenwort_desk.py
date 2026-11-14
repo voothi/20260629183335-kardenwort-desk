@@ -8043,6 +8043,22 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
         return sentence_translations_raw.get(0, "")
     return None
 
+def format_initial_card_translations(cards, active_sentence, text_mode, config, pending_html, provenance_attrs):
+    chunks = []
+    children = sorted((card for card in cards if card["sentence_idx"] > 0), key=lambda card: card["sentence_idx"])
+    for card in children:
+        translated = card["translated_text"]
+        if not translated and card["sentence_idx"] == active_sentence:
+            rendered = pending_html
+        else:
+            rendered = format_translated_html(translated, text_mode=text_mode, text=card["source_text"], config=config)
+            rendered = rendered.replace("<div", f"<div{provenance_attrs}", 1)
+        if not rendered:
+            rendered = "<div></div>"
+        chunks.append(rendered.replace("<div", f'<div data-translation-sentence="{card["sentence_idx"]}"'))
+    return "".join(chunks)
+
+
 def format_translated_html(sentence_translations, text_mode="single", text="", config=None):
     if not sentence_translations:
         return ""
@@ -12573,12 +12589,8 @@ html, body {{
         active_seq_num = active_c["seq_num"]
         active_sentence = active_c["sentence_idx"]
         if active_sentence:
-            selected_translation = active_c.get("translated_text", "")
-            if not selected_translation and is_progressive and run_text == 'auto':
-                sentence_html = f'<div class="skeleton-loader" data-pending="true" title="{text_provider_label}">{text_provider_label}</div>'
-            else:
-                sentence_html = format_translated_html(selected_translation, text_mode=text_mode, text=active_c["source_text"], config=config)
-                sentence_html = sentence_html.replace("<div", f"<div{container_prov_attr}", 1)
+            pending_html = f'<div class="skeleton-loader" data-pending="true" title="{text_provider_label}">{text_provider_label}</div>' if is_progressive and run_text == 'auto' else ""
+            sentence_html = format_initial_card_translations(sentence_cards, active_sentence, text_mode, config, pending_html, container_prov_attr)
         if active_seq_num == 1:
             table_rows_html = "\n".join(w["row_html"] for w in overview_word_objs)
         else:
@@ -13686,13 +13698,13 @@ def render_declarative_web_shell(
 
     active_sentence = int(bootstrap_payload.get("active_sentence_idx", 0))
     base_html = base_html.replace('id="source-container"', f'id="source-container" data-active-sentence="{active_sentence}"')
-    if active_sentence:
-        base_html = base_html.replace('id="translation-container"', f'id="translation-container" data-sentence-idx="{active_sentence}" data-line-idx="0"')
     sentence_ids = {int(card["sentence_idx"]) for card in bootstrap_payload.get("sentence_cards", []) if card.get("sentence_idx", 0) > 0}
     source_rules = "\n".join(
         f'#source-container[data-active-sentence="{idx}"] > .kw-sentence-chunk:not([data-sentence-idx="{idx}"]) {{ display: none; }}'
         for idx in sorted(sentence_ids)
     )
+    if active_sentence:
+        source_rules += f'\n#translation-container > [data-translation-sentence]:not([data-translation-sentence="{active_sentence}"]) {{ display: none; }}'
     base_html = base_html.replace('</head>', f'<style id="kw-source-projection">{source_rules}</style></head>')
 
     # Toolbar and UI Config states
@@ -13737,7 +13749,9 @@ def render_declarative_web_shell(
     if ui_cfg.get("state_authority") == "sqlite" and not (mismatch_info and mismatch_info.get("is_mismatch")):
         presentation_js = read_required_asset(web_dir / "js/features/workspace-presentation.js")
         presentation_css = read_required_asset(web_dir / "css/workspace.css")
-        base_html = base_html.replace('</head>', f'<style>{presentation_css}</style><script>{presentation_js}</script></head>')
+        presentation_scope = "cards" if len(bootstrap_payload.get("sentence_cards", [])) > 1 else "focus"
+        scope_script = f'document.documentElement.setAttribute("data-workspace-scope", "{presentation_scope}");'
+        base_html = base_html.replace('</head>', f'<style>{presentation_css}</style><script>{scope_script}\n{presentation_js}</script></head>')
     if disable_css:
         base_html = re.sub(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
     else:

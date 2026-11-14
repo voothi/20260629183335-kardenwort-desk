@@ -92,4 +92,3 @@ def audio_server(tmp_path):
         signal_socket.close()
         assert not (tmp_path/'forbidden-cache').exists()
         assert set(private_media.glob('kardenwort-audio-*')) == previous_media
-
