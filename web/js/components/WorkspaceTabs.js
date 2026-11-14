@@ -534,53 +534,6 @@
             if (typeof w.ensureWatchdogActive === 'function') {
                 w.ensureWatchdogActive('tab-init');
             }
-
-            var isWebMode = (window.location.protocol !== 'file:') || (document.body && document.body.getAttribute('data-web-mode') === 'true');
-            var sessZidEl = document.getElementById('session-zid');
-            var curZid = sessZidEl ? (sessZidEl.textContent ||  (sessZidEl).innerText || "").trim() : "";
-            if (!curZid && w.AppState && w.AppState.bootstrap) {
-                curZid = w.AppState.bootstrap.session_zid || w.AppState.bootstrap.zid || (w.AppState.bootstrap.session_data && (w.AppState.bootstrap.session_data.session_zid || w.AppState.bootstrap.session_data.zid)) || "";
-            }
-            if (!curZid) {
-                var params = new URLSearchParams(window.location.search);
-                curZid = params.get('session_zid') || params.get('zid') || "";
-            }
-            if (!curZid && document.body && document.body.getAttribute('data-zid')) {
-                curZid = document.body.getAttribute('data-zid') || "";
-            }
-
-            var pendingCount = (typeof w.countPendingSkeletons === 'function') ? w.countPendingSkeletons() : 0;
-            if (isWebMode && curZid && cards && cards.length > 1 && pendingCount === 0) {
-                if (typeof fetch !== 'undefined') {
-                    var probeUrl = (typeof window.resolveBackendUrl === 'function')
-                        ? window.resolveBackendUrl("/session/status?zid=" + encodeURIComponent(curZid))
-                        : ("/session/status?zid=" + encodeURIComponent(curZid));
-                    var probeHeaders = { 'Accept': 'application/json' };
-                    var probeToken = (typeof window.getApiToken === 'function') ? window.getApiToken() : '';
-                    if (probeToken) probeHeaders['X-API-Token'] = probeToken;
-                    fetch(probeUrl, { method: 'GET', headers: probeHeaders })
-                        .then(function(res) { if (res.ok) return res.json(); throw new Error("probe failed"); })
-                        .then(function(resObj) {
-                            var sData = (resObj && resObj.data) ? resObj.data : resObj;
-                            if (sData) {
-                                var isBusy = ((sData.stage === 'translating' || (sData.status && sData.status.stage === 'translating') || sData.worker_status === 'running') &&
-                                    sData.is_finished !== true &&
-                                    (!sData.status || sData.status.is_finished !== true));
-                                if (isBusy) {
-                                    if (typeof w.initWatchdog === 'function') {
-                                        w.initWatchdog();
-                                    }
-                                }
-                                if ((sData.rows || sData.translatedText || sData.translated_text || sData.sentences) && w.receiveUpdate) {
-                                    w.receiveUpdate(sData);
-                                }
-                            }
-                        })
-                        .catch(function(err) {
-                            console.warn('[Kardenwort] Initial status fetch error in WorkspaceTabs.init:', err);
-                        });
-                }
-            }
         }
 
         function updateNavButtons() {
@@ -1080,6 +1033,7 @@
                 }
             }
             var srcContainer = document.getElementById('source-container');
+            if (srcContainer) srcContainer.setAttribute('data-active-sentence', String(activeSentenceIdx));
             var transContainer = document.getElementById('translation-container');
 
             if (activeSentenceIdx === 0) {
@@ -1213,10 +1167,19 @@
             }
         }
 
-        /**
-         * @param {WorkspaceCard} targetCard
-         */
+        function metadataReady() {
+            var phase = document.documentElement.getAttribute('data-workspace-phase');
+            return !phase || phase === 'ready';
+        }
+
+        function projectActiveMetadata() {
+            var card = getActiveCard();
+            if (card) { updateTitle(card); updateFavicon(card.seq_num); }
+        }
+
+        /** @param {WorkspaceCard} targetCard */
         function updateTitle(targetCard) {
+            if (!metadataReady()) return;
             var w = (window);
             var lang = '';
             try {
@@ -1246,6 +1209,7 @@
          * @param {number|null} seq
          */
         function updateFavicon(seq) {
+            if (!metadataReady()) return;
             var num = (seq !== null && seq >= 1 && seq <= 99) ? seq : 1;
             var iconUrl = '/assets/numbers/' + num + '.ico';
             var links = document.querySelectorAll("link[rel*='icon']");
@@ -1420,6 +1384,7 @@
             prevTab: prevTab,
             getActiveTabSeq: getActiveTabSeq,
             getActiveCard: getActiveCard,
+            projectActiveMetadata: projectActiveMetadata,
             getActiveSentenceIdx: function() { return activeSentenceIdx; },
             getCards: getCards,
             getTranslationHtml: getTranslationHtml,

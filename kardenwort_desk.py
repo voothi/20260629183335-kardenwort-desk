@@ -12013,15 +12013,13 @@ html, body {{
         child_sentence_translations = {}
         if 'translated_sentences' in locals() and translated_sentences and len(translated_sentences) == len(source_sentences):
             for i, st in enumerate(translated_sentences):
-                if st and str(st).strip() and str(st).strip().lower() != 'none':
-                    child_sentence_translations[i] = str(st).strip()
+                child_sentence_translations[i] = str(st or "").strip() if str(st).strip().lower() != 'none' else ""
 
         if len(child_sentence_translations) < len(source_sentences) and db_sents:
             for s in db_sents:
                 s_i = s.get("sentence_index", 1) - 1
-                s_d = str(s.get("sentence_destination", "")).strip()
-                if s_d and s_d.lower() != 'none' and s_i not in child_sentence_translations:
-                    child_sentence_translations[s_i] = s_d
+                s_d = str(s.get("sentence_destination") or "").strip()
+                child_sentence_translations.setdefault(s_i, s_d if s_d.lower() != 'none' else "")
 
         if len(child_sentence_translations) < len(source_sentences):
             for i in range(len(source_sentences)):
@@ -12571,10 +12569,19 @@ html, body {{
             active_seq_num = 2 if 2 in valid_seqs else 1
 
     if smc.delivery_mode == "container" and len(sentence_cards) > 1 and not is_mismatch:
+        active_c = next((c for c in sentence_cards if c["seq_num"] == active_seq_num), sentence_cards[0])
+        active_seq_num = active_c["seq_num"]
+        active_sentence = active_c["sentence_idx"]
+        if active_sentence:
+            selected_translation = active_c.get("translated_text", "")
+            if not selected_translation and is_progressive and run_text == 'auto':
+                sentence_html = f'<div class="skeleton-loader" data-pending="true" title="{text_provider_label}">{text_provider_label}</div>'
+            else:
+                sentence_html = format_translated_html(selected_translation, text_mode=text_mode, text=active_c["source_text"], config=config)
+                sentence_html = sentence_html.replace("<div", f"<div{container_prov_attr}", 1)
         if active_seq_num == 1:
             table_rows_html = "\n".join(w["row_html"] for w in overview_word_objs)
         else:
-            active_c = next((c for c in sentence_cards if c["seq_num"] == active_seq_num), None)
             if active_c and active_c.get("words"):
                 table_rows_html = "\n".join(w["row_html"] for w in active_c["words"])
             elif active_c and active_c.get("words") is not None and len(active_c.get("words")) == 0:
@@ -12690,6 +12697,7 @@ html, body {{
     eff_prov = sentence_provenance if (has_real_text and not is_mismatch and sentence_provenance) else ""
     bootstrap_payload = {
         "ui_config": ui_cfg,
+        "active_sentence_idx": active_c["sentence_idx"] if smc.delivery_mode == "container" and len(sentence_cards) > 1 and not is_mismatch else 0,
         "theme_colors": resolve_theme_colors(config, theme),
         "sentence_cards": sentence_cards,
         "delivery_mode": smc.delivery_mode,
@@ -13658,7 +13666,7 @@ def render_declarative_web_shell(
 
         if sentence_html:
             base_html = base_html.replace('<!-- TRANSLATION_TEXT -->', sentence_html)
-        elif bootstrap_payload.get("sentence_translation"):
+        elif bootstrap_payload.get("sentence_translation") and not bootstrap_payload.get("active_sentence_idx"):
             base_html = base_html.replace('<!-- TRANSLATION_TEXT -->', html.escape(str(bootstrap_payload.get("sentence_translation", ""))))
         else:
             base_html = base_html.replace('<!-- TRANSLATION_TEXT -->', '')
@@ -13675,6 +13683,17 @@ def render_declarative_web_shell(
             base_html = base_html.replace('<!-- TABLE_ROWS -->', table_rows_html)
         else:
             base_html = base_html.replace('<!-- TABLE_ROWS -->', '')
+
+    active_sentence = int(bootstrap_payload.get("active_sentence_idx", 0))
+    base_html = base_html.replace('id="source-container"', f'id="source-container" data-active-sentence="{active_sentence}"')
+    if active_sentence:
+        base_html = base_html.replace('id="translation-container"', f'id="translation-container" data-sentence-idx="{active_sentence}" data-line-idx="0"')
+    sentence_ids = {int(card["sentence_idx"]) for card in bootstrap_payload.get("sentence_cards", []) if card.get("sentence_idx", 0) > 0}
+    source_rules = "\n".join(
+        f'#source-container[data-active-sentence="{idx}"] > .kw-sentence-chunk:not([data-sentence-idx="{idx}"]) {{ display: none; }}'
+        for idx in sorted(sentence_ids)
+    )
+    base_html = base_html.replace('</head>', f'<style id="kw-source-projection">{source_rules}</style></head>')
 
     # Toolbar and UI Config states
     ui_cfg = bootstrap_payload.get("ui_config", {})
@@ -13715,6 +13734,10 @@ def render_declarative_web_shell(
 
     # Inlined modular CSS and components for offline WebView2 execution
     web_dir = Path(__file__).resolve().parent / "web"
+    if ui_cfg.get("state_authority") == "sqlite" and not (mismatch_info and mismatch_info.get("is_mismatch")):
+        presentation_js = read_required_asset(web_dir / "js/features/workspace-presentation.js")
+        presentation_css = read_required_asset(web_dir / "css/workspace.css")
+        base_html = base_html.replace('</head>', f'<style>{presentation_css}</style><script>{presentation_js}</script></head>')
     if disable_css:
         base_html = re.sub(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
     else:

@@ -1,0 +1,13 @@
+/* Keep unknown client-specific content out of first paint without a layout swap. */
+#kw-workspace-status { display: none; }
+html[data-workspace-phase="initializing"] .kw-lookup-container,
+html[data-workspace-phase="failed"] .kw-lookup-container,
+html[data-workspace-phase="disposed"] .kw-lookup-container { visibility: hidden; pointer-events: none; }
+html[data-workspace-phase="initializing"] #kw-workspace-status,
+html[data-workspace-phase="failed"] #kw-workspace-status {
+    display: block; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    font-family: var(--font-sans); color: var(--text-main); z-index: 1000;
+}
+#kw-workspace-retry { visibility: hidden; }
+html[data-workspace-phase="failed"] #kw-workspace-retry { visibility: visible; }
+.kw-workspace-loading { background: var(--skeleton-bg); color: var(--skeleton-text); border-radius: var(--radius-sm); }

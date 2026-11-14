@@ -1,6 +1,7 @@
 /** SQLite preference/view ownership. Browser storage is read only for import. */
 (function () {
     var preferenceKeys = ['highlight_same_lemma', 'filter_selected_only'];
+    var viewReadDeadlineMs = 30000;
     function restoreOccurrences(items, manifest) {
         return items.map(function(item) {
             var matches = manifest.filter(function(token) {
@@ -55,8 +56,8 @@
         if (raw !== 'true' && raw !== 'false') throw new Error('Invalid saved browser preference');
         return raw === 'true';
     }
-    function importDialog(send, body, current) {
-        return new Promise(function(resolve) {
+    function importDialog(send, body, current, signal) {
+        return new Promise(function(resolve, reject) {
             var dialog = document.createElement('dialog');
             var message = document.createElement('p'), preview = document.createElement('pre');
             var accept = document.createElement('button'), keep = document.createElement('button');
@@ -67,8 +68,11 @@
             function finish(payload) {
                 accept.disabled = true; keep.disabled = true;
                 send('/api/v1/browser-state/import', payload).then(function(result) {
+                    if (signal.aborted) return;
+                    signal.removeEventListener('abort', cancel);
                     dialog.close(); dialog.remove(); resolve(result);
                 }, function(error) {
+                    if (signal.aborted) return;
                     message.textContent = 'Import not saved: '+error.message+'. Review and choose again.';
                     if (error.current) {
                         body.revisions = error.current.revisions;
@@ -81,6 +85,8 @@
             keep.onclick = function() { finish({session_zid: body.session_zid, client_id: body.client_id, preferences: {}, revisions: {}}); };
             dialog.addEventListener('cancel', function(event) { event.preventDefault(); });
             [message, preview, accept, keep].forEach(function(element) { dialog.appendChild(element); });
+            function cancel() { dialog.remove(); reject(new Error('Workspace restoration cancelled')); }
+            signal.addEventListener('abort', cancel, {once:true});
             document.body.appendChild(dialog); dialog.showModal();
         });
     }
@@ -97,40 +103,87 @@
         }
         return view;
     }
-    function readView(state) { return state.options.send('/api/v1/client-view', viewBody(state)).then(requireView); }
-    function migrate(state, view) {
+    function checkRun(state, run) {
+        if (state.run !== run || run.signal.aborted) throw new Error('Workspace restoration cancelled');
+    }
+    function readView(state, run) {
+        checkRun(state, run);
+        run.deadline = setTimeout(function() { run.abort(new Error('Workspace read timed out. Retry to reconnect.')); }, viewReadDeadlineMs);
+        return state.options.send('/api/v1/client-view', viewBody(state), undefined, run.signal).then(function(view) {
+            checkRun(state, run); return requireView(view);
+        }).finally(function() {
+            clearTimeout(run.deadline);
+        });
+    }
+    function migrate(state, run, view) {
+        checkRun(state, run);
         if (view.browser_imported) { clearLegacy(state.options.zid); return; }
         var legacy = readLegacy(state.options.zid);
         if (!Object.keys(legacy.preferences).length && !legacy.view) return;
         if (legacy.view) legacy.view.expected_revision = view.revision;
         var body = Object.assign(viewBody(state), legacy, {revisions: Object.assign({}, state.revisions)});
-        return importDialog(state.options.send, body, {values: state.options.ui}).then(function(result) {
-            receive(state, result); clearLegacy(state.options.zid);
+        function send(path, payload) { return state.options.send(path, payload, undefined, run.signal); }
+        return importDialog(send, body, {values: state.options.ui}, run.signal).then(function(result) {
+            checkRun(state, run); receive(state, result); clearLegacy(state.options.zid);
         });
     }
+    function present(state, phase, error) {
+        if (state.options.present) state.options.present(phase, error);
+    }
+    function dispose(state) {
+        if (state.run) { clearTimeout(state.run.deadline); state.run.abort(); }
+        state.run = null; state.phase = 'disposed';
+    }
     function start(state) {
-        if (state.phase === 'draft') { state.ready = Promise.resolve(); return state.ready; }
-        if (!state.enabled) { state.phase = 'static'; return Promise.resolve(); }
-        state.ready = readView(state).then(migrate.bind(null, state)).then(readView.bind(null, state)).then(function(view) {
-            state.viewRevision = view.revision;
-            state.options.restore(view);
-            state.phase = 'ready';
-        });
-        state.ready.catch(reportFailure.bind(null, state));
+        dispose(state);
+        if (!state.enabled || state.options.draft) {
+            state.phase = state.options.draft ? 'draft' : 'static';
+            present(state, 'ready'); state.ready = Promise.resolve(); return state.ready;
+        }
+        var run = new AbortController(); state.run = run;
+        state.phase = 'initializing'; state.failure = null; state.tail = Promise.resolve();
+        present(state, 'initializing');
+        state.ready = readView(state, run).then(migrate.bind(null, state, run))
+            .then(readView.bind(null, state, run)).then(function(view) {
+                checkRun(state, run); state.viewRevision = view.revision;
+                var reconcile = state.options.restore(view);
+                if (reconcile) return commitView(state, state.options.capture(), run);
+            }).then(function() {
+                checkRun(state, run); state.phase = 'ready'; present(state, 'ready');
+            }).catch(function(error) {
+                if (state.run === run) {
+                    reportFailure(state, error); present(state, 'failed', error);
+                }
+                throw error;
+            });
+        state.ready.then(undefined, function(error) { console.debug('[Workspace] Restoration stopped:', error.message); });
         return state.ready;
+    }
+    function commitView(state, intent, run) {
+        return state.options.send('/api/v1/client-view', Object.assign(viewBody(state), intent,
+            {expected_revision: state.viewRevision}), undefined, run.signal).then(requireView).then(function(view) {
+                checkRun(state, run); state.viewRevision = view.revision;
+            });
     }
     function reportFailure(state, error) {
         state.phase = 'failed'; state.failure = error; state.options.failure(error);
     }
     function save(state) {
         if (!state.enabled || state.phase === 'draft') return Promise.resolve();
-        var intent = state.options.capture();
+        if (state.phase === 'initializing') return state.ready;
+        if (state.phase === 'disposed') return Promise.resolve();
+        return enqueueView(state, state.options.capture());
+    }
+    function enqueueView(state, intent) {
+        var run = state.run;
         state.tail = state.tail.then(function() { return state.ready; }).then(function() {
+            if (state.run !== run) throw new Error('Workspace save belongs to an inactive document');
             state.phase = 'pending';
             return state.options.send('/api/v1/client-view', Object.assign(viewBody(state), intent, {expected_revision: state.viewRevision}));
         }).then(requireView).then(function(view) {
+            if (state.run !== run) return;
             state.viewRevision = view.revision; state.phase = 'ready'; state.failure = null;
-        }, reportFailure.bind(null, state));
+        }, function(error) { if (state.run === run) reportFailure(state, error); });
         return state.tail;
     }
     function flush(state) {
@@ -167,11 +220,11 @@
         });
     }
     function create(options) {
-        var enabled = options.ui.state_authority === 'sqlite';
+        var enabled = options.ui.state_authority === 'sqlite' && options.connected !== false;
         var state = {options: options, enabled: enabled, client: enabled && !options.draft ? clientSlot() : null,
             revisions: Object.assign({}, options.ui.preference_revisions || {}), viewRevision: 0,
             phase: options.draft ? 'draft' : 'initializing', failure: null, tail: Promise.resolve(), ready: null};
-        return {start: start.bind(null, state), save: save.bind(null, state), flush: flush.bind(null, state),
+        return {start: start.bind(null, state), dispose: dispose.bind(null, state), save: save.bind(null, state), flush: flush.bind(null, state),
             sendPreference: sendPreference.bind(null, state), receive: receive.bind(null, state)};
     }
     window.SqliteState = {create: create, restoreOccurrences: restoreOccurrences};

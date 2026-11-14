@@ -3711,6 +3711,25 @@
             return pending.promise;
         }
 
+        function initialWorkspaceBusy(data) {
+            return (data.stage === 'translating' || (data.status && data.status.stage === 'translating') || data.worker_status === 'running') &&
+                data.is_finished !== true && (!data.status || data.status.is_finished !== true);
+        }
+
+        function applyInitialWorkspaceStatus(response) {
+            if (!response.ok) throw new Error('Initial workspace status unavailable');
+            var data = response.data.data || response.data;
+            if (initialWorkspaceBusy(data)) window.initWatchdog();
+            window.receiveUpdate(data);
+        }
+
+        function probeInitialWorkspace() {
+            if (isServerDisabled() || window.WorkspaceTabs.getCards().length < 2 || window.countPendingSkeletons() !== 0) return;
+            readSessionStatus(getSessionZid(), {method: 'GET'}).then(applyInitialWorkspaceStatus).catch(function(error) {
+                if (error.name !== 'StaleStatusRead') console.warn('[Workspace] Initial status read failed:', error);
+            });
+        }
+
         function fetchSessionStatus(session, options) {
             options = Object.assign({}, options, {headers: backendHeaders(options && options.headers)});
             var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
@@ -10614,14 +10633,15 @@
             var cards = window.WorkspaceTabs.getCards();
             var available = viewCardAvailable(cards, view.active_card);
             if (view.revision > 0) window.WorkspaceTabs.switchToTab(available ? view.active_card : 1, true);
-            var restored = window.SqliteState.restoreOccurrences(view.active_tokens, tokenMap);
+            var restored = available ? window.SqliteState.restoreOccurrences(view.active_tokens, tokenMap) : [];
             window.AppState.restoredActiveTokens = restored;
             restoreActiveTokenFocus();
             syncSelectionsToCardsAndState(); updateRowStyles(); updateBidirectionalHighlights();
             if (view.cleared || !available || restored.length !== view.active_tokens.length) {
                 window.showToast('Unavailable view focus was cleared', 'warning');
-                window.saveClientView();
+                return true;
             }
+            return false;
         }
         var preferenceButtons = {
             highlight_same_lemma: 'kw-btn-same-lemma', filter_selected_only: 'kw-btn-filter-selected'
@@ -10641,8 +10661,8 @@
             if (phase === 'failed') window.showToast('Preference not saved: ' + error.message, 'error');
         }
         var stateClient;
-        function stateRequest(path, body, method) {
-            return fetch(resolveBackendUrl(path), {method: method || 'POST',
+        function stateRequest(path, body, method, signal) {
+            return fetch(resolveBackendUrl(path), {method: method || 'POST', signal: signal,
                 headers: {'Content-Type': 'application/json', 'X-API-Token': getApiToken()},
                 body: JSON.stringify(body)}).then(function(response) {
                 return response.json().then(function(payload) {
@@ -10954,13 +10974,17 @@
             window.rebindMVPBookmarks();
         }
         stateClient = window.SqliteState.create({ui: window.__CONFIG__ || {}, zid: getSessionZid(), send: stateRequest,
+            connected: location.protocol !== 'about:' || SERVER_ENABLED || !!window.API_TOKEN,
             draft: !!(bData && bData.mismatch_info && bData.mismatch_info.is_mismatch),
             current: preferenceCommands.current, unresolved: preferenceCommands.unresolved,
+            present: window.WorkspacePresentation && window.WorkspacePresentation.project,
             failure: function(error) { window.showToast('View state not saved: '+error.message, 'error'); },
             project: projectCommittedPreference, capture: captureClientView, restore: restoreClientView});
         window.receivePreferenceSnapshot = stateClient.receive;
         window.saveClientView = stateClient.save;
+        if (window.WorkspacePresentation) window.WorkspacePresentation.bind(stateClient);
         window.__stateReady = stateClient.start();
+        probeInitialWorkspace();
         resumeMountedStream();
     }
 
