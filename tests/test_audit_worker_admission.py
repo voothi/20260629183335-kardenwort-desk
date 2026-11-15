@@ -22,6 +22,8 @@ import pytest
 owner, source, mode, target = sys.argv[1:]
 sys.path.append(str(Path.cwd()))
 sys.path.insert(0, str(Path(source).parent))
+import kardenwort_desk
+assert Path(kardenwort_desk.__file__).resolve() == Path(source).resolve()
 from scripts import run_dict_transport_audit as audit
 audit.OUT = Path(owner)
 command = [sys.executable, source, 'progressive-worker', '--tsv', target,

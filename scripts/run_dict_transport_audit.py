@@ -17,7 +17,9 @@ import urllib.parse
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
+# A worker child has already selected its runtime; other callers need the audit
+# checkout ahead of an ambient working directory, even if PYTHONPATH lists it.
+if 'kardenwort_desk' not in sys.modules:
     sys.path.insert(0, str(ROOT))
 OUT = None
 REVISION = None
