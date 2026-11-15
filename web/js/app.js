@@ -5099,44 +5099,22 @@
         }
 
         function restoreActiveTokenFocus() {
-            try {
-                var items = window.AppState.restoredActiveTokens || [];
-                window.AppState.restoredActiveTokens = [];
-                var raw = items.length > 0;
-                if (raw) {
-                    if (Array.isArray(items) && items.length > 0) {
-                        if (!window.AppState) window.AppState = {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
-                        window.AppState.activeTokenSelections = items;
-                        if (!window.AppState.selectedLemmas) window.AppState.selectedLemmas = {};
-                        for (var i = 0; i < items.length; i++) {
-                            var it = items[i];
-                            if (it.lemma) {
-                                var normLem = String(it.lemma).trim().toLowerCase();
-                                if (normLem) {
-                                    window.AppState.selectedLemmas[normLem] = true;
-                                }
-                            }
-                            if (it.atomic_id !== null && it.atomic_id !== undefined) {
-                                selectedRowIdsMap[String(it.atomic_id)] = true;
-                            }
-                            if (it.atomic_row_ids && Array.isArray(it.atomic_row_ids)) {
-                                for (var r = 0; r < it.atomic_row_ids.length; r++) {
-                                    if (it.atomic_row_ids[r] !== null && it.atomic_row_ids[r] !== undefined) {
-                                        selectedRowIdsMap[String(it.atomic_row_ids[r])] = true;
-                                    }
-                                }
-                            }
-                            if (it.row_ids && Array.isArray(it.row_ids)) {
-                                for (var r = 0; r < it.row_ids.length; r++) {
-                                    if (it.row_ids[r] !== null && it.row_ids[r] !== undefined) {
-                                        selectedRowIdsMap[String(it.row_ids[r])] = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
+            if (!Array.isArray(window.AppState.restoredActiveTokens)) return;
+            window.AppState.activeTokenSelections = window.AppState.restoredActiveTokens;
+            delete window.AppState.restoredActiveTokens;
+            window.AppState.activeTokenSelections.forEach(restorePendingTokenSelection);
+        }
+
+        function markRestoredSelection(rowId) {
+            if (rowId !== null && rowId !== undefined) selectedRowIdsMap[String(rowId)] = true;
+        }
+
+        function restorePendingTokenSelection(item) {
+            var lemma = String(item.lemma || '').trim().toLowerCase();
+            if (lemma) window.AppState.selectedLemmas[lemma] = true;
+            markRestoredSelection(item.atomic_id);
+            (item.atomic_row_ids || []).forEach(markRestoredSelection);
+            (item.row_ids || []).forEach(markRestoredSelection);
         }
 
         function clearTokenSelections() {
@@ -10657,6 +10635,7 @@
             }
         }
         function projectPreferenceStatus(key, phase, value, error) {
+            if (phase === 'saved') stateClient.projectPreference(key);
             projectPreferenceFeedback(key, phase);
             if (phase === 'failed') window.showToast('Preference not saved: ' + error.message, 'error');
         }

@@ -203,7 +203,7 @@
                 value: String(value), expected_revision: state.revisions[key]});
         }).then(function(result) {
             if (state.enabled) requirePreferenceAck(result, key, value);
-            state.revisions[key] = result.revision;
+            acceptPreference(state, key, result.committed_value, result.revision);
             return result;
         }).catch(reconcileFailure.bind(null, state));
     }
@@ -211,21 +211,28 @@
         if (result.key !== key || result.committed_value !== value) throw new Error('Preference value was not acknowledged');
         if (!Number.isInteger(result.revision) || result.revision < 1) throw new Error('Invalid committed preference revision');
     }
+    function acceptPreference(state, key, value, revision) {
+        if (!Number.isInteger(revision) || revision < 0) throw new Error('Invalid committed preference revision');
+        if (revision < state.revisions[key]) return;
+        if (revision === state.revisions[key] && value !== state.values[key]) throw new Error('Conflicting committed preference revision');
+        state.revisions[key] = revision; state.values[key] = value;
+    }
+    function projectPreference(state, key) {
+        state.options.project(key, state.values[key]);
+    }
     function receive(state, snapshot) {
         Object.keys(snapshot.values).forEach(function(key) {
-            if (snapshot.revisions[key] < (state.revisions[key] || 0)) return;
-            state.revisions[key] = snapshot.revisions[key];
-            if (state.options.unresolved(key)) return;
-            state.options.project(key, snapshot.values[key]);
+            acceptPreference(state, key, snapshot.values[key], snapshot.revisions[key]);
+            if (!state.options.unresolved(key)) projectPreference(state, key);
         });
     }
     function create(options) {
         var enabled = options.ui.state_authority === 'sqlite' && options.connected !== false;
         var state = {options: options, enabled: enabled, client: enabled && !options.draft ? clientSlot() : null,
-            revisions: Object.assign({}, options.ui.preference_revisions || {}), viewRevision: 0,
+            revisions: Object.assign({}, options.ui.preference_revisions || {}), values: Object.assign({}, options.ui), viewRevision: 0,
             phase: options.draft ? 'draft' : 'initializing', failure: null, tail: Promise.resolve(), ready: null};
         return {start: start.bind(null, state), dispose: dispose.bind(null, state), save: save.bind(null, state), flush: flush.bind(null, state),
-            sendPreference: sendPreference.bind(null, state), receive: receive.bind(null, state)};
+            sendPreference: sendPreference.bind(null, state), receive: receive.bind(null, state), projectPreference: projectPreference.bind(null, state)};
     }
     window.SqliteState = {create: create, restoreOccurrences: restoreOccurrences};
 })();
