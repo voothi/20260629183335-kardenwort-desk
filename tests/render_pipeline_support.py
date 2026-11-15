@@ -44,6 +44,7 @@ def overlapping_pipeline(tmp_path):
         with controller_lifetime(tmp_path, translator) as (_, server):
             server.config.set('services', 'spacy_server_url', f'http://127.0.0.1:{tokenizer.server_port}')
             configure_render_pipeline(server)
+            server.render_preparation_rendezvous = rendezvous
             try:
                 yield server, observed
             finally:

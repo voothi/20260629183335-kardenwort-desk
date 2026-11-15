@@ -1,18 +1,14 @@
 from kardenwort_desk import run_render_flow
 import pytest
-import time
 import kardenwort_desk
 from tests.render_pipeline_support import overlapping_pipeline
 
-def test_parallel_execution_time(overlapping_pipeline):
+def test_parallel_execution_overlaps_real_engines(overlapping_pipeline):
     server, observed = overlapping_pipeline
     config, resolved_paths = server.config, server.resolved_paths
-    start_time = time.time()
     html = run_render_flow('Hello world. Another sentence.', 'en', '20261111135900', 'single',
                            config, resolved_paths, spawn_children=False, wordfill_cfg={'enabled': False})
-    end_time = time.time()
-    duration = end_time - start_time
-    assert duration < 1.5, f"Execution was too slow: {duration}s, expected parallel execution (~1.0s)"
+    assert not server.render_preparation_rendezvous.broken, 'Extraction and translation did not overlap'
     assert observed == {'extraction', 'translation'}
     assert 'Hello' in html and 'Another' in html
     cold = kardenwort_desk.SqliteStorageAdapter(config, resolved_paths)
