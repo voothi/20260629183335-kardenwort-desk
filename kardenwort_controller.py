@@ -1313,7 +1313,7 @@ class EnrichmentQueue:
 
             # Emit initial source stage if not already emitted
             sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=session_zid, trace_id=eff_trace_id, config=self.config)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=session_zid, trace_id=eff_trace_id, config=self.config, resolved_paths=self.resolved_paths, storage_adapter=storage_adapter)
             arbiter.emit_event(session_zid, {
                 "type": "stage",
                 "stage": "source",
@@ -1427,7 +1427,7 @@ class EnrichmentQueue:
                     translated_html = format_translated_html(sentence_translations_raw, text_mode=text_mode, text=text, config=self.config)
                     sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                     structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov, sentences=sentences_list, provider=eff_tp_name, config=self.config)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov, sentences=sentences_list, provider=eff_tp_name, config=self.config, resolved_paths=self.resolved_paths, storage_adapter=storage_adapter)
                     arbiter.emit_event(session_zid, {
                         "type": "update",
                         "stage": "translated_text",
@@ -1452,7 +1452,7 @@ class EnrichmentQueue:
                     active_text_prov = None
                     sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                     structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text="", text_translation_status="failed", text_translation_failed=True, config=self.config)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text="", text_translation_status="failed", text_translation_failed=True, config=self.config, resolved_paths=self.resolved_paths, storage_adapter=storage_adapter)
                     arbiter.emit_event(session_zid, {
                         "type": "update",
                         "stage": "translated_text",
@@ -1619,7 +1619,7 @@ class EnrichmentQueue:
 
                 sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                 structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields, row_provenances=sess_row_provs)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov, row_provenances=sess_row_provs, config=self.config)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov, row_provenances=sess_row_provs, config=self.config, resolved_paths=self.resolved_paths, storage_adapter=storage_adapter)
                 trans_event = {
                     "type": "update",
                     "stage": "translated",
@@ -1710,7 +1710,7 @@ class EnrichmentQueue:
             structured_rows = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=fin_row_provs) if (data_rows and headers and role_fields) else {}
             if tsv_path and data_rows and headers:
                 sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov, row_provenances=fin_row_provs, config=self.config)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov, row_provenances=fin_row_provs, config=self.config, resolved_paths=self.resolved_paths, storage_adapter=storage_adapter)
 
             finished_event = {
                 "type": "update",
@@ -2217,7 +2217,7 @@ class SessionArbiter:
         payload = {key: result[key] for key in ('status', 'session_zid', 'fingerprint', 'data_rows', 'translated_text', 'translatedText', 'text_provenance', 'textProvenance', 'active_text_provider')}
         payload.update(sentences=sentences, active_provider=result['active_text_provider'], rows=format_update_rows_dict(rows, result['headers'], result['role_fields']))
         try:
-            safe_write_update_js(result['tsv_path'], rows, result['headers'], result['role_fields'], stage='finished', status='success', source_text='', translated_text=result['translated_text'], sentences=sentences, zid=result['session_zid'], config=self.config)
+            safe_write_update_js(result['tsv_path'], rows, result['headers'], result['role_fields'], stage='finished', status='success', source_text='', translated_text=result['translated_text'], sentences=sentences, zid=result['session_zid'], config=self.config, resolved_paths=self.resolved_paths)
             self.emit_event(result['session_zid'], dict(payload, type='update', stage='translated_text'))
         except Exception as exc:
             raise StructuredError(ErrorCode.DESK_FAILED, 'Re-text committed; update delivery failed', details={'committed': True, 'session_zid': result['session_zid'], 'fingerprint': result['fingerprint'], 'recovery_url': f"/session/status?zid={result['session_zid']}&committed=1"}) from exc
@@ -2613,7 +2613,7 @@ class SessionArbiter:
                 stage="finished",
                 status="success",
                 zid=session_zid,
-                config=self.config,
+                config=self.config, resolved_paths=self.resolved_paths, storage_adapter=storage_adapter,
                 class_cols=class_cols if class_cols else None,
                 row_provenances=existing_row_provs,
                 row_occurrences=row_occurrences,
@@ -2766,7 +2766,7 @@ class SessionArbiter:
                     row_provenances=row_provenances, occurrence_provenances=occurrence_provenances)
                 if not is_sqlite and sib_tsv:
                     safe_write_update_js(sib_tsv, sorted_rows, headers, role_fields, stage="translated", zid=sib_zid,
-                        config=self.config, row_provenances=row_provenances, occurrence_provenances=occurrence_provenances)
+                        config=self.config, resolved_paths=self.resolved_paths, storage_adapter=storage_adapter, row_provenances=row_provenances, occurrence_provenances=occurrence_provenances)
                 self.emit_event(sib_zid, {
                     "type": "update",
                     "stage": "translated",
@@ -3050,7 +3050,7 @@ class SessionArbiter:
         effective_text_prov = retry_text_plan[2] if retry_text_plan else (f"live:{text_provider}" if (need_sentence_trans and translated_text_res) else None)
 
         if not is_sqlite and tsv_path:
-            safe_write_update_js(tsv_path, display_rows, headers, role_fields, stage="translated", status="success", translated_text=translated_text_res, text_provenance=effective_text_prov, zid=session_zid, trace_id=eff_trace_id, row_provenances=retried_row_provenances, config=self.config)
+            safe_write_update_js(tsv_path, display_rows, headers, role_fields, stage="translated", status="success", translated_text=translated_text_res, text_provenance=effective_text_prov, zid=session_zid, trace_id=eff_trace_id, row_provenances=retried_row_provenances, config=self.config, resolved_paths=self.resolved_paths, storage_adapter=storage_adapter)
 
         event_payload = {
             "type": "update",
@@ -3634,6 +3634,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
             self._authenticate_token(body)
+
+            from kardenwort_desk import progressive_storage_owner
+            if 'storage_owner' in body and body['storage_owner'] != progressive_storage_owner(self.server.config, self.server.resolved_paths):
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Progressive storage owner differs from controller')
 
             session_zid = body.get('session_zid') or body.get('zid')
             if not session_zid:
