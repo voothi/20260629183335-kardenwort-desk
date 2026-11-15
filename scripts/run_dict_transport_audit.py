@@ -17,7 +17,8 @@ import urllib.parse
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 OUT = None
 REVISION = None
 
@@ -323,15 +324,39 @@ def native_command(args):
     return isinstance(args, (list, tuple)) and any(Path(str(arg)).name == 'kardenwort-window.ahk' for arg in args)
 
 
+def runtime_worker_source(args):
+    return (len(args) >= 3 and Path(args[1]).resolve() == Path(desk.__file__).resolve()
+            and args[2] == 'progressive-worker' and Path(args[0]).resolve() == Path(sys.executable).resolve())
+
+
+def require_runtime_channel(kwargs):
+    if kwargs.get('stdin') != subprocess.PIPE or kwargs.get('shell') or kwargs.get('executable'):
+        raise AssertionError('Audit runtime worker requires its actual stdin pipe')
+
+
+def admitted_worker_command(args, kwargs):
+    if '--runtime-stdin' not in args:
+        if not worker_owns_storage(args):
+            raise AssertionError('Audit blocked an unattended worker using ambient workspace configuration')
+        return args
+    if not runtime_worker_source(args) or args.count('--runtime-stdin') != 1:
+        raise AssertionError('Audit blocked an unsupported runtime worker command')
+    require_runtime_channel(kwargs)
+    return [args[0], '-I', '-B', str(ROOT / 'scripts/audit_progressive_worker.py'), str(OUT),
+            str(Path(desk.__file__).resolve()), ','.join(map(str, sorted(PROTECTED_PORTS))), *args[2:]]
+
+
 def install_subprocess_guard(monkeypatch, blocked, owned):
     original_popen = subprocess.Popen
 
     def popen(args, *positional, **kwargs):
         if worker_command(args):
-            if not worker_owns_storage(args):
+            try:
+                command = admitted_worker_command(args, kwargs)
+            except AssertionError:
                 blocked.append([str(arg) for arg in args])
-                raise AssertionError('Audit blocked an unattended worker using ambient workspace configuration')
-            process = original_popen(args, *positional, **kwargs)
+                raise
+            process = original_popen(command, *positional, **kwargs)
             owned.append(process)
             return process
         if native_command(args):

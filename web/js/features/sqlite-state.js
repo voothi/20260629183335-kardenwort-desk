@@ -202,8 +202,10 @@
             return state.options.send('/api/v1/config', {section: 'rendering', key: key,
                 value: String(value), expected_revision: state.revisions[key]});
         }).then(function(result) {
-            if (state.enabled) requirePreferenceAck(result, key, value);
-            acceptPreference(state, key, result.committed_value, result.revision);
+            if (state.enabled) {
+                requirePreferenceAck(result, key, value);
+                acceptPreference(state, key, result.committed_value, result.revision);
+            }
             return result;
         }).catch(reconcileFailure.bind(null, state));
     }
@@ -218,7 +220,7 @@
         state.revisions[key] = revision; state.values[key] = value;
     }
     function projectPreference(state, key) {
-        state.options.project(key, state.values[key]);
+        if (state.enabled) state.options.project(key, state.values[key]);
     }
     function receive(state, snapshot) {
         Object.keys(snapshot.values).forEach(function(key) {

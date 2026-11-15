@@ -434,4 +434,3 @@ def test_startup_slice_has_bounded_branch_complexity():
         counts[name] = 1+len(re.findall(r'\b(?:if|for|while|case|catch)\b|&&|\|\||\?', code))
     assert counts, 'No startup methods were inspected'
     assert max(counts.values()) <= 7, counts
-

@@ -316,4 +316,3 @@ def test_wrapped_focus_resume_preserves_text_geometry(sqlite_page):
     ready(page)
     assert page.evaluate('AppState.activeTokenSelections') == []
     assert page.evaluate(geometry) == before
-

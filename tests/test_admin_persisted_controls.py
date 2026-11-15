@@ -312,10 +312,13 @@ def test_admin_filtered_cross_page_assignment_preserves_exclusion_and_geometry(a
                               and 'query=page-owned' in response.url):
         page.locator('#sessions-search-input').fill('page-owned')
     page.locator('#sessions-lang-filter').select_option('en')
-    page.locator('#sessions-assign-filter').select_option('unassigned')
+    with page.expect_response(lambda response: '/api/v1/admin/sessions?' in response.url
+                              and 'assigned=unassigned' in response.url):
+        page.locator('#sessions-assign-filter').select_option('unassigned')
     expect(page.locator('#sessions-total-info')).to_have_text('Total: 51 sessions')
     expect(page.locator('#sessions-table-body tr[data-zid]')).to_have_count(50)
     row = page.locator('#sessions-table-body tr[data-zid]').first
+    expect(row).to_be_visible()
     excluded = row.get_attribute('data-zid')
     before = row.bounding_box()
     row.locator('.session-row-checkbox').check()
