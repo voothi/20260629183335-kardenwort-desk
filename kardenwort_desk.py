@@ -15929,7 +15929,8 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
             }
         else:
             projection_sentences = None
-            if zid and (translated_text is None or sentences is None):
+            projection_owner = resolved_paths is not None or storage_adapter is not None or not extra_kwargs.get('diskless')
+            if zid and projection_owner and (translated_text is None or sentences is None):
                 storage_adapter, projection_sentences = update_projection_sentences(config, resolved_paths, storage_adapter, zid)
             # Note: We intentionally do not fallback to reading source_text from .txt when it is None
             # because sending plain text destroys the span DOM established in the frontend.

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from playwright.sync_api import expect
+from tests.sqlite_document_support import wait_state
 
 import kardenwort_controller as controller
 import kardenwort_desk as desk
@@ -217,6 +218,7 @@ def test_generated_row_reword_updates_display_and_reload_after_context(page, wor
         page.wait_for_function('!document.getElementById("kw-btn-reword").disabled')
         displayed = cell.inner_text()
         page.reload()
+        wait_state(page)
         page.wait_for_function('WorkspaceTabs.getCards().length >= 3')
         page.evaluate('WorkspaceTabs.switchToTab(2)')
         reloaded = cell.inner_text()
