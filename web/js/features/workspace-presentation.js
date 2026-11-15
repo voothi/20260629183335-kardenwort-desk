@@ -1,4 +1,4 @@
-/** First-paint gate only; SQLite and the existing card model own all values. */
+/** Local restoration presentation; SQLite and the existing card model own values. */
 (function () {
     if (window.WorkspacePresentation) window.WorkspacePresentation.dispose();
     var root = document.documentElement;
@@ -6,6 +6,13 @@
     var icon = document.querySelector('link[rel="icon"]');
     var initialIcon = icon && icon.getAttribute('href');
     var client = null;
+    var regionSelector = '#source-container, #translation-container, #lemma-table, .kw-tab-chip';
+    var buttonSelector = '#kw-action-toolbar button:not(#kw-btn-hand-tool), #kw-tab-prev, #kw-tab-next';
+    var actionEvents = ['click', 'mousedown', 'mouseup', 'dblclick', 'contextmenu'];
+    function isReady() { return root.getAttribute('data-workspace-phase') === 'ready'; }
+    function unknownIdentity() {
+        return root.getAttribute('data-workspace-scope') === 'cards' && root.getAttribute('data-workspace-identity') === 'unknown';
+    }
     function readyMetadata() {
         if (window.WorkspaceTabs && window.WorkspaceTabs.getActiveCard()) {
             window.WorkspaceTabs.projectActiveMetadata();
@@ -14,54 +21,96 @@
         document.title = initialTitle;
         if (icon) icon.setAttribute('href', initialIcon);
     }
+    function projectRegions() {
+        document.querySelectorAll(regionSelector).forEach(function(element) {
+            element.inert = unknownIdentity();
+            element.setAttribute('aria-busy', String(!isReady()));
+        });
+        document.querySelectorAll(buttonSelector).forEach(function(element) {
+            if (isReady()) element.removeAttribute('aria-disabled');
+            else element.setAttribute('aria-disabled', 'true');
+        });
+    }
     function project(phase, error) {
         root.setAttribute('data-workspace-phase', phase);
-        var workspace = document.querySelector('.kw-lookup-container');
-        if (workspace) {
-            workspace.inert = phase !== 'ready';
-            workspace.setAttribute('aria-busy', String(phase === 'initializing'));
-        }
+        if (phase === 'ready') root.setAttribute('data-workspace-identity', 'known');
+        projectRegions();
         var message = document.getElementById('kw-workspace-message');
-        if (message) message.textContent = phase === 'failed' ? 'Workspace unavailable: '+error.message : 'Loading workspace...';
+        if (message) message.textContent = phase === 'failed' ? 'Workspace unavailable: '+error.message : '';
+        projectPlaceholders(phase);
         if (phase === 'ready') readyMetadata();
     }
+    function projectPlaceholders(phase) {
+        document.querySelectorAll('.kw-view-placeholder').forEach(function(element) {
+            element.textContent = phase === 'failed' ? 'View unavailable' : 'Restoring...';
+        });
+    }
     function isSelectionKey(event) {
-        if (root.getAttribute('data-workspace-scope') !== 'focus') return false;
-        return event.key === 'Alt' || event.key === 'Escape';
+        return ['Alt', 'Control', 'Meta', 'Shift', 'Tab'].indexOf(event.key) !== -1 ||
+            ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c');
+    }
+    function independentTarget(event) {
+        return event.target.closest && event.target.closest('dialog, #kw-workspace-status, #kw-btn-hand-tool');
     }
     function blockPendingKey(event) {
-        if (root.getAttribute('data-workspace-phase') === 'ready' || isSelectionKey(event)) return;
-        if (event.target.closest && event.target.closest('dialog, #kw-workspace-status')) return;
+        if (isReady() || independentTarget(event) || isSelectionKey(event)) return;
+        if (!isMutationKey(event)) return;
+        event.stopImmediatePropagation();
+        if (/^(Arrow|Page|Home$|End$|Escape$)/.test(event.key)) return;
+        event.preventDefault();
+    }
+    function isMutationKey(event) {
+        if (['Delete', 'F2', 'F5', ' ', 'Escape', '[', ']', 'ArrowUp', 'ArrowDown'].indexOf(event.key) !== -1) return true;
+        if (event.ctrlKey || event.metaKey) return /^(?:[1-9aszy]|PageUp|PageDown)$/i.test(event.key);
+        if (event.altKey) return /^[1-9]$/.test(event.key);
+        return false;
+    }
+    function blockPendingAction(event) {
+        if (isReady() || independentTarget(event)) return;
+        if (!event.target.closest('[aria-disabled="true"], '+regionSelector)) return;
+        if (allowTextSelection(event)) { event.stopImmediatePropagation(); return; }
         event.preventDefault(); event.stopImmediatePropagation();
+    }
+    function allowTextSelection(event) {
+        if (unknownIdentity()) return false;
+        return !!event.target.closest('#source-container, #translation-container') &&
+            (window.__persistentSelectableMode || event.altKey);
     }
     function retry() { window.__stateReady = client.start(); }
     function suspend() {
         if (client) client.dispose();
+        if (root.getAttribute('data-workspace-scope') === 'cards') {
+            root.setAttribute('data-workspace-identity', 'unknown');
+            document.title = 'Kardenwort - Restoring view';
+            if (icon) icon.setAttribute('href', '/favicon.ico');
+        }
         project('disposed');
-        document.removeEventListener('keydown', blockPendingKey, true);
     }
     function dispose() {
         suspend();
+        document.removeEventListener('keydown', blockPendingKey, true);
+        actionEvents.forEach(function(name) { document.removeEventListener(name, blockPendingAction, true); });
         window.removeEventListener('pagehide', suspend);
         window.removeEventListener('pageshow', resume);
     }
     function bind(value) {
         client = value;
         document.getElementById('kw-workspace-retry').onclick = retry;
+        projectRegions();
+    }
+    function resume(event) {
+        if (event.persisted) retry();
     }
     document.addEventListener('keydown', blockPendingKey, true);
-    function resume(event) {
-        if (event.persisted) {
-            document.addEventListener('keydown', blockPendingKey, true);
-            retry();
-        }
-    }
+    actionEvents.forEach(function(name) { document.addEventListener(name, blockPendingAction, true); });
     window.addEventListener('pagehide', suspend);
     window.addEventListener('pageshow', resume);
-    if (root.getAttribute('data-workspace-scope') === 'cards') {
-        document.title = 'Kardenwort - Loading workspace';
+    root.setAttribute('data-workspace-identity', 'known');
+    if (root.getAttribute('data-workspace-scope') === 'cards' && window.SqliteState.restoredClientId()) {
+        root.setAttribute('data-workspace-identity', 'unknown');
+        document.title = 'Kardenwort - Restoring view';
         if (icon) icon.setAttribute('href', '/favicon.ico');
     }
     project('initializing');
-    window.WorkspacePresentation = {project: project, bind: bind, dispose: dispose};
+    window.WorkspacePresentation = {project: project, bind: bind, dispose: dispose, isReady: isReady, unknownIdentity: unknownIdentity};
 })();

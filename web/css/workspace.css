@@ -1,13 +1,24 @@
-/* Keep unknown client-specific content out of first paint without a layout swap. */
-#kw-workspace-status { display: none; }
-html[data-workspace-scope="cards"][data-workspace-phase="initializing"] .kw-lookup-container,
-html[data-workspace-scope="cards"][data-workspace-phase="failed"] .kw-lookup-container,
-html[data-workspace-scope="cards"][data-workspace-phase="disposed"] .kw-lookup-container { visibility: hidden; pointer-events: none; }
-html[data-workspace-scope="cards"][data-workspace-phase="initializing"] #kw-workspace-status,
-html[data-workspace-phase="failed"] #kw-workspace-status {
-    display: block; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    font-family: var(--font-sans); color: var(--text-main); z-index: 1000;
+/* Restoration masks only unresolved card regions; the page shell stays visible. */
+#kw-workspace-status,
+.kw-view-placeholder { display: none; }
+html[data-workspace-phase="failed"] #kw-workspace-status { display: block; }
+html[data-workspace-identity="unknown"] :is(#source-container, #translation-container, #lemma-table, .kw-tab-chip.active),
+html[data-workspace-identity="unknown"] :is(#source-container, #translation-container, #lemma-table) * { visibility: hidden !important; }
+html[data-workspace-identity="unknown"] :is(.source-section, .translation-section, .lemmas-section) { position: relative; }
+html[data-workspace-identity="unknown"] .kw-view-placeholder {
+    display: block;
+    position: absolute;
+    inset: 0 0 auto;
 }
-#kw-workspace-retry { visibility: hidden; }
-html[data-workspace-phase="failed"] #kw-workspace-retry { visibility: visible; }
-.kw-workspace-loading { background: var(--skeleton-bg); color: var(--skeleton-text); border-radius: var(--radius-sm); }
+.kw-workspace-loading {
+    background: var(--skeleton-bg);
+    background-size: 200% 100%;
+    animation: pulse-skeleton 1.5s ease-in-out infinite;
+    color: var(--skeleton-text);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-sans);
+    font-size: 11px;
+    height: 21px;
+    min-height: 21px;
+    line-height: 21px;
+}

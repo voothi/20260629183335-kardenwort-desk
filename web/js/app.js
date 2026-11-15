@@ -1,5 +1,8 @@
 
 (function() {
+    function workspaceCommandsReady() {
+        return !window.WorkspacePresentation || window.WorkspacePresentation.isReady();
+    }
     window.reserveTextRegions = function() {
         ['source-container', 'translation-container'].forEach(function(id) {
             var element = document.getElementById(id);
@@ -319,6 +322,7 @@
     }
 
     window.kwToggleTag = function (checkboxEl, rowId) {
+        if (!workspaceCommandsReady()) return;
         var newStatus = checkboxEl.checked;
         var rowEl = checkboxEl.closest ? checkboxEl.closest('tr') : (checkboxEl.parentElement ? checkboxEl.parentElement.parentElement : null);
         var resolvedRowId = (rowEl && rowEl.getAttribute('data-row-id') !== null)
@@ -424,6 +428,7 @@
     };
 
     window.kwExportSelected = function () {
+        if (!workspaceCommandsReady()) return;
         var selectedIds = getSelectedRowIds();
         var btn = (document.getElementById('kw-export-btn'));
         if (btn) btn.disabled = true;
@@ -5118,6 +5123,7 @@
         }
 
         function clearTokenSelections() {
+            if (!workspaceCommandsReady()) return;
             if (window.AppState) {
                 window.AppState.activeTokenSelections = [];
             }
@@ -5147,6 +5153,7 @@
 
         /** @param {HTMLElement} span */
         function addTokenToActiveSelections(span) {
+            if (!workspaceCommandsReady()) return;
             if (!window.AppState) window.AppState = {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
             if (!window.AppState.activeTokenSelections) window.AppState.activeTokenSelections = [];
             var relatedSpans = findRelatedTokenSpans(span);
@@ -5202,6 +5209,7 @@
 
         /** @param {HTMLElement} span */
         function removeTokenFromActiveSelections(span) {
+            if (!workspaceCommandsReady()) return;
             if (!window.AppState || !window.AppState.activeTokenSelections) return;
             var relatedSpans = findRelatedTokenSpans(span);
             var vIdxsToRemove = {};
@@ -7126,6 +7134,7 @@
         });
 
         function clearAllSelections() {
+            if (!workspaceCommandsReady()) return;
             selectedRowIdsMap = {};
             selectedOrphanWordIdxsMap = {};
             if (window.AppState) {
@@ -7151,6 +7160,7 @@
 
         /** @param {number|string} rowId @param {boolean=} forceState */
         function toggleRowSelection(rowId, forceState) {
+            if (!workspaceCommandsReady()) return;
             if (isLookupMode()) {
                 var targetRow = document.querySelector('#lemma-table tr[data-row-id="' + rowId + '"]');
                 var targetSentence = targetRow && targetRow.getAttribute('data-sentence-idx');
@@ -7964,6 +7974,7 @@
 
         /** @deprecated Native AHK selection bridge is deprecated; canonical selection sync uses HTTP/SSE. */
         function notifyAHKSelection() {
+            if (!workspaceCommandsReady()) return;
             scheduleSelectionSave();
             if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
                 var curCard = window.WorkspaceTabs.getActiveCard();
@@ -7988,6 +7999,7 @@
 
         /** @param {HTMLElement} cell */
         function makeEditable(cell) {
+            if (!workspaceCommandsReady()) return;
             if (cell.getElementsByTagName('input').length > 0) return;
 
             var scrollDiv = (cell.querySelector('.scrollable-cell'));
@@ -8248,6 +8260,7 @@
             return targets;
         }
         window.deleteSelectedRows = function() {
+            if (!workspaceCommandsReady()) return;
             var targets = collectDeletionTargets(getSelectedRowsArray());
             if (targets.length === 0) return;
             var action = {
@@ -8370,6 +8383,7 @@
         }
 
         window.undo = function() {
+            if (!workspaceCommandsReady()) return;
             if (historyIndex < 0) return;
             var action = historyStack[historyIndex];
             historyIndex--;
@@ -8379,6 +8393,7 @@
         };
 
         window.redo = function() {
+            if (!workspaceCommandsReady()) return;
             if (historyIndex >= historyStack.length - 1) return;
             historyIndex++;
             var action = historyStack[historyIndex];
@@ -8657,6 +8672,7 @@
         };
 
         window.selectAllRows = function() {
+            if (!workspaceCommandsReady()) return;
             if (typeof tableRows === 'undefined' || !tableRows || tableRows.length === 0) {
                 var lt = document.getElementById('lemma-table');
                 if (lt) {
@@ -8970,6 +8986,7 @@
 
         /** @param {number|string} rowId @param {HTMLButtonElement} btnElement */
         function retryRow(rowId, btnElement) {
+            if (!workspaceCommandsReady()) return;
             if (isServerDisabled()) {
                 window.showToast('Retry unavailable: server interaction is disabled', 'warning');
                 return;
@@ -9488,6 +9505,7 @@
             });
         };
         window.onSaveClick = function(quiet) {
+            if (!workspaceCommandsReady()) return Promise.resolve(false);
             var hasNative = !!(window.ahkCall && (document.documentMode || typeof fetch === 'undefined'));
             if (isServerDisabled() && !hasNative) {
                 window.showToast('Action unavailable: server interaction is disabled', 'warning');
@@ -10009,7 +10027,6 @@
                 window.showToast("Re-word error: " + formatErrorWithTrace(err, "Network error"), "error");
             });
         };
-        window.onSelectedClick = window.onRewordClick;
 
         function exportCardCount(payload) {
             var count = payload.exported_count;
@@ -10211,6 +10228,7 @@
         };
 
         window.onDeleteClick = function() {
+            if (!workspaceCommandsReady()) return;
             var rows = getSelectedRowsArray();
             if (!rows.length) {
                 window.showToast("Please select rows to delete.", "warning");
@@ -10615,11 +10633,11 @@
             window.AppState.restoredActiveTokens = restored;
             restoreActiveTokenFocus();
             syncSelectionsToCardsAndState(); updateRowStyles(); updateBidirectionalHighlights();
-            if (view.cleared || !available || restored.length !== view.active_tokens.length) {
+            var reconcile = !available || restored.length !== view.active_tokens.length;
+            if (view.cleared || reconcile) {
                 window.showToast('Unavailable view focus was cleared', 'warning');
-                return true;
             }
-            return false;
+            return reconcile;
         }
         var preferenceButtons = {
             highlight_same_lemma: 'kw-btn-same-lemma', filter_selected_only: 'kw-btn-filter-selected'
@@ -10675,13 +10693,8 @@
         }
 
         function setHighlightSameLemma(active, persist) {
-            if (window.AppStore) window.AppStore.dispatch({type: 'TOGGLE_HIGHLIGHT_SAME_LEMMA', payload: !!active});
-            if (window.AppState) {
-                window.AppState.highlightSameLemma = !!active;
-            }
-            if (window.__CONFIG__) {
-                window.__CONFIG__.highlight_same_lemma = !!active;
-            }
+            if (persist !== false && !workspaceCommandsReady()) return;
+            projectPreferenceValue('highlight_same_lemma', 'TOGGLE_HIGHLIGHT_SAME_LEMMA', 'highlightSameLemma', active);
             projectPreferenceClass('kw-btn-same-lemma', 'active', active);
             if (typeof updateBidirectionalHighlights === 'function') {
                 updateBidirectionalHighlights();
@@ -10717,14 +10730,9 @@
 
         /** @param {boolean} active */
         function setFilterSelectedOnly(active, persist) {
+            if (persist !== false && !workspaceCommandsReady()) return;
             if (!active) document.documentElement.style.minHeight = '';
-            if (window.AppStore) window.AppStore.dispatch({type: 'TOGGLE_FILTER_SELECTED', payload: !!active});
-            if (window.AppState) {
-                window.AppState.filterSelectedOnly = !!active;
-            }
-            if (window.__CONFIG__) {
-                window.__CONFIG__.filter_selected_only = !!active;
-            }
+            projectPreferenceValue('filter_selected_only', 'TOGGLE_FILTER_SELECTED', 'filterSelectedOnly', active);
             projectPreferenceClass('lemma-table', 'kw-filter-selected-only', active);
             projectPreferenceClass('kw-btn-filter-selected', 'btn-filter-active', active);
             if (typeof updateEmptySelectionState === 'function') {
@@ -10733,6 +10741,12 @@
             if (persist !== false) persistPreference('filter_selected_only', !!active);
         }
         window.setFilterSelectedOnly = setFilterSelectedOnly;
+
+        function projectPreferenceValue(key, action, property, active) {
+            if (window.AppStore) window.AppStore.dispatch({type: action, payload: !!active});
+            if (window.AppState) window.AppState[property] = !!active;
+            if (window.__CONFIG__) window.__CONFIG__[key] = !!active;
+        }
 
         function toggleFilterSelectedOnly() {
             var cur = (window.AppState && window.AppState.filterSelectedOnly) ? true : false;
@@ -10909,6 +10923,7 @@
             var command = window[name];
             if (typeof command !== 'function') return;
             window[name] = function() {
+                if (!workspaceCommandsReady()) return Promise.resolve();
                 var args = arguments;
                 return window.flushPendingSaves().then(function() {
                     return command.apply(window,  (Array.prototype.slice.call(args)));
@@ -10918,6 +10933,7 @@
             };
         });
 
+        window.onSelectedClick = window.onRewordClick;
         var bootstrapScript = document.getElementById('kardenwort-bootstrap');
         if (bootstrapScript) {
             try {

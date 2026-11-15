@@ -970,6 +970,7 @@
          * @param {boolean} [isImmediate]
          */
         function switchToTab(seqOrSentIdx, isImmediate) {
+            if (!isImmediate && window.WorkspacePresentation && !window.WorkspacePresentation.isReady()) return;
             if (!cards || cards.length === 0) return;
             var w = (window);
 
@@ -1168,8 +1169,7 @@
         }
 
         function metadataReady() {
-            var phase = document.documentElement.getAttribute('data-workspace-phase');
-            return !phase || phase === 'ready';
+            return document.documentElement.getAttribute('data-workspace-identity') !== 'unknown';
         }
 
         function projectActiveMetadata() {

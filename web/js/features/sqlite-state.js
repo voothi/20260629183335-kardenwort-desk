@@ -15,11 +15,14 @@
                 atomic_row_ids: (token.atomic_row_ids !== undefined ? token.atomic_row_ids : token.row_ids).slice()};
         }).filter(function(item) { return item !== null; });
     }
-    function clientSlot() {
+    function restoredClientId() {
         var match = location.hash.match(/(?:^#|&)kw-client=([0-9a-f]{32})(?:&|$)/);
         var navigation = performance.getEntriesByType('navigation')[0];
-        var reusable = match && navigation && (navigation.type === 'reload' || navigation.type === 'back_forward');
-        var id = reusable ? match[1] : randomClientId();
+        if (!match || !navigation) return null;
+        return navigation.type === 'reload' || navigation.type === 'back_forward' ? match[1] : null;
+    }
+    function clientSlot() {
+        var id = restoredClientId() || randomClientId();
         history.replaceState(null, '', '#kw-client='+id);
         return id;
     }
@@ -117,14 +120,15 @@
     }
     function migrate(state, run, view) {
         checkRun(state, run);
-        if (view.browser_imported) { clearLegacy(state.options.zid); return; }
+        if (view.browser_imported) { clearLegacy(state.options.zid); return view; }
         var legacy = readLegacy(state.options.zid);
-        if (!Object.keys(legacy.preferences).length && !legacy.view) return;
+        if (!Object.keys(legacy.preferences).length && !legacy.view) return view;
         if (legacy.view) legacy.view.expected_revision = view.revision;
         var body = Object.assign(viewBody(state), legacy, {revisions: Object.assign({}, state.revisions)});
         function send(path, payload) { return state.options.send(path, payload, undefined, run.signal); }
         return importDialog(send, body, {values: state.options.ui}, run.signal).then(function(result) {
             checkRun(state, run); receive(state, result); clearLegacy(state.options.zid);
+            return readView(state, run);
         });
     }
     function present(state, phase, error) {
@@ -144,7 +148,7 @@
         state.phase = 'initializing'; state.failure = null; state.tail = Promise.resolve();
         present(state, 'initializing');
         state.ready = readView(state, run).then(migrate.bind(null, state, run))
-            .then(readView.bind(null, state, run)).then(function(view) {
+            .then(function(view) {
                 checkRun(state, run); state.viewRevision = view.revision;
                 var reconcile = state.options.restore(view);
                 if (reconcile) return commitView(state, state.options.capture(), run);
@@ -236,5 +240,5 @@
         return {start: start.bind(null, state), dispose: dispose.bind(null, state), save: save.bind(null, state), flush: flush.bind(null, state),
             sendPreference: sendPreference.bind(null, state), receive: receive.bind(null, state), projectPreference: projectPreference.bind(null, state)};
     }
-    window.SqliteState = {create: create, restoreOccurrences: restoreOccurrences};
+    window.SqliteState = {create: create, restoreOccurrences: restoreOccurrences, restoredClientId: restoredClientId};
 })();

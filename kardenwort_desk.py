@@ -13781,10 +13781,12 @@ def render_declarative_web_shell(
     web_dir = Path(__file__).resolve().parent / "web"
     if ui_cfg.get("state_authority") == "sqlite" and not (mismatch_info and mismatch_info.get("is_mismatch")):
         presentation_js = read_required_asset(web_dir / "js/features/workspace-presentation.js")
+        state_js = read_required_asset(web_dir / "js/features/sqlite-state.js")
         presentation_css = read_required_asset(web_dir / "css/workspace.css")
         presentation_scope = "cards" if len(bootstrap_payload.get("sentence_cards", [])) > 1 else "focus"
         scope_script = f'document.documentElement.setAttribute("data-workspace-scope", "{presentation_scope}");'
-        base_html = base_html.replace('</head>', f'<style>{presentation_css}</style><script>{scope_script}\n{presentation_js}</script></head>')
+        base_html = base_html.replace('<script src="/js/features/sqlite-state.js"></script>', '')
+        base_html = base_html.replace('</head>', f'<style>{presentation_css}</style><script>{state_js}\n{scope_script}\n{presentation_js}</script></head>')
     if disable_css:
         base_html = re.sub(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
     else:

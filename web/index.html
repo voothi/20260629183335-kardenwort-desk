@@ -11,18 +11,19 @@
     <link rel="stylesheet" href="/css/main.css">
 </head>
 <body>
-    <div id="kw-workspace-status" hidden role="status" aria-label="Workspace readiness">
-        <span id="kw-workspace-message" class="kw-workspace-loading">Loading workspace...</span>
-        <button type="button" id="kw-workspace-retry">Retry workspace</button>
-    </div>
     <div class="kw-lookup-container container">
         <!-- Workspace Tab Navigation -->
         <nav id="workspace-tab-bar" class="kw-tab-bar"><!-- WORKSPACE_TAB_BAR --></nav>
+        <div id="kw-workspace-status" hidden role="status" aria-label="Workspace readiness">
+            <span id="kw-workspace-message"></span>
+            <button type="button" id="kw-workspace-retry">Retry workspace</button>
+        </div>
 
         <!-- Source Text Container -->
         <!-- SECTION_SOURCE_START -->
         <div class="section source-section" id="source-section">
             <div class="source-text" id="source-container"><!-- SOURCE_TEXT --></div>
+            <span hidden class="kw-view-placeholder kw-workspace-loading" role="status" aria-label="Restoring source">Restoring...</span>
         </div>
         <!-- SECTION_SOURCE_END -->
 
@@ -30,6 +31,7 @@
         <!-- SECTION_TRANSLATION_START -->
         <div class="section translation-section" id="translation-section">
             <div class="translation-text" id="translation-container"><!-- TRANSLATION_TEXT --></div>
+            <span hidden class="kw-view-placeholder kw-workspace-loading" role="status" aria-label="Restoring translation">Restoring...</span>
         </div>
         <!-- SECTION_TRANSLATION_END -->
 
@@ -50,6 +52,7 @@
                 </thead>
                 <tbody><!-- TABLE_ROWS --></tbody>
             </table>
+            <span hidden class="kw-view-placeholder kw-workspace-loading" role="status" aria-label="Restoring vocabulary">Restoring...</span>
         </div>
         <!-- SECTION_LEMMAS_END -->
 

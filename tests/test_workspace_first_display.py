@@ -125,6 +125,173 @@ def frames(page):
     })''')
 
 
+def assert_visible_shell(page):
+    assert page.locator('.kw-lookup-container').is_visible(), 'workspace shell must remain visible'
+    assert page.locator('#kw-action-toolbar').is_visible()
+    assert not page.locator('.kw-lookup-container').evaluate('(element) => element.inert')
+    assert page.locator('#kw-btn-hand-tool').is_visible()
+    assert page.locator('#kw-btn-hand-tool').is_enabled()
+
+
+def test_immediate_fresh_card_does_not_wait_for_view_read(marked_page, record_property):
+    page, url, server, adapter, path = marked_page
+    held, writes = [], []
+    def boundary(route):
+        if 'expected_revision' in route.request.post_data_json:
+            writes.append(route.request.post_data_json)
+            route.continue_()
+        else:
+            held.append(route)
+    page.route('**/api/v1/client-view', boundary)
+    try:
+        page.goto(url+'/')
+        page.wait_for_function('window.__stateReady !== undefined')
+        before = frames(page)
+        record_property('held_fresh_frames', json.dumps(before))
+        assert_visible_shell(page)
+        assert all(frame['visible'] and frame['translationVisible'] and frame['rowsVisible'] for frame in before), before
+        assert all(frame['card'] == 1 and frame['translation'] == 'OVERVIEW TRANSLATION' for frame in before), before
+        assert all('card-1.de.tsv' in frame['title'] and frame['icon'].endswith('/1.ico') for frame in before)
+        page.get_by_role('button', name='Hand Tool', exact=False).click()
+        assert page.evaluate('window.__persistentSelectableMode') is True
+        assert writes == []
+        assert len(held) == 1
+        held.pop().continue_()
+        ready(page)
+        assert len(held) == 0, 'unchanged state must not require a second view read'
+        assert writes == []
+    finally:
+        for route in held:
+            route.abort()
+        page.unroute_all(behavior='ignoreErrors')
+
+
+def test_local_restore_skeletons_keep_shell_visible(marked_page, record_property):
+    page, url, server, adapter, path = marked_page
+    page.goto(url+'/'); ready(page)
+    page.evaluate('WorkspaceTabs.switchToTab(3); flushPendingSaves()')
+    held = []
+    page.route('**/api/v1/client-view', lambda route: held.append(route))
+    try:
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_function('window.__stateReady !== undefined')
+        before = frames(page)
+        record_property('held_restore_frames', json.dumps(before))
+        assert_visible_shell(page)
+        assert all(not frame['visible'] and not frame['translationVisible'] and not frame['rowsVisible'] for frame in before), 'provisional card content exposed'
+        assert page.get_by_role('status', name='Restoring source').is_visible()
+        assert page.get_by_role('status', name='Restoring translation').is_visible()
+        assert page.get_by_role('status', name='Restoring vocabulary').is_visible()
+        assert not page.get_by_text('Loading workspace...', exact=True).is_visible()
+        page.locator('#kw-btn-hand-tool').click()
+        assert page.evaluate('window.__persistentSelectableMode') is True
+        held.pop().continue_()
+        ready(page)
+        assert held == []
+        assert all(frame['card'] == 3 and frame['translation'] == 'CARD 3 TRANSLATION' for frame in frames(page))
+        assert not page.get_by_role('status', name='Restoring source').is_visible()
+    finally:
+        for route in held:
+            route.abort()
+        page.unroute_all(behavior='ignoreErrors')
+
+
+@pytest.mark.parametrize('navigation', ['fresh', 'reload'])
+def test_pending_view_blocks_only_dependent_commands(marked_page, navigation):
+    page, url, server, adapter, path = marked_page
+    page.goto(url+'/'); ready(page)
+    if navigation == 'reload':
+        page.evaluate('WorkspaceTabs.switchToTab(3); flushPendingSaves()')
+    shared_before = adapter.get_shared_selection(ZID)
+    held, writes = [], []
+    def boundary(route):
+        if 'expected_revision' in route.request.post_data_json:
+            writes.append(route.request.post_data_json); route.continue_()
+        else:
+            held.append(route)
+    page.route('**/api/v1/client-view', boundary)
+    # The membership snapshot endpoint uses POST for a read; keep that read flowing.
+    page.on('request', lambda request: writes.append(request.url)
+            if request.method == 'POST' and not request.url.endswith(('/api/v1/client-view', '/internal/selection')) else None)
+    try:
+        if navigation == 'reload': page.reload(wait_until='domcontentloaded')
+        else: page.goto(url+'/')
+        page.wait_for_function('window.__stateReady !== undefined')
+        initial = page.evaluate('({card:WorkspaceTabs.getActiveTabSeq(), focus:AppState.activeTokenSelections, selected:AppState.selectedLemmas})')
+        page.evaluate("document.addEventListener('keydown', event => {if(event.ctrlKey && event.key === 'f') window.independentKeyReceived = !event.defaultPrevented;})")
+        page.keyboard.press('Control+f')
+        assert page.evaluate('window.independentKeyReceived') is True
+        for key in ('Control+s', 'Control+a', 'Control+2', 'Delete', 'F5', 'ArrowDown', 'Space'):
+            page.keyboard.press(key)
+        page.locator('#kw-btn-retext').dispatch_event('click')
+        page.locator('#source-container .word').first.dispatch_event('mousedown')
+        page.locator('#source-container .word').first.dispatch_event('mouseup')
+        page.evaluate('''async () => {
+            WorkspaceTabs.switchToTab(2);
+            toggleRowSelection('0',true);
+            addTokenToActiveSelections(document.querySelector('#source-container .word'));
+            selectAllRows(); clearAllSelectionsAndNotify();
+            setHighlightSameLemma(true); setFilterSelectedOnly(true);
+            makeEditable(document.querySelector('#lemma-table td'));
+            retryRow('0', document.querySelector('#kw-btn-update'));
+            kwExportSelected(); onDeleteClick(); deleteSelectedRows(); undo(); redo();
+            await Promise.all([onSaveClick(), onUpdateClick(), onRetextClick(), onRewordClick(), onSelectedClick(), onSendToAnkiClick()]);
+        }''')
+        assert page.evaluate('({card:WorkspaceTabs.getActiveTabSeq(), focus:AppState.activeTokenSelections, selected:AppState.selectedLemmas})') == initial
+        assert page.locator('#lemma-table input').count() == 0
+        assert adapter.get_shared_selection(ZID) == shared_before
+        assert writes == []
+        assert_visible_shell(page)
+        page.locator('#kw-btn-hand-tool').click()
+        assert page.evaluate('window.__persistentSelectableMode') is True
+        held.pop().continue_(); ready(page)
+        assert held == []
+        assert page.evaluate('WorkspaceTabs.getActiveTabSeq()') == (3 if navigation == 'reload' else 1)
+        assert writes == []
+    finally:
+        for route in held:
+            route.abort()
+        page.unroute_all(behavior='ignoreErrors')
+
+
+def test_restored_card_appears_before_provider_finishes(marked_page):
+    page, url, server, adapter, path = marked_page
+    page.goto(url+'/'); ready(page)
+    page.evaluate('WorkspaceTabs.switchToTab(3); flushPendingSaves()')
+    boot = json.loads(page.locator('#kardenwort-bootstrap').text_content())
+    next(card for card in boot['sentence_cards'] if card['seq_num'] == 3)['translated_text'] = ''
+    source = page.locator('#source-container').inner_html()
+    tabs = page.locator('#workspace-tab-bar').inner_html()
+    adapter.db.insert_sentences([dict(session_zid=ZID, sentence_index=2, sentence_source='wortbaaa.', sentence_destination='')])
+    page.context.route(url+'/', lambda route: route.fulfill(content_type='text/html',
+        body=desk.render_declarative_web_shell(boot, source_html=source, workspace_tab_bar_html=tabs)))
+    script = controlled_event_stream_script().removeprefix('<script>').removesuffix('</script>').replace("!== '/events'", "!== '/api/v1/events'")
+    page.add_init_script(script)
+    held, status = [], []
+    page.route('**/api/v1/client-view', lambda route: held.append(route))
+    page.route('**/session/status?*', lambda route: status.append(route))
+    try:
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_function('window.__stateReady !== undefined && window.__sseInstances.length > 0')
+        assert_visible_shell(page)
+        assert page.get_by_role('status', name='Restoring source').is_visible()
+        held.pop().continue_(); ready(page)
+        assert held == []
+        assert page.evaluate('WorkspaceTabs.getActiveTabSeq()') == 3
+        assert page.locator('#source-container').inner_text() == 'wortbaaa.'
+        assert page.locator('#source-container').is_visible()
+        expect(page.locator('#translation-container .skeleton-loader')).to_be_visible()
+        assert not page.get_by_role('status', name='Restoring source').is_visible()
+        adapter.db.insert_sentences([dict(session_zid=ZID, sentence_index=2, sentence_source='wortbaaa.', sentence_destination='FINISHED CARD 3')])
+        page.evaluate("__sseInstances[__sseInstances.length-1].send({stage:'finished',sentences:[{sentence_index:2,sentence_destination:'FINISHED CARD 3'}]})")
+        expect(page.locator('#translation-container')).to_have_text('FINISHED CARD 3')
+        assert page.evaluate('WorkspaceTabs.getActiveTabSeq()') == 3
+    finally:
+        for route in held + status:
+            route.abort()
+        page.unroute_all(behavior='ignoreErrors')
+
+
 @pytest.mark.parametrize('marked_page', [('dark', '100', 'top', False), ('light', '80', 'bottom', False),
     ('dark', '125', 'inline', False), ('light', '125', 'top', False), ('dark', '100', 'top', True)], indirect=True)
 def test_reload_never_exposes_provisional_card(marked_page, record_property):
@@ -145,8 +312,9 @@ def test_reload_never_exposes_provisional_card(marked_page, record_property):
     before = frames(page)
     assert all(not frame['visible'] for frame in before), before
     assert all(not frame['translationVisible'] and not frame['rowsVisible'] for frame in before), before
-    assert all(frame['title'] == 'Kardenwort - Loading workspace' and frame['icon'] == '/favicon.ico' for frame in before)
-    assert page.get_by_role('status', name='Workspace readiness').is_visible()
+    assert all(frame['title'] == 'Kardenwort - Restoring view' and frame['icon'] == '/favicon.ico' for frame in before)
+    assert_visible_shell(page)
+    assert page.get_by_role('status', name='Restoring source').is_visible()
     held[0].continue_()
     page.unroute('**/api/v1/client-view')
     ready(page)
@@ -165,9 +333,12 @@ def test_reload_never_exposes_provisional_card(marked_page, record_property):
     record_property('frames', json.dumps({'baseline':baseline,'before':before,'after':after}))
 
 
+@pytest.mark.parametrize('navigation', ['fresh', 'reload'])
 @pytest.mark.parametrize('failure', ['http', 'revision', 'invalid_card'])
-def test_restore_failure_is_explicit_and_retryable(sqlite_page, failure):
+def test_restore_failure_is_explicit_and_retryable(sqlite_page, failure, navigation):
     page, url, server, adapter, path = sqlite_page
+    if navigation == 'reload':
+        page.goto(url+'/'); ready(page)
     status, body, message = {
         'http': (503, {'ok':False,'message':'owned unavailable'}, 'owned unavailable'),
         'revision': (200, {'ok':True,'active_card':1,'active_tokens':[]}, 'Invalid committed view revision'),
@@ -175,9 +346,14 @@ def test_restore_failure_is_explicit_and_retryable(sqlite_page, failure):
     }[failure]
     page.route('**/api/v1/client-view', lambda route: route.fulfill(status=status,
         content_type='application/json', body=json.dumps(body)))
-    page.goto(url+'/')
+    if navigation == 'reload':
+        page.reload()
+    else:
+        page.goto(url+'/')
     expect(page.get_by_role('status', name='Workspace readiness')).to_contain_text(message)
-    assert all(not frame['visible'] for frame in frames(page))
+    assert_visible_shell(page)
+    assert all(frame['visible'] == (navigation == 'fresh') for frame in frames(page))
+    assert page.locator('#kw-btn-retext').get_attribute('aria-disabled') == 'true'
     page.unroute('**/api/v1/client-view')
     page.get_by_role('button', name='Retry workspace').click()
     ready(page)
@@ -285,7 +461,8 @@ def test_import_choice_stays_accessible_and_cancels_with_document(marked_page):
     page.goto(url+'/')
     dialog = page.get_by_test_id('legacy-state-import')
     expect(dialog).to_be_visible()
-    assert all(not frame['visible'] for frame in frames(page))
+    assert_visible_shell(page)
+    assert all(frame['visible'] for frame in frames(page))
     page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide'))")
     expect(dialog).to_have_count(0)
     assert page.evaluate("localStorage.getItem('kw_highlight_same_lemma')") == 'true'
@@ -320,8 +497,16 @@ def test_controller_launch_and_restored_card_precedence(sqlite_page, seq):
         [['Alpha','alpha','uno','1','Alpha first!','FIRST TRANSLATION'],
          ['Beta','beta','dos','2','Beta second?','SECOND TRANSLATION']])
     address = url+'/?session_zid='+zid+('&seq_num='+str(seq) if seq else '')
-    page.goto(address); ready(page)
     initial = seq or 2
+    first_read = []
+    page.route('**/api/v1/client-view', lambda route: first_read.append(route))
+    page.goto(address)
+    page.wait_for_function('window.__stateReady !== undefined')
+    assert_visible_shell(page)
+    assert all(frame['visible'] and frame['card'] == initial for frame in frames(page))
+    first_read.pop().continue_(); ready(page)
+    assert first_read == []
+    page.unroute('**/api/v1/client-view')
     assert page.evaluate('WorkspaceTabs.getActiveTabSeq()') == initial
     assert page.locator('#source-container').inner_text().strip() == ('Alpha first!' if initial == 2 else 'Beta second?')
     client = page.url.split('kw-client=')[1]
@@ -351,7 +536,8 @@ def test_view_read_deadline_offers_retry_without_guessing_a_card(sqlite_page):
     page.wait_for_function('window.__stateReady !== undefined')
     page.clock.fast_forward(30001)
     expect(page.get_by_role('status', name='Workspace readiness')).to_contain_text('Workspace read timed out')
-    assert all(not frame['visible'] for frame in frames(page))
+    assert_visible_shell(page)
+    assert all(frame['visible'] for frame in frames(page))
     held[0].abort()
     page.unroute('**/api/v1/client-view')
     page.get_by_role('button', name='Retry workspace').click()
@@ -369,8 +555,9 @@ def test_initialization_functions_retain_the_branch_ceiling():
     assert complexity(ast.parse(inspect.getsource(desk.format_initial_card_translations)).body[0]) <= 7
     root = Path(__file__).resolve().parents[1]
     sources = {
-        'features/workspace-presentation.js': ['readyMetadata','project','isSelectionKey','blockPendingKey','retry','bind','resume','suspend','dispose'],
-        'features/sqlite-state.js': ['checkRun','readView','migrate','start','commitView','enqueueView','dispose','present'],
+        'features/workspace-presentation.js': ['readyMetadata','project','isSelectionKey','blockPendingKey','retry','bind','resume','suspend','dispose',
+            'projectRegions','projectPlaceholders','blockPendingAction','allowTextSelection','isReady','unknownIdentity','independentTarget','isMutationKey'],
+        'features/sqlite-state.js': ['checkRun','readView','migrate','start','commitView','enqueueView','dispose','present','restoredClientId'],
         'app.js': ['initialWorkspaceBusy','applyInitialWorkspaceStatus','probeInitialWorkspace','restoreClientView'],
         'components/WorkspaceTabs.js': ['metadataReady','projectActiveMetadata'],
     }
@@ -413,7 +600,8 @@ def test_single_card_keeps_safe_content_and_metadata_during_focus_restore(sqlite
         assert page.locator('#source-container').is_visible()
         assert page.locator('#translation-container').is_visible()
         assert page.locator('#kw-action-toolbar').is_visible()
-        assert page.locator('.kw-lookup-container').evaluate('(element) => element.inert')
+        assert not page.locator('.kw-lookup-container').evaluate('(element) => element.inert')
+        assert page.locator('#kw-btn-retext').get_attribute('aria-disabled') == 'true'
         page.keyboard.down('Alt')
         assert page.evaluate("document.body.classList.contains('text-selection-mode-active')")
         page.keyboard.up('Alt')
