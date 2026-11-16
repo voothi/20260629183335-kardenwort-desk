@@ -436,6 +436,7 @@ def test_select_switch_update_delayed_ack_reload_with_sqlite(page, tmp_path, run
     page.route('**/session/save', hold_save)
 
     def complete_status(route):
+        wait_state(page)
         updating = page.locator('#kw-btn-update').is_disabled()
         status.append({'url': route.request.url, 'updating': updating})
         if updating:

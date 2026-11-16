@@ -87,6 +87,8 @@ def test_1_2_checkbox_row_id_differs_from_token_order(page):
     ]
     make_lookup_page(page, data_rows, headers=headers)
 
+    page.evaluate("window.__holdSaves = true")
+
     # Click the checkbox on display row 1 (Haus, token order 9)
     cb_row1 = page.locator('tr[data-row-id="1"] input.kw-tag-checkbox')
     expect(cb_row1).to_be_visible()
