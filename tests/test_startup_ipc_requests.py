@@ -248,3 +248,93 @@ CheckReplacement() {{
             release.set()
     assert observed == ['desk|ready one|multi|||', 'desk|ready two|multi|||']
     assert (store.snapshot(), path.read_bytes()) == before
+
+
+def test_stopped_controller_browser_launch_waits_for_committed_preferences_and_cancels_stale(preference_world, tmp_path):
+    url, controller, path = preference_world
+    store = preference_store(controller.config, controller.resolved_paths)
+    store.set('default_language', 'de')
+    source = NATIVE.read_text(encoding='utf-8-sig')
+    extra = '\n'.join(ahk_function(source, n) for n in (
+        'LaunchBrowserTab', '_ExecuteBrowserLaunch', 'FetchHtmlViaHttp',
+        'BuildDeskBrowserUrl', 'BuildVerifyLanguageUrl', 'ExtractZidFromPath',
+    ))
+    gate_flag = tmp_path / 'config-ready.txt'
+    render_posts = []
+
+    def config_override():
+        if not gate_flag.exists():
+            return 503, b'{}'
+        return None
+
+    def handle_post(req_path, headers, raw):
+        if req_path == '/api/v1/render':
+            render_posts.append(raw.decode('utf-8'))
+            return 200, b'{"html_b64":"b2s="}'
+        return None
+
+    with startup_gate(url, lambda: True, config_reply=config_override, post_reply=handle_post) as gate:
+        script, _ = native_script(tmp_path, gate.server_port, '''
+G_BufferedArgs := []
+G_LaunchInBrowser := 1
+G_SplitGapLimit := 60
+G_WindowCount := 0
+G_OpenedTabs := []
+InitializeTrayMenu()
+
+; Phase A: healthy endpoint but /api/v1/config returns 503 -> must defer, not launch immediately
+if !LaunchBrowserTab("hello world", "single", "20261116000001")
+    Fail("LaunchBrowserTab failed to join asynchronous readiness")
+if G_OpenedTabs.Length != 0 || G_PendingBrowserLaunches.Length != 1
+    Fail("LaunchBrowserTab did not defer until committed preferences arrived")
+
+; Cancel generation and verify stale NotifyReady cannot dispatch cancelled tab
+old := G_Startup
+StopStartupReadiness()
+if G_PendingBrowserLaunches.Length != 0
+    Fail("StopStartupReadiness did not clear pending browser launches")
+old.NotifyReady()
+if G_OpenedTabs.Length != 0
+    Fail("Cancelled startup dispatched stale browser tab")
+
+; Phase B: new deferred launch while /api/v1/config still 503 -> wait -> release -> hydrates de & opens tab
+if !LaunchBrowserTab("Haus.", "single", "20261116000002")
+    Fail("Replacement LaunchBrowserTab failed to queue")
+SetTimer(ReleaseConfig, -250)
+ReleaseConfig() {
+    FileAppend("ready", "__GATE__")
+}
+SetTimer(CheckBrowserReady, 20)
+CheckBrowserReady() {
+    global G_OpenedTabs, G_PendingBrowserLaunches, G_Startup
+    if !IsObject(G_Startup) || G_Startup.phase != "ready" || G_OpenedTabs.Length == 0
+        return
+    if G_PendingBrowserLaunches.Length != 0
+        Fail("Completed startup left pending browser launches")
+    AssertCommitted("de")
+    for item in G_OpenedTabs
+        FileAppend(item "`n", A_ScriptDir "\\tabs.txt", "UTF-8-RAW")
+    ExitApp(0)
+}
+'''.replace('__GATE__', str(gate_flag)))
+        text = script.read_text(encoding='utf-8')
+        text = text.replace('_ExecuteBrowserLaunch(text, mode, zid) {\n    global G_BrowserLaunches, G_CurrentLang\n    G_BrowserLaunches.Push("browser|" text "|" mode "|" zid "|" G_CurrentLang)\n}\n', '')
+        overrides = '''
+CleanClipboardText(text) {
+    return Trim(text)
+}
+Run(target, *) {
+    global G_OpenedTabs
+    G_OpenedTabs.Push(target)
+}
+TrayTip(*) {
+}
+''' + '\n' + extra
+        script.write_text(text + overrides, encoding='utf-8')
+        from tests.test_tray_startup import execute
+        execute(script)
+    opened = (tmp_path / 'native/tabs.txt').read_text(encoding='utf-8').splitlines()
+    assert len(opened) == 1
+    assert 'session_zid=20261116000002' in opened[0]
+    assert len(render_posts) == 1
+    assert '"language": "de"' in render_posts[0]

@@ -42,7 +42,7 @@ def test_native_language_commits_before_projection_and_has_no_ini_fallback(prefe
     url, server, path = preference_world
     store = preference_store(server.config, server.resolved_paths)
     source = NATIVE.read_text(encoding='utf-8-sig')
-    names = ['SendControllerRequest', 'CommittedPrimitive', 'LoadCommittedPreferences',
+    names = ['ResolveControllerEndpoint', 'SendControllerRequest', 'CommittedPrimitive', 'LoadCommittedPreferences',
              'ProjectCommittedTheme', 'SetLanguage', 'JSON_Stringify']
     script = '\n'.join(ahk_function(source, name) for name in names)
     before = path.read_bytes(), path.stat().st_mtime_ns

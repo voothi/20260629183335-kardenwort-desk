@@ -1,4 +1,4 @@
-﻿"""Real native startup, HTTP/SQLite preferences, menu and GDI icon projection."""
+"""Real native startup, HTTP/SQLite preferences, menu and GDI icon projection."""
 from contextlib import contextmanager
 from pathlib import Path
 import re
@@ -20,7 +20,7 @@ from tests.test_sqlite_state_native import NATIVE, ahk_function
 
 
 @contextmanager
-def startup_gate(target, ready, config_reply=None, shutdown=None, release=None):
+def startup_gate(target, ready, config_reply=None, shutdown=None, release=None, post_reply=None):
     """External transport readiness only; accepted preferences come from real SQLite."""
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -55,6 +55,16 @@ def startup_gate(target, ready, config_reply=None, shutdown=None, release=None):
                 self.wfile.write(body)
 
         def do_POST(self):
+            length = int(self.headers.get('Content-Length') or 0)
+            raw = self.rfile.read(length) if length else b''
+            if post_reply is not None:
+                override = post_reply(self.path, self.headers, raw)
+                if override is not None:
+                    status, body = override
+                    self.send_response(status)
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
             if self.path == '/api/v1/shutdown' and shutdown is not None:
                 shutdown.set()
                 self.send_response(200)
@@ -75,7 +85,7 @@ def startup_gate(target, ready, config_reply=None, shutdown=None, release=None):
 
 
 FUNCTIONS = [
-    'InitializeTrayMenu', 'StartServerProcess', 'EnsureControllerProcess',
+    'ResolveControllerEndpoint', 'InitializeTrayMenu', 'StartServerProcess', 'EnsureControllerProcess',
     'StopStartupReadiness', 'RetryStartupPreferences', 'CompleteStartupInitialization', 'UpdateTrayMenu', 'UpdateTrayIcon',
     'CreateIconFromText', 'LoadCommittedPreferences', 'CommittedPrimitive',
     'ProjectCommittedTheme', 'SendControllerRequest', 'CheckServerHealth',
@@ -116,6 +126,9 @@ G_ServerStatus := "Offline"
 G_DeskPythonPath := "{sys.executable}"
 G_DeskScriptPath := "{launcher}"
 G_Startup := 0
+G_StartupGen := 0
+G_PendingBrowserLaunches := []
+G_BrowserLaunches := []
 G_StartupTimeoutMs := {deadline}
 G_StartupPollMs := 30
 G_Initialized := false
@@ -193,6 +206,10 @@ AssertCommitted(language := "de") {
 OpenAdminPanel(*) {
 }
 OpenServerLogsDir(*) {
+}
+_ExecuteBrowserLaunch(text, mode, zid) {
+    global G_BrowserLaunches, G_CurrentLang
+    G_BrowserLaunches.Push("browser|" text "|" mode "|" zid "|" G_CurrentLang)
 }
 ProcessArgs(args) {
     global G_CurrentLang, G_HandledArgs, G_Startup
@@ -434,3 +451,216 @@ def test_startup_slice_has_bounded_branch_complexity():
         counts[name] = 1+len(re.findall(r'\b(?:if|for|while|case|catch)\b|&&|\|\||\?', code))
     assert counts, 'No startup methods were inspected'
     assert max(counts.values()) <= 7, counts
+
+
+def test_server_disabled_startup_stays_unavailable_blocks_actions_and_allows_explicit_recovery(preference_world, tmp_path):
+    url, controller, config = preference_world
+    store = preference_store(controller.config, controller.resolved_paths)
+    store.set('default_language', 'de')
+    marker = tmp_path / 'native/launched.txt'
+    source = NATIVE.read_text(encoding='utf-8-sig')
+    extra = '\n'.join(ahk_function(source, n) for n in ('TriggerSmartAction', 'HandleSmartAction', 'FetchHtmlViaHttp'))
+    with startup_gate(url, lambda: True) as gate:
+        script, _ = native_script(tmp_path, gate.server_port, '''
+G_ServerEnabled := false
+G_PressCount := 0
+G_CapturedText := ""
+G_TapSingleMode := "single"
+G_TapDoubleMode := "multi"
+G_MultiTapTimeout := 300
+G_LaunchInBrowser := 0
+G_SplitGapLimit := 60
+G_WindowCount := 0
+G_SmartCopyCalls := 0
+G_LaunchCalls := 0
+InitializeTrayMenu()
+StartServerProcess()
+if !IsObject(G_Startup) || G_Startup.phase != "failed"
+    Fail("Server-disabled startup did not expose explicit failed/unavailable state")
+if G_CurrentLang != "" || G_DefaultLanguage != "" || MenuLanguage() != "Current Language: Unavailable"
+    Fail("Server-disabled startup hydrated a language or hid unavailable menu state")
+menuBuf := Buffer(512)
+DllCall("GetMenuStringW", "Ptr", A_TrayMenu.Handle, "UInt", 2, "Ptr", menuBuf, "Int", 256, "UInt", 0x400)
+if StrGet(menuBuf) != "Retry Loading Preferences"
+    Fail("Server-disabled tray menu missing explicit recovery action: " StrGet(menuBuf))
+if G_HandledArgs.Length != 0
+    Fail("Server-disabled startup dispatched queued work")
+if TriggerSmartAction() || HandleSmartAction() || G_SmartCopyCalls || G_LaunchCalls
+    Fail("Server-disabled startup permitted capture or launch with no committed language")
+outB64 := "", errJSON := ""
+if FetchHtmlViaHttp("", "20261116000001", "single", "Haus", "", 1, false, &outB64, &errJSON) != 1
+    Fail("FetchHtmlViaHttp accepted empty language")
+RetryStartupPreferences()
+SetTimer(CheckRecovered, 20)
+CheckRecovered() {
+    global G_Startup, G_HandledArgs
+    if !IsObject(G_Startup) || G_Startup.phase != "ready" || G_HandledArgs.Length != 1
+        return
+    AssertCommitted("de")
+    ExitApp(0)
+}
+''')
+        extras = '''
+SmartCopy(*) {
+    global G_SmartCopyCalls
+    G_SmartCopyCalls += 1
+    return true
+}
+LaunchKardenwortWindow(*) {
+    global G_LaunchCalls
+    G_LaunchCalls += 1
+    return 0
+}
+LaunchBrowserTab(*) {
+    global G_LaunchCalls
+    G_LaunchCalls += 1
+    return 0
+}
+TrayTip(*) {
+}
+'''
+        script.write_text(script.read_text(encoding='utf-8') + '\n' + extra + extras, encoding='utf-8')
+        execute(script)
+    assert not marker.exists(), 'Server-disabled startup or explicit recovery must not launch controller process'
+    render_internal = ahk_function(source, '_LaunchKardenwortWindowInternal')
+    assert 'BuildRenderCmd(' in render_internal and 'Trim(targetLang) == ""' in render_internal
+
+
+def test_language_hotkey_failure_aborts_capture_without_stale_language_or_render(preference_world, tmp_path):
+    url, controller, config = preference_world
+    store = preference_store(controller.config, controller.resolved_paths)
+    store.set('default_language', 'de')
+    source = NATIVE.read_text(encoding='utf-8-sig')
+    extra = '\n'.join(ahk_function(source, n) for n in ('TriggerLanguageCapture', 'TriggerSmartAction', 'HandleSmartAction', 'FetchHtmlViaHttp'))
+    render_calls = []
+
+    def handle_post(path, headers, raw):
+        if path == '/api/v1/render':
+            render_calls.append(raw.decode('utf-8'))
+            return 200, b'{"html_b64":"b2s="}'
+        if path == '/api/v1/set-language':
+            if headers.get('X-API-Token') != 'test-controller-api-key':
+                return 403, b'{}'
+            import json
+            body = json.loads(raw.decode('utf-8'))
+            store.set('default_language', body['language'])
+            return 200, json.dumps({'ok': True, 'language': body['language']}).encode('utf-8')
+        return None
+
+    with startup_gate(url, lambda: True, post_reply=handle_post) as gate:
+        script, _ = native_script(tmp_path, gate.server_port, '''
+G_PressCount := 0
+G_CapturedText := ""
+G_TapSingleMode := "single"
+G_TapDoubleMode := "multi"
+G_MultiTapTimeout := 50
+G_LaunchInBrowser := 0
+G_SplitGapLimit := 60
+G_WindowCount := 0
+G_SmartCopyCalls := 0
+G_LaunchCalls := 0
+G_CurrentLang := "de"
+G_DefaultLanguage := "de"
+G_ServerApiKey := "wrong-token"
+if TriggerLanguageCapture("fr") || G_CurrentLang != "de" || G_SmartCopyCalls != 0
+    Fail("Language failure did not abort capture or mutated active language")
+G_CurrentLang := ""
+outB64 := "", errJSON := ""
+if FetchHtmlViaHttp("", "20261116000001", "single", "Haus", "", 1, false, &outB64, &errJSON) != 1
+    Fail("FetchHtmlViaHttp did not reject empty language")
+G_ServerApiKey := "test-controller-api-key"
+if !TriggerLanguageCapture("fr") || G_CurrentLang != "fr" || G_SmartCopyCalls != 1
+    Fail("Valid TriggerLanguageCapture did not commit fr and trigger capture")
+ExitApp(0)
+''')
+        extras = '''
+SmartCopy(*) {
+    global G_SmartCopyCalls
+    G_SmartCopyCalls += 1
+    A_Clipboard := "Haus"
+    return true
+}
+LaunchKardenwortWindow(*) {
+    global G_LaunchCalls
+    G_LaunchCalls += 1
+    return 0
+}
+LaunchBrowserTab(*) {
+    global G_LaunchCalls
+    G_LaunchCalls += 1
+    return 0
+}
+TrayTip(*) {
+}
+'''
+        script.write_text(script.read_text(encoding='utf-8') + '\n' + extra + extras, encoding='utf-8')
+        execute(script)
+    assert render_calls == []
+    assert store.get('default_language') == 'fr'
+
+
+def test_unequal_server_and_controller_ports_route_lifecycle_to_controller(preference_world, tmp_path):
+    url, controller, config = preference_world
+    preference_store(controller.config, controller.resolved_paths).set('default_language', 'de')
+    source = NATIVE.read_text(encoding='utf-8-sig')
+    extra = '\n'.join(ahk_function(source, n) for n in ('OpenAdminPanel', 'OnScriptExit', 'FetchHtmlViaHttp'))
+    render_hits = []
+    shutdown_count = 0
+    shutdown = threading.Event()
+    marker = tmp_path / 'native/launched.txt'
+
+    def handle_post(path, headers, raw):
+        nonlocal shutdown_count
+        if path == '/api/v1/shutdown':
+            shutdown_count += 1
+            shutdown.set()
+            return 200, b'{"ok":true}'
+        if path == '/api/v1/render':
+            render_hits.append(raw.decode('utf-8'))
+            return 200, b'{"html_b64":"b2s="}'
+        return None
+
+    with startup_gate(url, lambda: not shutdown.is_set() or marker.exists(), post_reply=handle_post) as gate:
+        script, _ = native_script(tmp_path, gate.server_port, '''
+G_ServerPort := 1
+G_ControllerPort := __PORT__
+G_SplitGapLimit := 60
+G_WindowCount := 0
+G_OpenedUrls := []
+InitializeTrayMenu()
+StartServerProcess()
+SetTimer(CheckEndpoints, 20)
+CheckEndpoints() {
+    global G_Startup, G_OpenedUrls, G_ServerPID
+    if !IsObject(G_Startup) || G_Startup.phase != "ready"
+        return
+    SetTimer(CheckEndpoints, 0)
+    OpenAdminPanel()
+    if G_OpenedUrls.Length != 1 || !InStr(G_OpenedUrls[1], "127.0.0.1:__PORT__/admin")
+        Fail("OpenAdminPanel did not use G_ControllerPort: " (G_OpenedUrls.Length ? G_OpenedUrls[1] : "none"))
+    outB64 := "", errJSON := ""
+    if FetchHtmlViaHttp("de", "20261116000001", "single", "Haus", "", 1, false, &outB64, &errJSON) != 0
+        Fail("FetchHtmlViaHttp did not reach controller port: " errJSON)
+    G_ServerPID := 0
+    RestartServerProcess()
+    OnScriptExit("Exit", 0)
+    ExitApp(0)
+}
+'''.replace('__PORT__', str(gate.server_port)))
+        cfg_file = tmp_path / 'native/config.ini'
+        cfg_file.write_text(cfg_file.read_text(encoding='utf-8').replace(f'\nport={gate.server_port}\n', '\nport=1\n'), encoding='utf-8')
+        text = script.read_text(encoding='utf-8')
+        text = text.replace('OpenAdminPanel(*) {\n}\n', '')
+        overrides = '''
+Run(target, *) {
+    global G_OpenedUrls
+    if InStr(target, "/admin")
+        G_OpenedUrls.Push(target)
+}
+TrayTip(*) {
+}
+''' + '\n' + extra
+        script.write_text(text + overrides, encoding='utf-8')
+        execute(script)
+    assert len(render_hits) == 1
+    assert shutdown_count >= 2
