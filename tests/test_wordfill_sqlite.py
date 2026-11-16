@@ -524,3 +524,100 @@ def test_sqlite_storage_adapter_sentinel_file_lock_busy_detection(sqlite_wordfil
         assert not sentinel_lock_target.exists()
 
     assert check_coordination_busy(dummy_tsv_path) is False
+
+
+def test_progressive_wordfill_persists_all_fields_via_custom_roles_and_exact_coordinates(tmp_path):
+    """Verify Stage 2a persists dest/IPA/morph/POS/gender via custom role names and exact (sentence_index, token_order)."""
+    import configparser
+    from kardenwort_controller import SessionArbiter
+
+    db_file = tmp_path / "wordfill_stage2a.db"
+    cfg = configparser.ConfigParser()
+    cfg.add_section("storage")
+    cfg.set("storage", "backend", "sqlite")
+    cfg.set("storage", "sqlite_db_path", str(db_file))
+    cfg.add_section("settings")
+    cfg.set("settings", "default_language", "de")
+    cfg.set("settings", "default_target_language", "ru")
+    cfg.add_section("triggers")
+    cfg.set("triggers", "run_text_translation", "manual")
+    cfg.set("triggers", "run_lemma_base_translation", "auto")
+    cfg.set("triggers", "run_lemma_enrichment", "manual")
+
+    mapping_file = tmp_path / "anki-mapping.ini"
+    mapping_file.write_text(
+        "[fields]\nTokenOrder\nQuotation\nWordSource\nWordDestination\nWordSourceIPA\nMorphCustom\nPOSCustom\nWordSourceGender\nSentenceSourceIndex\nSentenceSource\nSentenceDestination\n"
+        "[roles]\nlemma=WordSource\nword_translation=WordDestination\nipa=WordSourceIPA\nmorphology=MorphCustom\npos=POSCustom\ngender=WordSourceGender\nsentence_index=SentenceSourceIndex\nsentence_source=SentenceSource\nsentence_destination=SentenceDestination\n",
+        encoding="utf-8",
+    )
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    resolved_paths = {
+        "sqlite_db_path": str(db_file),
+        "anki_mapping_file": str(mapping_file),
+        "results_dir": results_dir,
+        "kardenwort_workspace": str(tmp_path),
+    }
+
+    db = KardenwortDB(db_path=db_file, migrations_dir=Path(__file__).resolve().parent.parent / "schemas" / "migrations")
+    db.run_migrations()
+
+    # Corpus session supplying full enrichment for Apfel
+    db.save_session_bundle(
+        {"zid": "20261116212001", "slug": "wf-corpus", "source_language": "de", "target_language": "ru", "text_mode": "single", "source_raw_text": "Apfel."},
+        [{"session_zid": "20261116212001", "sentence_index": 1, "sentence_source": "Apfel.", "sentence_destination": "Яблоко."}],
+        [{"session_zid": "20261116212001", "sentence_index": 1, "token_order": 0, "quotation": "Apfel", "lemma": "Apfel",
+          "word_destination": "яблоко", "ipa": "ˈapfəl", "morphology": "Subst.Masc.Nom.Sg", "pos": "NOUN", "gender": "m", "selected": 1}],
+    )
+
+    # Target session: sentence 1 token_order 0 ('Haus') already has committed translation + provenance;
+    # sentence 2 ALSO has local token_order 0 ('Apfel') awaiting wordfill!
+    target_zid = "20261116212002"
+    db.save_session_bundle(
+        {"zid": target_zid, "slug": "wf-target", "source_language": "de", "target_language": "ru", "text_mode": "single", "source_raw_text": "Das Haus. Der Apfel."},
+        [
+            {"session_zid": target_zid, "sentence_index": 1, "sentence_source": "Das Haus.", "sentence_destination": "Дом."},
+            {"session_zid": target_zid, "sentence_index": 2, "sentence_source": "Der Apfel.", "sentence_destination": "Яблоко."},
+        ],
+        [
+            {"session_zid": target_zid, "sentence_index": 1, "token_order": 0, "quotation": "Haus", "lemma": "Haus",
+             "word_destination": "altes Haus", "ipa": "haʊ̯s", "word_provenance": "live:google", "selected": 1},
+            {"session_zid": target_zid, "sentence_index": 2, "token_order": 0, "quotation": "Apfel", "lemma": "Apfel",
+             "word_destination": "", "ipa": None, "morphology": None, "pos": None, "gender": None, "classification_oxford": "B1", "selected": 0},
+        ],
+    )
+
+    wf_cfg = {
+        "enabled": True,
+        "db": db,
+        "sqlite_db_path": db_file,
+        "scan_roots": [tmp_path / "empty"],
+        "target_quality": "full",
+        "target_fallback": True,
+        "scan_match_language": True,
+    }
+    arbiter = SessionArbiter(config=cfg, resolved_paths=resolved_paths, wordfill_cfg=wf_cfg)
+    try:
+        arbiter.enrichment_queue._execute_progressive_task(target_zid, arbiter, "de", "ru", skip_intellifiller=True)
+    finally:
+        arbiter.enrichment_queue.shutdown()
+        desk.unregister_failover_callback(arbiter._on_global_failover)
+
+    reopened = KardenwortDB(db_path=db_file, migrations_dir=Path(__file__).resolve().parent.parent / "schemas" / "migrations")
+    by_coord = {(w["sentence_index"], w["token_order"]): w for w in reopened.get_words_by_session(target_zid)}
+    apfel = by_coord[(2, 0)]
+    assert apfel["word_destination"] == "яблоко"
+    assert apfel["ipa"] == "ˈapfəl"
+    assert apfel["morphology"] == "Subst.Masc.Nom.Sg"
+    assert apfel["pos"] == "NOUN"
+    assert apfel["gender"] == "m"
+    assert apfel["classification_oxford"] == "B1"
+
+    haus = by_coord[(1, 0)]
+    assert haus["word_destination"] == "altes Haus"
+    assert haus["ipa"] == "haʊ̯s"
+    assert haus["word_provenance"] == "live:google"
+    sents = {s["sentence_index"]: s for s in reopened.get_sentences_by_session(target_zid)}
+    assert sents[1]["sentence_destination"] == "Дом."
+    assert sents[2]["sentence_destination"] == "Яблоко."
+

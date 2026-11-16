@@ -4544,7 +4544,7 @@ class SqliteStorageAdapter(StorageAdapter):
                     continue
                 raise
             if restored is not None and "data_rows" in restored:
-                if tsv_match:
+                if p.exists() and tsv_match:
                     file_slug = tsv_match.group(1).strip().lower()
                     db_slug = str(restored.get("slug") or "").strip().lower()
                     if db_slug and file_slug and db_slug != file_slug:
@@ -8148,8 +8148,7 @@ def format_initial_card_translations(cards, active_sentence, text_mode, config, 
         if not translated and card["sentence_idx"] == active_sentence:
             rendered = pending_html
         else:
-            rendered = format_translated_html(translated, text_mode=text_mode, text=card["source_text"], config=config)
-            rendered = rendered.replace("<div", f"<div{provenance_attrs}", 1)
+            rendered = format_translated_html(translated, text_mode=text_mode, text=card["source_text"], config=config).replace("<div", f"<div{provenance_attrs}")
         if not rendered:
             rendered = "<div></div>"
         chunks.append(rendered.replace("<div", f'<div data-translation-sentence="{card["sentence_idx"]}"'))
@@ -14512,6 +14511,10 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
                     match_dict['WordSourceMorphologyAI'] = str(cand['morphology']).strip()
                 if cand.get('ipa'):
                     match_dict['WordSourceIPA'] = str(cand['ipa']).strip()
+                if cand.get('pos'):
+                    match_dict['WordSourcePOS'] = str(cand['pos']).strip()
+                if cand.get('gender'):
+                    match_dict['WordSourceGender'] = str(cand['gender']).strip()
 
                 extra = cand.get('extra_fields') or {}
                 if isinstance(extra, dict):

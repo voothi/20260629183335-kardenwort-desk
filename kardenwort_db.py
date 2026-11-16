@@ -2371,7 +2371,7 @@ class KardenwortDB:
         sql = """
             SELECT 
                 w.lemma, w.quotation, w.inflected_form, w.word_destination,
-                w.pos, w.morphology, w.ipa, w.extra_fields,
+                w.pos, w.gender, w.morphology, w.ipa, w.extra_fields,
                 s.created_at, s.zid as session_zid, s.source_language
             FROM words w
             JOIN sessions s ON w.session_zid = s.zid

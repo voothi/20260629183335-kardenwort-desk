@@ -180,3 +180,47 @@ def test_committed_delivery_failure_exposes_read_recovery_without_duplicate_muta
     assert world.provider.calls == calls
     assert world.values() == {(1, 0): expected, (2, 0): 'tree'}
     assert prohibited(writes) == []
+
+
+def test_retry_token_orders_empty_selectors_and_ambiguity_do_not_trigger_sentence_retry(world, monkeypatch):
+    """Verify token_orders and empty selectors never trigger full-session sentence retry, and duplicate tokens fail cleanly."""
+    rows = [
+        ['0', 'Haus', 'Haus', '', '1', 'Das Haus.', '', ''],
+        ['0', 'Baum', 'Baum', '', '2', 'Der Baum.', '', ''],
+        ['1', 'Himmel', 'Himmel', '', '2', 'Der Baum.', '', ''],
+    ]
+    world.seed(ZID, rows, text='Das Haus. Der Baum.')
+    with world.adapter.db.get_connection() as conn:
+        conn.execute("UPDATE sentences SET sentence_destination = '' WHERE session_zid = ?", (ZID,))
+        conn.execute("UPDATE words SET word_destination = '' WHERE session_zid = ?", (ZID,))
+    world.arbiter.sessions.pop(ZID, None)
+    world.provider.calls.clear()
+    sentence_calls = []
+    monkeypatch.setattr(controller, 'translate_source_text', lambda *a, **kw: sentence_calls.append(a))
+
+    # 1. token_orders=[1] retries ONLY (2, 1), never calling sentence translation
+    status, res = post(world, '/session/retry', dict(session_zid=ZID, token_orders=[1]))
+    assert status == 200, res
+    assert world.provider.calls == [['Himmel']]
+    assert sentence_calls == []
+    assert world.values() == {(1, 0): '', (2, 0): '', (2, 1): 'fresh-Himmel'}
+    sents = {s['sentence_index']: s['sentence_destination'] for s in world.adapter.db.get_sentences_by_session(ZID)}
+    assert sents == {1: '', 2: ''}
+
+    # 2. Explicit empty selectors perform zero provider calls and zero sentence retry
+    world.provider.calls.clear()
+    for empty_payload in (dict(token_orders=[]), dict(row_ids=[]), dict(target_coordinates=[])):
+        st, out = post(world, '/session/retry', dict(session_zid=ZID, **empty_payload))
+        assert st == 200, out
+        payload_data = out.get('data', out)
+        assert payload_data['retried_rows'] == []
+        assert world.provider.calls == []
+        assert sentence_calls == []
+
+    # 3. Repeated local token_order=0 in different sentences rejects ambiguity cleanly before provider calls
+    st_amb, out_amb = post(world, '/session/retry', dict(session_zid=ZID, token_orders=[0]))
+    assert st_amb >= 400, out_amb
+    assert world.provider.calls == []
+    assert sentence_calls == []
+    assert world.values() == {(1, 0): '', (2, 0): '', (2, 1): 'fresh-Himmel'}
+

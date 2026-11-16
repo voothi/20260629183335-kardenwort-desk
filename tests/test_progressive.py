@@ -991,3 +991,195 @@ api_key = test-secret-token-123
     assert len(popen_cmds) == 1
     assert popen_cmds[0][0] == str(custom_py)
     assert popen_cmds[0][2] == "progressive-worker"
+
+
+def _seed_stage3_session(tmp_path, name, zid="20261116212101", use_default_morph_header=True):
+    from kardenwort_db import KardenwortDB
+    from kardenwort_controller import SessionArbiter
+
+    db_file = tmp_path / f"{name}.db"
+    cfg = configparser.ConfigParser()
+    cfg.add_section("storage")
+    cfg.set("storage", "backend", "sqlite")
+    cfg.set("storage", "sqlite_db_path", str(db_file))
+    cfg.add_section("settings")
+    cfg.set("settings", "default_language", "de")
+    cfg.set("settings", "default_target_language", "ru")
+    cfg.add_section("triggers")
+    cfg.set("triggers", "run_text_translation", "manual")
+    cfg.set("triggers", "run_lemma_base_translation", "manual")
+    cfg.set("triggers", "run_lemma_enrichment", "auto")
+    cfg.add_section("pipeline")
+    cfg.set("pipeline", "lemma_reprocess_provider", "intellifiller")
+    cfg.add_section("services")
+    cfg.set("services", "intellifiller_server_url", "http://127.0.0.1:18339/enrich")
+
+    mapping_file = tmp_path / f"{name}-mapping.ini"
+    mapping_file.write_text(
+        "[fields]\nTokenOrder\nQuotation\nWordSource\nWordDestination\nWordSourceIPA\nWordSourceMorphologyAI\nWordSourcePOS\nWordSourceGender\nDeskSelected\nSentenceSourceIndex\nSentenceSource\nSentenceDestination\n"
+        + ("" if use_default_morph_header else "[roles]\nmorphology=WordSourceMorphologyAI\n"),
+        encoding="utf-8",
+    )
+    results_dir = tmp_path / f"{name}_results"
+    results_dir.mkdir(exist_ok=True)
+    resolved_paths = {
+        "sqlite_db_path": str(db_file),
+        "anki_mapping_file": str(mapping_file),
+        "results_dir": results_dir,
+        "kardenwort_workspace": str(tmp_path),
+    }
+    db = KardenwortDB(db_path=db_file)
+    db.run_migrations()
+    db.save_session_bundle(
+        {"zid": zid, "slug": name, "source_language": "de", "target_language": "ru", "text_mode": "single", "source_raw_text": "Das Haus."},
+        [{"session_zid": zid, "sentence_index": 1, "sentence_source": "Das Haus.", "sentence_destination": "Дом.", "text_provenance": "cached:sqlite"}],
+        [{"session_zid": zid, "sentence_index": 1, "token_order": 0, "quotation": "Haus", "lemma": "Haus",
+          "word_destination": "дом", "ipa": None, "morphology": None, "pos": None, "gender": None, "word_provenance": "live:google", "selected": 0}],
+    )
+    arbiter = SessionArbiter(config=cfg, resolved_paths=resolved_paths, wordfill_cfg={"enabled": False})
+    return db, cfg, resolved_paths, arbiter, zid
+
+
+def test_stage3_canonical_morphology_role_and_authoritative_snapshot(tmp_path, monkeypatch):
+    """Verify Stage 3 detects WordSourceMorphologyAI role and publishes authoritative post-Stage-3 finished event."""
+    from kardenwort_events import EventDispatcher
+
+    db, cfg, paths, arbiter, zid = _seed_stage3_session(tmp_path, "stage3_snap")
+    intellifiller_calls = []
+
+    def stub_intellifiller(rows=None, **kwargs):
+        intellifiller_calls.append(rows)
+        return {
+            "status": "success",
+            "enriched_rows": [{
+                "row_id": rows[0]["row_id"],
+                "WordSource": "Haus",
+                "WordDestination": "дом",
+                "WordSourceIPA": "haʊ̯s",
+                "WordSourceMorphologyAI": "Subst.Neut.Nom.Sg",
+                "WordSourcePOS": "NOUN",
+                "WordSourceGender": "n",
+            }],
+        }
+
+    monkeypatch.setattr(desk, "query_intellifiller_server", stub_intellifiller)
+    events = EventDispatcher.get_instance().register(zid)
+    try:
+        arbiter.enrichment_queue._execute_progressive_task(zid, arbiter, "de", "ru", skip_intellifiller=False)
+        emitted = []
+        while not events.empty():
+            emitted.append(events.get_nowait())
+        finished = next(e for e in reversed(emitted) if e.get("stage") == "finished")
+        assert intellifiller_calls, "Stage 3 must trigger when WordSourceMorphologyAI is empty"
+        assert finished["status"] == "success"
+        assert finished["rows"]["0"]["ipa"] == "haʊ̯s"
+        assert finished["rows"]["0"]["morphology"] == "Subst.Neut.Nom.Sg"
+        adapter = desk.SqliteStorageAdapter(config=cfg, resolved_paths=paths, db_path=db.db_path)
+        restored = adapter.restore_session(zid)
+        expected_fp = desk.compute_content_fingerprint(
+            desk.sort_session_data_rows(restored["data_rows"], restored["headers"], "de", cfg, paths)
+        )
+        assert finished["fingerprint"] == expected_fp
+    finally:
+        EventDispatcher.get_instance().unregister(zid, events)
+        arbiter.enrichment_queue.shutdown()
+        desk.unregister_failover_callback(arbiter._on_global_failover)
+
+
+def test_stage3_races_edit_supersession_deletion_and_delivery_failure(tmp_path, monkeypatch):
+    """Verify Stage 3 handles concurrent edit, supersession, deletion, and delivery failures truthfully."""
+    from kardenwort_events import EventDispatcher
+
+    # Subcase A: concurrent edit commits between Stage 3 and final progressive publication
+    db_a, cfg_a, paths_a, arbiter_a, zid_a = _seed_stage3_session(tmp_path, "race_edit", "20261116212102")
+    orig_reword = arbiter_a.reword_session
+
+    def reword_then_concurrent_edit(*args, **kwargs):
+        db_a.batch_update_words(zid_a, [{"sentence_index": 1, "token_order": 0, "updates": {"ipa": "haʊ̯s", "morphology": "Subst"}}])
+        db_a.batch_update_words(zid_a, [{"sentence_index": 1, "token_order": 0, "updates": {"word_destination": "новейший", "word_provenance": "live:deepl"}}])
+        return {}
+
+    monkeypatch.setattr(arbiter_a, "reword_session", reword_then_concurrent_edit)
+    q_a = EventDispatcher.get_instance().register(zid_a)
+    try:
+        arbiter_a.enrichment_queue._execute_progressive_task(zid_a, arbiter_a, "de", "ru", skip_intellifiller=False)
+        ev_a = []
+        while not q_a.empty():
+            ev_a.append(q_a.get_nowait())
+        fin_a = next(e for e in reversed(ev_a) if e.get("stage") == "finished")
+        assert fin_a["status"] == "success"
+        assert fin_a["rows"]["0"]["trans"] == "новейший"
+        assert fin_a["rows"]["0"]["provenance"] == "live:deepl"
+    finally:
+        EventDispatcher.get_instance().unregister(zid_a, q_a)
+        arbiter_a.enrichment_queue.shutdown()
+        desk.unregister_failover_callback(arbiter_a._on_global_failover)
+
+    # Subcase B: superseded generation does not publish stale finished event
+    db_b, cfg_b, paths_b, arbiter_b, zid_b = _seed_stage3_session(tmp_path, "race_superseded", "20261116212103")
+    with arbiter_b.enrichment_queue._lock:
+        arbiter_b.enrichment_queue._progressive_generations[zid_b] = 99
+    q_b = EventDispatcher.get_instance().register(zid_b)
+    try:
+        arbiter_b.enrichment_queue._execute_progressive_task(zid_b, arbiter_b, "de", "ru", skip_intellifiller=True, generation=1)
+        ev_b = []
+        while not q_b.empty():
+            ev_b.append(q_b.get_nowait())
+        assert not [e for e in ev_b if e.get("stage") == "finished"]
+    finally:
+        EventDispatcher.get_instance().unregister(zid_b, q_b)
+        arbiter_b.enrichment_queue.shutdown()
+        desk.unregister_failover_callback(arbiter_b._on_global_failover)
+
+    # Subcase C: session deleted mid-task cannot reconstruct deleted cache or publish success
+    db_c, cfg_c, paths_c, arbiter_c, zid_c = _seed_stage3_session(tmp_path, "race_deleted", "20261116212104")
+
+    def delete_during_stage3(*args, **kwargs):
+        db_c.delete_session(zid_c)
+        return {}
+
+    monkeypatch.setattr(arbiter_c, "reword_session", delete_during_stage3)
+    q_c = EventDispatcher.get_instance().register(zid_c)
+    try:
+        arbiter_c.enrichment_queue._execute_progressive_task(zid_c, arbiter_c, "de", "ru", skip_intellifiller=False)
+        ev_c = []
+        while not q_c.empty():
+            ev_c.append(q_c.get_nowait())
+        fin_c = next(e for e in reversed(ev_c) if e.get("stage") == "finished")
+        assert fin_c["status"] == "failed"
+        assert zid_c not in arbiter_c.sessions
+        assert db_c.get_session(zid_c) is None
+    finally:
+        EventDispatcher.get_instance().unregister(zid_c, q_c)
+        arbiter_c.enrichment_queue.shutdown()
+        desk.unregister_failover_callback(arbiter_c._on_global_failover)
+
+    # Subcase D: committed Stage 3 followed by delivery failure reports recovery details without repeating provider
+    db_d, cfg_d, paths_d, arbiter_d, zid_d = _seed_stage3_session(tmp_path, "race_delivery", "20261116212105")
+    stage3_calls = []
+
+    def commit_once(*args, **kwargs):
+        stage3_calls.append(1)
+        db_d.batch_update_words(zid_d, [{"sentence_index": 1, "token_order": 0, "updates": {"ipa": "haʊ̯s", "morphology": "Subst"}}])
+        return {}
+
+    def broken_emit(target_zid, payload):
+        if payload.get("stage") == "finished":
+            raise ConnectionError("SSE transport lost")
+
+    monkeypatch.setattr(arbiter_d, "reword_session", commit_once)
+    monkeypatch.setattr(arbiter_d, "emit_event", broken_emit)
+    try:
+        res = arbiter_d.enrichment_queue.enqueue_progressive_task(zid_d, arbiter_d, "de", "ru", skip_intellifiller=False)
+        assert res["status"] == "queued"
+        with pytest.raises(ExceptionGroup, match="Controller queue disposal failed") as caught:
+            arbiter_d.enrichment_queue.shutdown(wait=True)
+        err = next(e for e in caught.value.exceptions if isinstance(e, desk.StructuredError))
+        assert err.details["committed"] is True
+        assert err.details["recovery_url"] == f"/session/status?zid={zid_d}&committed=1"
+        assert len(stage3_calls) == 1
+        assert db_d.get_worker_status(zid_d)["worker_status"] == "finished"
+        assert db_d.get_words_by_session(zid_d)[0]["ipa"] == "haʊ̯s"
+    finally:
+        desk.unregister_failover_callback(arbiter_d._on_global_failover)
+

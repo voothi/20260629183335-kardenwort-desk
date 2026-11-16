@@ -1,4 +1,5 @@
 import sys
+from collections import deque
 from contextlib import contextmanager
 import sqlite3
 from kardenwort_db import QueryExecutionError
@@ -830,7 +831,11 @@ class EnrichmentQueue:
         self._lemma_trans_cache: Dict[Tuple[str, str, str], str] = {}
         self._inflight_trans: Dict[Tuple[str, str, str], concurrent.futures.Future] = {}
         self._active_progressive_sessions: Dict[str, concurrent.futures.Future] = {}
-        self._progressive_failures = []
+        self._progressive_generations: Dict[str, int] = {}
+        self._unobserved_progressive_failures: List[BaseException] = []
+        self._progressive_failures = self._unobserved_progressive_failures
+        self._acknowledged_failures = deque(maxlen=64)
+        self._shutting_down = False
         self._lock = threading.Lock()
         self._pacing_lock = threading.Lock()
         self._last_request_time = 0.0
@@ -1179,11 +1184,15 @@ class EnrichmentQueue:
         trace_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         with self._lock:
+            if self._shutting_down:
+                raise RuntimeError("Controller enrichment queue has been shut down")
             if session_zid in self._active_progressive_sessions:
                 existing_fut = self._active_progressive_sessions[session_zid]
                 if not existing_fut.done():
                     return {"status": "in_progress", "session_zid": session_zid}
 
+            generation = self._progressive_generations.get(session_zid, 0) + 1
+            self._progressive_generations[session_zid] = generation
             fut = self._progressive_executor.submit(
                 self._execute_progressive_task,
                 session_zid,
@@ -1195,18 +1204,332 @@ class EnrichmentQueue:
                 skip_intellifiller,
                 zid,
                 trace_id,
+                generation,
             )
             self._active_progressive_sessions[session_zid] = fut
         fut.add_done_callback(lambda completed: self._finish_progressive_task(session_zid, completed))
         return {"status": "queued", "session_zid": session_zid}
 
+    def _is_failure_tracked_locked(self, error: BaseException) -> bool:
+        return any(existing is error for existing in self._unobserved_progressive_failures) or any(
+            existing is error for existing in self._acknowledged_failures
+        )
+
     def _finish_progressive_task(self, session_zid, future):
         error = None if future.cancelled() else future.exception()
         with self._lock:
-            if error is not None:
-                self._progressive_failures.append(error)
+            if error is not None and not self._is_failure_tracked_locked(error):
+                self._unobserved_progressive_failures.append(error)
             if self._active_progressive_sessions.get(session_zid) is future:
                 del self._active_progressive_sessions[session_zid]
+
+    _WORDFILL_ROLE_COLUMNS = (
+        ("word_translation", "word_destination", ("WordDestination",)),
+        ("ipa", "ipa", ("WordSourceIPA",)),
+        ("morphology", "morphology", ("WordSourceMorphologyAI", "WordSourceMorphology")),
+        ("pos", "pos", ("WordSourcePOS", "POS")),
+        ("gender", "gender", ("WordSourceGender", "Gender")),
+    )
+
+    def _resolve_header_index(self, headers: List[str], candidates: Tuple[str, ...]) -> int:
+        for name in candidates:
+            if name and name in headers:
+                return headers.index(name)
+        return -1
+
+    def _collect_wordfill_row_updates(
+        self,
+        row: List[str],
+        headers: List[str],
+        role_fields: Dict[str, str],
+        match: Dict[str, Any],
+    ) -> Dict[str, str]:
+        row_db_updates: Dict[str, str] = {}
+        for role_key, db_field, default_cols in self._WORDFILL_ROLE_COLUMNS:
+            role_col = role_fields.get(role_key)
+            candidates = (role_col, *default_cols) if role_col else default_cols
+            col_idx = self._resolve_header_index(headers, candidates)
+            existing_val = row[col_idx].strip() if col_idx != -1 and len(row) > col_idx else ""
+            if existing_val:
+                continue
+            incoming = ""
+            for cand in candidates:
+                raw_val = match.get(cand) if cand else None
+                if raw_val is not None and str(raw_val).strip():
+                    candidate_str = str(raw_val).strip()
+                    if candidate_str != "[FAILED]" and not candidate_str.startswith("[Error"):
+                        incoming = candidate_str
+                        break
+            if incoming:
+                row_db_updates[db_field] = incoming
+                if col_idx != -1:
+                    while len(row) <= col_idx:
+                        row.append("")
+                    row[col_idx] = incoming
+        return row_db_updates
+
+    def _run_wordfill_stage(
+        self,
+        arbiter: Any,
+        storage_adapter: Any,
+        session_zid: str,
+        req_zid: str,
+        is_sqlite: bool,
+        data_rows: List[List[str]],
+        headers: List[str],
+        role_fields: Dict[str, str],
+        occurrence_keys: Optional[List[Tuple[int, int]]],
+        col_lemma: int,
+        col_word_dest: int,
+        sess_lang: str,
+        tsv_path: Any,
+        comments: List[str],
+    ) -> None:
+        wordfill_cfg = getattr(arbiter, 'wordfill_cfg', None) or resolve_wordfill_config(self.config, self.resolved_paths)
+        if not (wordfill_cfg and wordfill_cfg.get('enabled', False)):
+            return
+        wf_applied = False
+        sqlite_updates: List[Dict[str, Any]] = []
+        for row_idx, row in enumerate(data_rows):
+            if len(row) <= col_lemma or not row[col_lemma].strip():
+                continue
+            is_trans = col_word_dest != -1 and len(row) > col_word_dest and bool(row[col_word_dest].strip())
+            if is_trans:
+                continue
+            match = find_wordfill_match(row[col_lemma].strip(), sess_lang, wordfill_cfg, exclude_path=tsv_path)
+            if not match:
+                continue
+            row_db_updates = self._collect_wordfill_row_updates(row, headers, role_fields, match)
+            apply_wordfill_to_rows([row], headers, match)
+            if row_db_updates:
+                wf_applied = True
+                if is_sqlite and occurrence_keys is not None:
+                    sent_idx, t_ord = occurrence_keys[row_idx]
+                    sqlite_updates.append({"sentence_index": sent_idx, "token_order": t_ord, "updates": row_db_updates})
+        if not wf_applied:
+            return
+        if is_sqlite:
+            if sqlite_updates:
+                storage_adapter.batch_update_words(session_zid=session_zid, updates_list=sqlite_updates, zid=req_zid)
+        else:
+            with storage_adapter.file_lock(tsv_path):
+                storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+
+    def _is_progressive_superseded(self, session_zid: str, generation: Optional[int]) -> bool:
+        if generation is None:
+            return False
+        with self._lock:
+            return self._progressive_generations.get(session_zid) != generation
+
+    def _publish_progressive_final_state(
+        self,
+        arbiter: Any,
+        storage_adapter: Any,
+        session_zid: str,
+        is_sqlite: bool,
+        tsv_path: Any,
+        sess_lang: str,
+        headers: List[str],
+        data_rows: List[List[str]],
+        role_fields: Dict[str, str],
+        mapping: Any,
+        active_text_prov: Optional[str],
+        worker_error: Optional[Dict[str, Any]],
+        eff_trace_id: str,
+        sess_row_provs: Dict[Any, str],
+        generation: Optional[int],
+    ) -> None:
+        if self._is_progressive_superseded(session_zid, generation):
+            return
+
+        status_persist_err = None
+        if is_sqlite and hasattr(storage_adapter, 'db'):
+            try:
+                storage_adapter.db.set_worker_status(
+                    session_zid,
+                    "failed" if worker_error else "finished",
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                )
+            except Exception as exc:
+                status_persist_err = exc
+
+        snap_headers = list(headers)
+        snap_rows = [list(r) for r in data_rows]
+        snap_roles = dict(role_fields)
+        fin_row_provs: Dict[Any, str] = {}
+        occ_provs: Dict[Tuple[str, str], str] = {}
+        row_occurrences = None
+        snap_sents = None
+        snap_text_prov = active_text_prov
+        deleted_session = False
+
+        if is_sqlite:
+            try:
+                restored = storage_adapter.restore_session(session_zid)
+            except StructuredError as exc:
+                if exc.error_code == ErrorCode.NOT_FOUND:
+                    deleted_session = True
+                    restored = None
+                else:
+                    raise
+            if deleted_session:
+                with arbiter._lock:
+                    arbiter.sessions.pop(session_zid, None)
+                if worker_error is None:
+                    worker_error = {
+                        "code": "ERR_SESSION_DELETED",
+                        "message": f"Session {session_zid} was deleted before completion",
+                        "provider": "controller",
+                        "details": {},
+                    }
+                arbiter.emit_event(session_zid, {
+                    "type": "update",
+                    "stage": "finished",
+                    "status": "failed",
+                    "error": worker_error,
+                    "fingerprint": "",
+                    "rows": {},
+                    "row_provenances": {},
+                    "rowProvenances": {},
+                })
+                with self._lock:
+                    self._acknowledged_failures.append(dict(worker_error))
+                if status_persist_err is not None:
+                    raise status_persist_err
+                return
+
+            if restored:
+                snap_headers, raw_snap_rows = reword.restored_manifest_rows(restored)
+                snap_roles = get_role_fields(mapping, snap_headers) if mapping else snap_roles
+                snap_rows = sort_session_data_rows(
+                    raw_snap_rows, snap_headers, sess_lang, self.config, self.resolved_paths, role_fields=snap_roles
+                )
+                occ_provs = reword_query_provenances(storage_adapter, session_zid)
+                row_occurrences = reword_query_occurrences(storage_adapter, session_zid)
+                sent_field = snap_roles.get("sentence_index", "SentenceSourceIndex")
+                for index, key in enumerate(reword.row_keys(snap_rows, snap_headers, sent_field)):
+                    prov = occ_provs.get(tuple(map(str, key)), "")
+                    if prov:
+                        fin_row_provs[index] = prov
+                        fin_row_provs[str(index)] = prov
+                        t_ord = str(key[1])
+                        fin_row_provs[t_ord] = prov
+                        if t_ord.isdigit():
+                            fin_row_provs[int(t_ord)] = prov
+                db_sents = restored.get("sentences") or []
+                if db_sents:
+                    snap_sents = [
+                        {
+                            "sentence_index": s.get("sentence_index", 1),
+                            "sentence_source": str(s.get("sentence_source") or "").strip(),
+                            "sentence_destination": str(s.get("sentence_destination") or "").strip(),
+                            "sentence_destination2": str(s.get("sentence_destination2") or "").strip(),
+                            "text_provenance": s.get("text_provenance"),
+                        }
+                        for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1))
+                    ]
+                    snap_text_prov = next((s.get("text_provenance") for s in db_sents if s.get("text_provenance")), snap_text_prov)
+
+        if not is_sqlite:
+            with arbiter._lock:
+                if session_zid in arbiter.sessions:
+                    fin_row_provs = dict(arbiter.sessions[session_zid].get("row_provenances") or {})
+                    snap_sents = arbiter.sessions[session_zid].get("sentences")
+            if not fin_row_provs and sess_row_provs:
+                fin_row_provs = dict(sess_row_provs)
+            if snap_rows and snap_headers:
+                snap_rows = sort_session_data_rows(
+                    snap_rows, snap_headers, sess_lang, self.config, self.resolved_paths, role_fields=snap_roles
+                )
+
+        if self._is_progressive_superseded(session_zid, generation):
+            return
+
+        status_val = "failed" if worker_error else "success"
+        if worker_error is not None:
+            with self._lock:
+                self._acknowledged_failures.append(dict(worker_error))
+        new_fp = compute_content_fingerprint(snap_rows) if snap_rows else ""
+
+        with arbiter._lock:
+            if session_zid in arbiter.sessions:
+                arbiter.sessions[session_zid]["data_rows"] = snap_rows
+                arbiter.sessions[session_zid]["headers"] = snap_headers
+                arbiter.sessions[session_zid]["fingerprint"] = new_fp
+                arbiter.sessions[session_zid]["row_provenances"] = fin_row_provs
+                if snap_sents is not None:
+                    arbiter.sessions[session_zid]["sentences"] = snap_sents
+                if snap_text_prov:
+                    arbiter.sessions[session_zid]["text_provenance"] = snap_text_prov
+                    arbiter.sessions[session_zid]["textProvenance"] = snap_text_prov
+
+        structured_rows = (
+            format_update_rows_dict(
+                snap_rows,
+                snap_headers,
+                snap_roles,
+                row_provenances=fin_row_provs,
+                row_occurrences=row_occurrences,
+                occurrence_provenances=occ_provs or None,
+            )
+            if (snap_rows and snap_headers and snap_roles)
+            else {}
+        )
+        finished_event = {
+            "type": "update",
+            "stage": "finished",
+            "status": status_val,
+            "error": worker_error,
+            "fingerprint": new_fp,
+            "rows": structured_rows,
+            "row_provenances": fin_row_provs,
+            "rowProvenances": fin_row_provs,
+        }
+        if snap_sents:
+            finished_event["sentences"] = snap_sents
+        if snap_text_prov:
+            finished_event["text_provenance"] = snap_text_prov
+            finished_event["textProvenance"] = snap_text_prov
+
+        delivery_error = None
+        try:
+            if tsv_path and snap_rows and snap_headers:
+                safe_write_update_js(
+                    tsv_path,
+                    snap_rows,
+                    snap_headers,
+                    snap_roles,
+                    stage="finished",
+                    status=status_val,
+                    error=worker_error,
+                    zid=session_zid,
+                    trace_id=eff_trace_id,
+                    text_provenance=snap_text_prov,
+                    row_provenances=fin_row_provs,
+                    config=self.config,
+                    resolved_paths=self.resolved_paths,
+                    storage_adapter=storage_adapter,
+                    row_occurrences=row_occurrences,
+                    occurrence_provenances=occ_provs or None,
+                )
+            arbiter.emit_event(session_zid, finished_event)
+        except Exception as exc:
+            delivery_error = StructuredError(
+                ErrorCode.DESK_FAILED,
+                "Progressive task committed; update delivery failed",
+                details={
+                    "committed": worker_error is None,
+                    "session_zid": session_zid,
+                    "fingerprint": new_fp,
+                    "recovery_url": f"/session/status?zid={session_zid}&committed=1",
+                },
+            )
+            delivery_error.__cause__ = exc
+
+        if status_persist_err is not None:
+            raise status_persist_err
+        if delivery_error is not None and worker_error is None:
+            raise delivery_error
 
     def _execute_progressive_task(
         self,
@@ -1219,6 +1542,7 @@ class EnrichmentQueue:
         skip_intellifiller: bool = False,
         zid: Optional[str] = None,
         trace_id: Optional[str] = None,
+        generation: Optional[int] = None,
     ):
         req_zid = zid or session_zid
         eff_trace_id = trace_id or f"{req_zid}:progressive:worker"
@@ -1236,14 +1560,12 @@ class EnrichmentQueue:
         sess_target = target_lang
         tsv_path = None
         active_text_prov = None
+        sess_row_provs: Dict[Any, str] = {}
 
         if is_sqlite and hasattr(storage_adapter, 'db'):
-            try:
-                now_iso = datetime.now(timezone.utc).isoformat()
-                storage_adapter.db.set_worker_status(session_zid, "running", started_at=now_iso)
-                storage_adapter.db.update_worker_heartbeat(session_zid, heartbeat_at=now_iso)
-            except Exception:
-                pass
+            now_iso = datetime.now(timezone.utc).isoformat()
+            storage_adapter.db.set_worker_status(session_zid, "running", started_at=now_iso)
+            storage_adapter.db.update_worker_heartbeat(session_zid, heartbeat_at=now_iso)
 
         try:
             # 1. Recover / Load session data
@@ -1471,30 +1793,22 @@ class EnrichmentQueue:
             run_base = self.config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto') if self.config else 'auto'
             if run_base == 'auto' and col_lemma != -1:
                 # 2a. Wordfill pre-fill
-                wordfill_cfg = getattr(arbiter, 'wordfill_cfg', None) or resolve_wordfill_config(self.config, self.resolved_paths)
-                if wordfill_cfg and wordfill_cfg.get('enabled', False):
-                    wf_applied = False
-                    for row in data_rows:
-                        if len(row) > col_lemma and row[col_lemma].strip():
-                            l_val = row[col_lemma].strip()
-                            is_trans = (col_word_dest != -1 and len(row) > col_word_dest and bool(row[col_word_dest].strip()))
-                            if not is_trans:
-                                match = find_wordfill_match(l_val, sess_lang, wordfill_cfg, exclude_path=tsv_path)
-                                if match:
-                                    apply_wordfill_to_rows([row], headers, match)
-                                    wf_applied = True
-                    if wf_applied:
-                        if is_sqlite:
-                            updates = []
-                            for row_idx, row in enumerate(data_rows):
-                                if col_lemma != -1 and len(row) > col_lemma and col_word_dest != -1 and len(row) > col_word_dest and row[col_word_dest].strip():
-                                    t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
-                                    updates.append(dict(sentence_index=occurrence_keys[row_idx][0], token_order=t_ord, field="word_destination", value=row[col_word_dest]))
-                            if updates:
-                                storage_adapter.batch_update_words(session_zid=session_zid, updates_list=updates, zid=req_zid)
-                        else:
-                            with storage_adapter.file_lock(tsv_path):
-                                storage_adapter.save_tsv_rows_safely(tsv_path, session_data["comments"], headers, data_rows)
+                self._run_wordfill_stage(
+                    arbiter,
+                    storage_adapter,
+                    session_zid,
+                    req_zid,
+                    is_sqlite,
+                    data_rows,
+                    headers,
+                    role_fields,
+                    occurrence_keys,
+                    col_lemma,
+                    col_word_dest,
+                    sess_lang,
+                    tsv_path,
+                    session_data["comments"],
+                )
 
                 # 2b. Batch lemma translations
                 lemmas_to_translate = []
@@ -1515,8 +1829,6 @@ class EnrichmentQueue:
                 lemma_provider = lemma_chain[0] if lemma_chain else 'google'
                 translated_map: Dict[str, str] = {}
                 if lemmas_to_translate:
-                    lemma_chain, _ = resolve_provider_chain(self.config, task_type='lemma') if self.config else (['google'], 'chain')
-                    lemma_provider = lemma_chain[0] if lemma_chain else 'google'
                     chunk_size = 15
                     if self.config and hasattr(self.config, 'getint'):
                         chunk_size = self.config.getint(SEC_TRANSLATION, 'lemma_batch_size', fallback=15)
@@ -1576,7 +1888,6 @@ class EnrichmentQueue:
                                         while len(row) <= col_word_dest:
                                             row.append("")
                                         row[col_word_dest] = t_val
-                                        t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
                                         if is_sqlite:
                                             updates.append(dict(sentence_index=occurrence_keys[row_idx][0],
                                                 token_order=occurrence_keys[row_idx][1],
@@ -1593,7 +1904,6 @@ class EnrichmentQueue:
                         arbiter.propagate_translations_to_siblings(translated_map, exclude_session_zid=session_zid, language=sess_lang)
 
                 new_fp = compute_content_fingerprint(data_rows)
-                sess_row_provs = {}
                 with arbiter._lock:
                     if session_zid in arbiter.sessions:
                         arbiter.sessions[session_zid]["data_rows"] = data_rows
@@ -1643,8 +1953,8 @@ class EnrichmentQueue:
             enrich_provider = self.config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller') if self.config else 'intellifiller'
             if not skip_intellifiller and run_enrich == 'auto' and enrich_provider == 'intellifiller':
                 selected_rows = []
-                col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields.get('ipa', 'WordSourceIPA') in headers else -1
-                col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphology')) if role_fields.get('morphology', 'WordSourceMorphology') in headers else -1
+                col_ipa = self._resolve_header_index(headers, (role_fields.get('ipa', 'WordSourceIPA'), 'WordSourceIPA'))
+                col_morph = self._resolve_header_index(headers, (role_fields.get('morphology', 'WordSourceMorphologyAI'), 'WordSourceMorphologyAI'))
                 for idx, r in enumerate(data_rows):
                     if col_lemma != -1 and len(r) > col_lemma and r[col_lemma].strip():
                         need_dest = col_word_dest == -1 or len(r) <= col_word_dest or not r[col_word_dest].strip()
@@ -1671,64 +1981,23 @@ class EnrichmentQueue:
                 "details": {},
             }
         finally:
-            if is_sqlite and hasattr(storage_adapter, 'db'):
-                try:
-                    storage_adapter.db.set_worker_status(
-                        session_zid,
-                        "failed" if worker_error else "finished",
-                        finished_at=datetime.now(timezone.utc).isoformat()
-                    )
-                except Exception:
-                    pass
-
-            # Emit final finished event
-            status_val = "failed" if worker_error else "success"
-            new_fp = compute_content_fingerprint(data_rows) if data_rows else ""
-            fin_row_provs = {}
-            with arbiter._lock:
-                if session_zid in arbiter.sessions:
-                    fin_row_provs = dict(arbiter.sessions[session_zid].get("row_provenances") or {})
-            if not fin_row_provs and 'sess_row_provs' in locals() and sess_row_provs:
-                fin_row_provs = dict(sess_row_provs)
-            if not fin_row_provs and is_sqlite and hasattr(storage_adapter, 'db'):
-                try:
-                    db_words = storage_adapter.db.get_words_by_session(session_zid)
-                    for w in db_words:
-                        w_prov = w.get("word_provenance")
-                        if w_prov:
-                            t_ord = str(w.get("token_order", ""))
-                            fin_row_provs[t_ord] = w_prov
-                            if t_ord.isdigit():
-                                fin_row_provs[int(t_ord)] = w_prov
-                    if fin_row_provs:
-                        with arbiter._lock:
-                            if session_zid in arbiter.sessions:
-                                arbiter.sessions[session_zid]["row_provenances"] = fin_row_provs
-                except Exception:
-                    pass
-
-            structured_rows = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=fin_row_provs) if (data_rows and headers and role_fields) else {}
-            if tsv_path and data_rows and headers:
-                sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov, row_provenances=fin_row_provs, config=self.config, resolved_paths=self.resolved_paths, storage_adapter=storage_adapter)
-
-            finished_event = {
-                "type": "update",
-                "stage": "finished",
-                "status": status_val,
-                "error": worker_error,
-                "fingerprint": new_fp,
-                "rows": structured_rows,
-                "row_provenances": fin_row_provs,
-                "rowProvenances": fin_row_provs,
-            }
-            curr_sents = arbiter.sessions.get(session_zid, {}).get("sentences")
-            if curr_sents:
-                finished_event["sentences"] = curr_sents
-            if active_text_prov:
-                finished_event["text_provenance"] = active_text_prov
-                finished_event["textProvenance"] = active_text_prov
-            arbiter.emit_event(session_zid, finished_event)
+            self._publish_progressive_final_state(
+                arbiter=arbiter,
+                storage_adapter=storage_adapter,
+                session_zid=session_zid,
+                is_sqlite=is_sqlite,
+                tsv_path=tsv_path,
+                sess_lang=sess_lang,
+                headers=headers,
+                data_rows=data_rows,
+                role_fields=role_fields,
+                mapping=mapping,
+                active_text_prov=active_text_prov,
+                worker_error=worker_error,
+                eff_trace_id=eff_trace_id,
+                sess_row_provs=sess_row_provs,
+                generation=generation,
+            )
 
     def get_status(self) -> Dict[str, Any]:
         with self._lock:
@@ -1745,14 +2014,25 @@ class EnrichmentQueue:
 
     def shutdown(self, wait: bool = True):
         with self._lock:
+            self._shutting_down = True
             tasks = set(self._inflight_lemmas.values()) | set(self._inflight_trans.values()) | set(self._active_progressive_sessions.values())
+        if not wait:
+            for task in tasks:
+                task.cancel()
         errors = run_cleanup([lambda executor=executor: executor.shutdown(wait=wait)
             for executor in (self._executor, self._translation_executor, self._progressive_executor)])
         if wait:
             errors.extend(run_cleanup([lambda task=task: task.result(timeout=0)
                                        for task in tasks if not task.cancelled()]))
-            with self._lock:
-                errors.extend(self._progressive_failures)
+        else:
+            errors.extend(run_cleanup([lambda task=task: task.result(timeout=0)
+                                       for task in tasks if task.done() and not task.cancelled()]))
+        with self._lock:
+            errors.extend(self._unobserved_progressive_failures)
+            self._unobserved_progressive_failures.clear()
+            for err in errors:
+                if not any(existing is err for existing in self._acknowledged_failures):
+                    self._acknowledged_failures.append(err)
         if errors:
             raise BaseExceptionGroup('Controller queue disposal failed', list({id(error): error for error in errors}.values()))
 
@@ -2867,19 +3147,22 @@ class SessionArbiter:
                 selected = [index for index, row in enumerate(data_rows)
                             if col_word_dest == -1 or not row[col_word_dest].strip()
                             or row[col_word_dest] == '[FAILED]' or 'skeleton-loader' in row[col_word_dest]]
-            selection = resolve_reword_request(data_rows, headers, role_fields, source, self.config,
-                targets=target_coordinates, selected_rows=selected, token_orders=token_orders)
+            try:
+                selection = resolve_reword_request(data_rows, headers, role_fields, source, self.config,
+                    targets=target_coordinates, selected_rows=selected, token_orders=token_orders)
+            except ValueError as exc:
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
             target_indices = list(selection.rows)
             selected_keys = dict(zip(selection.rows, selection.keys))
         else:
             target_indices = []
-            if token_orders is not None and len(token_orders) > 0:
+            if token_orders is not None:
                 token_orders_set = {str(to).strip() for to in token_orders if to is not None and str(to).strip() != ""}
                 for idx, r in enumerate(data_rows):
                     t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else str(idx)
                     if t_ord in token_orders_set:
                         target_indices.append(idx)
-            elif row_ids is not None and len(row_ids) > 0:
+            elif row_ids is not None:
                 for r in row_ids:
                     if str(r).isdigit() and 0 <= int(r) < len(data_rows):
                         target_indices.append(int(r))
@@ -2889,6 +3172,8 @@ class SessionArbiter:
                             t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(idx)
                             if t_ord == r_str:
                                 target_indices.append(idx)
+            elif target_coordinates is not None:
+                target_indices = []
             else:
                 for idx, r in enumerate(data_rows):
                     if len(r) > col_lemma and r[col_lemma].strip():
@@ -2946,10 +3231,9 @@ class SessionArbiter:
                             while len(row) <= col_word_dest:
                                 row.append("")
                             row[col_word_dest] = t_val
-                            t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
                             if is_sqlite:
                                 updates.append(dict(sentence_index=selected_keys[row_idx][0],
-                                    token_order=t_ord, updates=dict(word_destination=t_val, word_provenance=fast_prov)))
+                                    token_order=selected_keys[row_idx][1], updates=dict(word_destination=t_val, word_provenance=fast_prov)))
 
             if not is_sqlite:
                 with storage_adapter.file_lock(tsv_path):
@@ -2960,7 +3244,7 @@ class SessionArbiter:
         retry_text_plan = None
         need_sentence_trans = False
         text_provider = None
-        if (row_ids is None or len(row_ids) == 0) and target_coordinates is None:
+        if row_ids is None and token_orders is None and target_coordinates is None:
             col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
             col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else (headers.index(role_fields['sentence_destination2']) if 'sentence_destination2' in role_fields and role_fields['sentence_destination2'] in headers else -1)
             col_sentence_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1

@@ -493,3 +493,92 @@ def test_stop_interrupts_owned_child_health_startup(tmp_path):
             if stopper is not None:
                 stopper.result(timeout=5)
             listener.server_close()
+
+
+def test_queue_failure_ownership_cancellation_repeated_and_wait_false_disposal(tmp_path):
+    """Verify unobserved failures, executor disposal errors, wait=False, and repeated shutdown."""
+    from kardenwort_events import EventDispatcher
+
+    # 1. Completed unobserved setup failure + executor disposal failure both reach owner; repeated shutdown is clean
+    (tmp_path / "case1").mkdir()
+    config, paths, _ = owned_configuration(tmp_path / "case1", '', 'sqlite')
+    mapping = tmp_path / "case1" / "bad.ini"
+    mapping.write_text("invalid mapping", encoding="utf-8")
+    paths["anki_mapping_file"] = mapping
+    arbiter = controller.SessionArbiter(config, paths, wordfill_cfg={"enabled": False})
+    work = arbiter.enrichment_queue
+    try:
+        assert work.enqueue_progressive_task("20261116212201", arbiter, "en", "ru", skip_intellifiller=True)["status"] == "queued"
+        work._progressive_executor.shutdown(wait=True)
+        orig_exec_shutdown = work._executor.shutdown
+        closed_flags = []
+
+        def fail_first_executor(wait=True):
+            closed_flags.append("executor_failed")
+            orig_exec_shutdown(wait=wait)
+            raise OSError("primary executor disposal failed")
+
+        orig_trans_shutdown = work._translation_executor.shutdown
+
+        def track_second_executor(wait=True):
+            closed_flags.append("translation_closed")
+            return orig_trans_shutdown(wait=wait)
+
+        work._executor.shutdown = fail_first_executor
+        work._translation_executor.shutdown = track_second_executor
+
+        with pytest.raises(ExceptionGroup, match="Controller queue disposal failed") as caught:
+            work.shutdown(wait=True)
+        assert closed_flags == ["executor_failed", "translation_closed"]
+        assert any(isinstance(e, OSError) and "primary executor disposal failed" in str(e) for e in caught.value.exceptions)
+        assert any("section headers" in str(e) for e in caught.value.exceptions)
+        # Restore primary shutdown before verifying repeated shutdown does not re-raise observed failures
+        work._executor.shutdown = orig_exec_shutdown
+        work.shutdown(wait=True)
+        with pytest.raises(RuntimeError, match="shut down"):
+            work.enqueue_progressive_task("20261116212202", arbiter)
+    finally:
+        controller.unregister_failover_callback(arbiter._on_global_failover)
+
+    # 2. Structured provider failure + wait=False cancellation + bounded acknowledged diagnostic history
+    (tmp_path / "case2").mkdir()
+    cfg2, paths2, _ = owned_configuration(tmp_path / "case2", '', 'sqlite')
+    arbiter2 = controller.SessionArbiter(cfg2, paths2, wordfill_cfg={"enabled": False})
+    q2 = arbiter2.enrichment_queue
+    zid2 = "20261116212203"
+    events = EventDispatcher.get_instance().register(zid2)
+    started = threading.Event()
+    release = threading.Event()
+    try:
+        for i in range(70):
+            # Missing session tasks fail structurally and publish to session owner
+            assert q2.enqueue_progressive_task(f"202611162123{i:02d}", arbiter2)["status"] == "queued"
+        q2._progressive_executor.shutdown(wait=True)
+        assert len(q2._acknowledged_failures) == 64
+        assert q2._unobserved_progressive_failures == []
+        # An unobserved failure added after bounded acknowledged history is full must never be truncated
+        sentinel_unobserved = RuntimeError("unobserved after 64 acknowledged")
+        q2._unobserved_progressive_failures.append(sentinel_unobserved)
+        with pytest.raises(ExceptionGroup) as g2:
+            q2.shutdown(wait=True)
+        assert sentinel_unobserved in g2.value.exceptions
+
+        # Re-create fresh queue for wait=False + cancellation + already-done setup failure check
+        controller.unregister_failover_callback(arbiter2._on_global_failover)
+        arbiter3 = controller.SessionArbiter(cfg2, paths2, wordfill_cfg={"enabled": False})
+        q3 = arbiter3.enrichment_queue
+        pending_fut = q3._progressive_executor.submit(lambda: (started.set(), release.wait(5)))
+        assert started.wait(5)
+        queued_cancelled = q3._progressive_executor.submit(lambda: None)
+        q3._active_progressive_sessions["busy"] = pending_fut
+        q3._active_progressive_sessions["queued"] = queued_cancelled
+        q3.shutdown(wait=False)
+        release.set()
+        q3.shutdown(wait=True)
+    finally:
+        release.set()
+        EventDispatcher.get_instance().unregister(zid2, events)
+        controller.unregister_failover_callback(arbiter2._on_global_failover)
+        if 'arbiter3' in locals():
+            controller.unregister_failover_callback(arbiter3._on_global_failover)
+

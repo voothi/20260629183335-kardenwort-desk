@@ -614,3 +614,47 @@ def test_single_card_keeps_safe_content_and_metadata_during_focus_restore(sqlite
             for route in held: route.abort()
         page.unroute_all(behavior='ignoreErrors')
         if host == 'native': page.close()
+
+
+def test_format_initial_card_translations_multiline_pending_empty_escaped_and_geometry(sqlite_page):
+    """Verify every multiline translation div gets sentence+provenance metadata and survives browser progressive completion+reload."""
+    page, url, server, adapter, path = sqlite_page
+    cfg = server.config
+    pending = '<div class="skeleton-loader" data-pending="true">Waiting</div>'
+    cards = [
+        {"sentence_idx": 1, "source_text": "Line 1\nLine 2", "translated_text": "First & line\nSecond < 3 & > 1"},
+        {"sentence_idx": 2, "source_text": "Pending s2", "translated_text": ""},
+        {"sentence_idx": 3, "source_text": "Empty s3", "translated_text": ""},
+    ]
+    rendered = desk.format_initial_card_translations(
+        cards, active_sentence=2, text_mode="multi", config=cfg,
+        pending_html=pending, provenance_attrs=' data-provenance="live:google"',
+    )
+    page.set_content(f"<html><body><div id='tc'>{rendered}</div></body></html>")
+
+    c1_divs = page.locator('#tc [data-translation-sentence="1"]')
+    assert c1_divs.count() == 2
+    assert c1_divs.nth(0).get_attribute('data-provenance') == 'live:google'
+    assert c1_divs.nth(1).get_attribute('data-provenance') == 'live:google'
+    assert c1_divs.nth(0).inner_text() == 'First & line'
+    assert c1_divs.nth(1).inner_text() == 'Second < 3 & > 1'
+
+    c2_div = page.locator('#tc [data-translation-sentence="2"]')
+    assert c2_div.count() == 1
+    assert c2_div.first.get_attribute('data-pending') == 'true'
+    assert c2_div.first.get_attribute('data-provenance') is None
+
+    c3_div = page.locator('#tc [data-translation-sentence="3"]')
+    assert c3_div.count() == 1
+    assert c3_div.first.inner_text() == ''
+
+    # Owned SQLite Stage 3 / final commit survives browser final-event + reload
+    from tests.test_workspace_first_display import ZID
+    page.goto(url + f'/?session_zid={ZID}&seq_num=1')
+    ready(page)
+    adapter.db.batch_update_words(ZID, [{"sentence_index": 1, "token_order": 0, "updates": {"ipa": "ˈalfə", "morphology": "Subst.Fem"}}])
+    page.reload(wait_until='domcontentloaded')
+    ready(page)
+    expect(page.locator('#lemma-table')).to_contain_text('ˈalfə')
+    expect(page.locator('#lemma-table')).to_contain_text('Subst.Fem')
+
