@@ -251,3 +251,61 @@ def test_canonical_render_uses_committed_theme_and_zoom_without_rewriting_ini(pr
     assert 'theme-light' in html.split('<body', 1)[1].split('>', 1)[0]
     assert 'zoom: 125%' in html
     assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+
+
+def test_concurrent_preference_revisions_and_view_updates(preference_world):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    from urllib.request import Request, urlopen
+
+    url, server, path = preference_world
+    seed(server)
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    initial = snapshot(url)
+    expected_rev = initial['revisions']['filter_selected_only']
+    barrier = threading.Barrier(2)
+
+    def race_pref(target_val):
+        barrier.wait(timeout=5)
+        return post(url, '/api/v1/config', dict(filter_selected_only=target_val, expected_revision=expected_rev))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f1 = pool.submit(race_pref, True)
+        f2 = pool.submit(race_pref, False)
+        r1 = f1.result(timeout=10)
+        r2 = f2.result(timeout=10)
+
+    statuses = sorted([r1[0], r2[0]])
+    assert statuses == [200, 409], (r1, r2)
+    winner_val = True if r1[0] == 200 else False
+    assert snapshot(url)['values']['filter_selected_only'] is winner_val
+
+    view_barrier = threading.Barrier(3)
+
+    def write_view(client_char, card):
+        view_barrier.wait(timeout=5)
+        return post(url, '/api/v1/client-view', dict(
+            session_zid=ZID,
+            client_id=client_char * 32,
+            active_card=card,
+            active_tokens=[dict(sentence_idx=1, token_order=0)],
+        ))
+
+    def read_render():
+        view_barrier.wait(timeout=5)
+        req = Request(url + '/?session_zid=' + ZID + '&seq_num=1', headers={'X-API-Token': server.api_key})
+        with urlopen(req, timeout=10) as resp:
+            return resp.status
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        vc1 = pool.submit(write_view, 'd', 1)
+        vc2 = pool.submit(write_view, 'e', 1)
+        vr = pool.submit(read_render)
+        assert vc1.result(timeout=10)[0] == 200
+        assert vc2.result(timeout=10)[0] == 200
+        assert vr.result(timeout=10) == 200
+
+    assert data(post(url, '/api/v1/client-view', dict(session_zid=ZID, client_id='d' * 32))[1])['active_card'] == 1
+    assert data(post(url, '/api/v1/client-view', dict(session_zid=ZID, client_id='e' * 32))[1])['active_card'] == 1
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+

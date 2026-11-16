@@ -1098,6 +1098,90 @@ def test_link_sessions_batch_explicit_and_filter(temp_db):
     assert proj2_links[0]["order_index"] == 0
 
 
+def test_cross_process_busy_timeout_release_and_expiry(tmp_path):
+    """Verify non-default busy_timeout_ms waits across OS processes and expires on sustained lock."""
+    from pathlib import Path
+    import sqlite3
+    import subprocess
+    import sys
+    import time
+
+    db_path = tmp_path / "cross_proc_lock.db"
+    migrations_dir = Path(__file__).resolve().parents[1] / "schemas" / "migrations"
+    holder_script = tmp_path / "lock_holder.py"
+    holder_script.write_text(
+        "import sqlite3, sys, time\n"
+        "from pathlib import Path\n"
+        "db_path, ready_path, stop_path, zid = sys.argv[1:5]\n"
+        "conn = sqlite3.connect(db_path, isolation_level=None, timeout=5.0)\n"
+        "conn.execute('BEGIN IMMEDIATE')\n"
+        "conn.execute(\"INSERT INTO sessions (zid, slug, source_language, target_language, text_mode, source_raw_text) VALUES (?, 'lock', 'de', 'ru', 'single', 'Wort.')\", (zid,))\n"
+        "Path(ready_path).write_text('locked', encoding='utf-8')\n"
+        "deadline = time.monotonic() + 10.0\n"
+        "if stop_path.startswith('sleep:'):\n"
+        "    time.sleep(float(stop_path.split(':', 1)[1]))\n"
+        "else:\n"
+        "    while not Path(stop_path).exists() and time.monotonic() < deadline:\n"
+        "        time.sleep(0.02)\n"
+        "conn.commit()\n"
+        "conn.close()\n",
+        encoding="utf-8",
+    )
+
+    db_wait = KardenwortDB(db_path=db_path, migrations_dir=migrations_dir, busy_timeout_ms=2500)
+    db_wait.run_migrations()
+    with db_wait.get_connection(read_only=True) as conn:
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 2500
+
+    # Schedule A: child releases lock (~0.2s) before parent's 2500ms busy_timeout_ms expires
+    ready1 = tmp_path / "ready1.flag"
+    proc1 = subprocess.Popen(
+        [sys.executable, str(holder_script), str(db_path), str(ready1), "sleep:0.2", "20261116210001"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        for _ in range(100):
+            if ready1.exists():
+                break
+            time.sleep(0.02)
+        assert ready1.exists(), proc1.communicate(timeout=2)
+        with db_wait.get_connection() as conn:
+            conn.execute(
+                "INSERT INTO sessions (zid, slug, source_language, target_language, text_mode, source_raw_text) "
+                "VALUES ('20261116210002', 'after-release', 'de', 'ru', 'single', 'Haus.')"
+            )
+    finally:
+        proc1.wait(timeout=5)
+    assert proc1.returncode == 0
+
+    # Schedule B: child holds lock past short non-default busy_timeout_ms=200
+    db_short = KardenwortDB(db_path=db_path, migrations_dir=migrations_dir, busy_timeout_ms=200)
+    ready2 = tmp_path / "ready2.flag"
+    stop2 = tmp_path / "stop2.flag"
+    proc2 = subprocess.Popen(
+        [sys.executable, str(holder_script), str(db_path), str(ready2), str(stop2), "20261116210003"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        for _ in range(100):
+            if ready2.exists():
+                break
+            time.sleep(0.02)
+        assert ready2.exists(), proc2.communicate(timeout=2)
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            with db_short.get_connection():
+                pass
+    finally:
+        stop2.write_text("release", encoding="utf-8")
+        proc2.wait(timeout=5)
+    assert proc2.returncode == 0
+
+
+
 
 
 
