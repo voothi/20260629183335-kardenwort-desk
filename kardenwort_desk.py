@@ -3716,17 +3716,27 @@ class SqliteStorageAdapter(StorageAdapter):
 
         # If headers and data_rows are provided, normalize into sentences and words
         if headers is not None and data_rows is not None and not (sentences and words):
+            from kardenwort_db import _normalize_sentence_text
             headers_lower = {h.lower(): idx for idx, h in enumerate(headers)}
-            selected_field = self._role_fields(headers).get('selected', 'DeskSelected').lower()
+            role_fields = self._role_fields(headers)
+            selected_field = role_fields.get('selected', 'DeskSelected').lower()
 
             def get_col_val(r: List[str], col_name: str, default: str = "") -> str:
                 idx = headers_lower.get(col_name.lower())
                 return r[idx] if idx is not None and idx < len(r) else default
 
             col_sent_idx = headers_lower.get("sentencesourceindex")
+            if col_sent_idx is None:
+                col_sent_idx = headers_lower.get(role_fields.get("sentence_index", "SentenceSourceIndex").lower())
             col_sent_src = headers_lower.get("sentencesource")
+            if col_sent_src is None:
+                col_sent_src = headers_lower.get(role_fields.get("sentence_source", "SentenceSource").lower())
             col_sent_dst = headers_lower.get("sentencedestination")
+            if col_sent_dst is None:
+                col_sent_dst = headers_lower.get(role_fields.get("sentence_destination", "SentenceDestination").lower())
             col_sent_dst2 = headers_lower.get("sentencedestination2")
+            if col_sent_dst2 is None:
+                col_sent_dst2 = headers_lower.get(role_fields.get("sentence_destination2", "SentenceDestination2").lower())
             col_sent_ipa = headers_lower.get("sentencesourceipa")
             col_sent_aud = headers_lower.get("sentencesourceaudio")
 
@@ -3744,93 +3754,171 @@ class SqliteStorageAdapter(StorageAdapter):
             }
 
             existing_sents_by_idx = {}
-            try:
-                ex_sents = self.db.get_sentences_by_session(session_zid, zid=zid)
-                if ex_sents:
-                    existing_sents_by_idx = {s["sentence_index"]: dict(s) for s in ex_sents}
-            except Exception:
-                existing_sents_by_idx = {}
+            ex_sents = self.db.get_sentences_by_session(session_zid, zid=zid)
+            if ex_sents:
+                existing_sents_by_idx = {s["sentence_index"]: dict(s) for s in ex_sents}
 
+            is_multi_sentence_existing = len(existing_sents_by_idx) > 1
+            clear_sentence_destinations = bool(kwargs.get("clear_sentence_destinations", False))
             sent_map: Dict[int, Dict[str, Any]] = {}
-            if len(existing_sents_by_idx) > 1:
+            observed_dst: Dict[int, str] = {}
+            observed_dst2: Dict[int, str] = {}
+            updated_sent_indices: set = set()
+            if is_multi_sentence_existing:
                 sent_map = {k: dict(v) for k, v in existing_sents_by_idx.items()}
-                if text_provenance:
-                    for k in sent_map:
-                        if not sent_map[k].get("text_provenance"):
-                            sent_map[k]["text_provenance"] = text_provenance
 
+            existing_words_by_coord = {}
             existing_words_by_ord = {}
             existing_words_by_lemma = {}
-            try:
-                ex_words = self.db.get_words_by_session(session_zid, zid=zid)
-                if ex_words:
-                    existing_words_by_ord = {w.get("token_order", idx): w for idx, w in enumerate(ex_words)}
-                    for w in ex_words:
-                        l_k = (w.get("lemma") or "").strip().lower()
-                        if l_k and l_k not in existing_words_by_lemma:
-                            existing_words_by_lemma[l_k] = w
-            except Exception:
-                existing_words_by_ord = {}
-                existing_words_by_lemma = {}
+            ex_words = self.db.get_words_by_session(session_zid, zid=zid)
+            if ex_words:
+                existing_words_by_ord = {w.get("token_order", idx): w for idx, w in enumerate(ex_words)}
+                for idx, w in enumerate(ex_words):
+                    existing_words_by_coord[(w.get("sentence_index"), w.get("token_order", idx))] = w
+                    l_k = (w.get("lemma") or "").strip().lower()
+                    if l_k and l_k not in existing_words_by_lemma:
+                        existing_words_by_lemma[l_k] = w
 
             word_list: List[Dict[str, Any]] = []
 
+            def _resolve_multi_sentence_idx(row: List[str], row_idx: int) -> int:
+                if col_sent_idx is not None:
+                    raw_s_idx = (
+                        str(row[col_sent_idx]).strip()
+                        if col_sent_idx < len(row) and row[col_sent_idx] is not None
+                        else ""
+                    )
+                    if not raw_s_idx.isdigit():
+                        raise StructuredError(
+                            ErrorCode.INVALID_STATE,
+                            f"Missing or invalid SentenceSourceIndex at row {row_idx} for multi-sentence session '{session_zid}'",
+                        )
+                    resolved = int(raw_s_idx)
+                    if resolved not in existing_sents_by_idx:
+                        raise StructuredError(
+                            ErrorCode.INVALID_STATE,
+                            f"Unknown sentence_index {resolved} at row {row_idx} for multi-sentence session '{session_zid}'",
+                        )
+                    return resolved
+                if col_sent_src is not None and col_sent_src < len(row) and row[col_sent_src] is not None:
+                    norm_src = _normalize_sentence_text(str(row[col_sent_src]))
+                    if norm_src:
+                        matches = [
+                            idx
+                            for idx, ex in existing_sents_by_idx.items()
+                            if _normalize_sentence_text(ex.get("sentence_source") or "") == norm_src
+                        ]
+                        if len(matches) == 1:
+                            return matches[0]
+                raise StructuredError(
+                    ErrorCode.INVALID_STATE,
+                    f"Cannot resolve canonical sentence identity at row {row_idx} for multi-sentence session '{session_zid}'",
+                )
+
+            def _extract_sentence_dest_update(row: List[str], col_idx: Optional[int]) -> Tuple[bool, Optional[str]]:
+                if col_idx is None or col_idx >= len(row) or row[col_idx] is None:
+                    return False, None
+                raw_val = str(row[col_idx])
+                stripped = raw_val.strip()
+                if stripped == "[FAILED]" or stripped.startswith("[Error"):
+                    return True, ""
+                if stripped == "":
+                    return (True, "") if clear_sentence_destinations else (False, None)
+                return True, raw_val
+
             for row_idx, row in enumerate(data_rows):
-                # Extract sentence index
-                s_idx = 0
-                if col_sent_idx is not None and col_sent_idx < len(row):
-                    raw_s_idx = str(row[col_sent_idx]).strip()
-                    if raw_s_idx.isdigit():
-                        s_idx = int(raw_s_idx)
-                    else:
-                        s_idx = row_idx
-                elif existing_sents_by_idx:
-                    # Fallback to existing sentence index if available
-                    sorted_existing_keys = sorted(existing_sents_by_idx.keys())
-                    if row_idx < len(sorted_existing_keys):
-                        s_idx = sorted_existing_keys[row_idx]
-                    else:
-                        s_idx = sorted_existing_keys[-1]
+                if is_multi_sentence_existing:
+                    s_idx = _resolve_multi_sentence_idx(row, row_idx)
+                else:
+                    s_idx = 0
+                    if col_sent_idx is not None and col_sent_idx < len(row):
+                        raw_s_idx = str(row[col_sent_idx]).strip()
+                        if raw_s_idx.isdigit():
+                            s_idx = int(raw_s_idx)
+                        else:
+                            s_idx = row_idx
+                    elif existing_sents_by_idx:
+                        sorted_existing_keys = sorted(existing_sents_by_idx.keys())
+                        if row_idx < len(sorted_existing_keys):
+                            s_idx = sorted_existing_keys[row_idx]
+                        else:
+                            s_idx = sorted_existing_keys[-1]
 
                 existing_sent = existing_sents_by_idx.get(s_idx, {})
-                src_val = row[col_sent_src] if col_sent_src is not None and col_sent_src < len(row) and str(row[col_sent_src]).strip() else existing_sent.get("sentence_source", "")
-                dst_val = row[col_sent_dst] if col_sent_dst is not None and col_sent_dst < len(row) and str(row[col_sent_dst]).strip() else existing_sent.get("sentence_destination")
-                if dst_val and (str(dst_val).strip() == "[FAILED]" or str(dst_val).strip().startswith("[Error")):
-                    dst_val = ""
-                dst2_val = row[col_sent_dst2] if col_sent_dst2 is not None and col_sent_dst2 < len(row) and str(row[col_sent_dst2]).strip() else existing_sent.get("sentence_destination2")
-                if dst2_val and (str(dst2_val).strip() == "[FAILED]" or str(dst2_val).strip().startswith("[Error")):
-                    dst2_val = ""
+                raw_src_cell = (
+                    str(row[col_sent_src]).strip()
+                    if col_sent_src is not None and col_sent_src < len(row) and row[col_sent_src] is not None
+                    else ""
+                )
+                src_val = raw_src_cell if raw_src_cell else existing_sent.get("sentence_source", "")
                 ipa_val = row[col_sent_ipa] if col_sent_ipa is not None and col_sent_ipa < len(row) and str(row[col_sent_ipa]).strip() else existing_sent.get("sentence_source_ipa")
                 aud_val = row[col_sent_aud] if col_sent_aud is not None and col_sent_aud < len(row) and str(row[col_sent_aud]).strip() else existing_sent.get("sentence_source_audio")
 
-                if not src_val and source_raw_text:
-                    src_val = source_raw_text
-
-                if (len(existing_sents_by_idx) <= 1 or session_record.get("text_mode") == "multi") and (src_val or dst_val or s_idx in existing_sents_by_idx or s_idx in sent_map):
-                    if s_idx not in sent_map:
-                        sent_map[s_idx] = {
-                            "session_zid": session_zid,
-                            "sentence_index": s_idx,
-                            "sentence_source": src_val or "",
-                            "sentence_destination": dst_val,
-                            "sentence_destination2": dst2_val,
-                            "sentence_source_ipa": ipa_val,
-                            "sentence_source_audio": aud_val,
-                            "text_provenance": text_provenance or existing_sent.get("text_provenance"),
-                        }
-                    else:
-                        if dst_val:
-                            sent_map[s_idx]["sentence_destination"] = dst_val
-                        if dst2_val:
-                            sent_map[s_idx]["sentence_destination2"] = dst2_val
-                        if src_val and not sent_map[s_idx].get("sentence_source"):
-                            sent_map[s_idx]["sentence_source"] = src_val
+                if is_multi_sentence_existing:
+                    # Reject holistic/non-matching source placeholders from overwriting structured sentence translations.
+                    source_matches_target = (
+                        not raw_src_cell
+                        or _normalize_sentence_text(raw_src_cell) == _normalize_sentence_text(existing_sent.get("sentence_source") or "")
+                    )
+                    if source_matches_target:
+                        has_dst, new_dst = _extract_sentence_dest_update(row, col_sent_dst)
+                        has_dst2, new_dst2 = _extract_sentence_dest_update(row, col_sent_dst2)
+                        if has_dst:
+                            if s_idx in observed_dst and observed_dst[s_idx] != new_dst:
+                                raise StructuredError(
+                                    ErrorCode.INVALID_STATE,
+                                    f"Conflicting SentenceDestination values for sentence_index {s_idx} in session '{session_zid}'",
+                                )
+                            observed_dst[s_idx] = new_dst
+                            updated_sent_indices.add(s_idx)
+                        if has_dst2:
+                            if s_idx in observed_dst2 and observed_dst2[s_idx] != new_dst2:
+                                raise StructuredError(
+                                    ErrorCode.INVALID_STATE,
+                                    f"Conflicting SentenceDestination2 values for sentence_index {s_idx} in session '{session_zid}'",
+                                )
+                            observed_dst2[s_idx] = new_dst2
+                            updated_sent_indices.add(s_idx)
                         if ipa_val and not sent_map[s_idx].get("sentence_source_ipa"):
                             sent_map[s_idx]["sentence_source_ipa"] = ipa_val
                         if aud_val and not sent_map[s_idx].get("sentence_source_audio"):
                             sent_map[s_idx]["sentence_source_audio"] = aud_val
-                        if text_provenance and not sent_map[s_idx].get("text_provenance"):
-                            sent_map[s_idx]["text_provenance"] = text_provenance
+                else:
+                    dst_val = row[col_sent_dst] if col_sent_dst is not None and col_sent_dst < len(row) and str(row[col_sent_dst]).strip() else ("" if (clear_sentence_destinations and col_sent_dst is not None) else existing_sent.get("sentence_destination"))
+                    if dst_val and (str(dst_val).strip() == "[FAILED]" or str(dst_val).strip().startswith("[Error")):
+                        dst_val = ""
+                    dst2_val = row[col_sent_dst2] if col_sent_dst2 is not None and col_sent_dst2 < len(row) and str(row[col_sent_dst2]).strip() else ("" if (clear_sentence_destinations and col_sent_dst2 is not None) else existing_sent.get("sentence_destination2"))
+                    if dst2_val and (str(dst2_val).strip() == "[FAILED]" or str(dst2_val).strip().startswith("[Error")):
+                        dst2_val = ""
+
+                    if not src_val and source_raw_text:
+                        src_val = source_raw_text
+
+                    if src_val or dst_val or s_idx in existing_sents_by_idx or s_idx in sent_map:
+                        if s_idx not in sent_map:
+                            sent_map[s_idx] = {
+                                "session_zid": session_zid,
+                                "sentence_index": s_idx,
+                                "sentence_source": src_val or "",
+                                "sentence_destination": dst_val,
+                                "sentence_destination2": dst2_val,
+                                "sentence_source_ipa": ipa_val,
+                                "sentence_source_audio": aud_val,
+                                "text_provenance": text_provenance or existing_sent.get("text_provenance"),
+                            }
+                        else:
+                            if dst_val is not None:
+                                sent_map[s_idx]["sentence_destination"] = dst_val
+                            if dst2_val is not None:
+                                sent_map[s_idx]["sentence_destination2"] = dst2_val
+                            if src_val and not sent_map[s_idx].get("sentence_source"):
+                                sent_map[s_idx]["sentence_source"] = src_val
+                            if ipa_val and not sent_map[s_idx].get("sentence_source_ipa"):
+                                sent_map[s_idx]["sentence_source_ipa"] = ipa_val
+                            if aud_val and not sent_map[s_idx].get("sentence_source_audio"):
+                                sent_map[s_idx]["sentence_source_audio"] = aud_val
+                            if text_provenance:
+                                sent_map[s_idx]["text_provenance"] = text_provenance
 
                 # Extract word fields
                 quotation = get_col_val(row, "quotation") or get_col_val(row, "wordsourceinflectedform") or get_col_val(row, "wordsource") or ""
@@ -3874,7 +3962,7 @@ class SqliteStorageAdapter(StorageAdapter):
                         or row_provenances.get(row_idx)
                     )
 
-                existing_w = existing_words_by_ord.get(token_order, {})
+                existing_w = existing_words_by_coord.get((s_idx, token_order)) or existing_words_by_ord.get(token_order, {})
                 if existing_w and lemma and existing_w.get("lemma") and existing_w["lemma"].strip().lower() != lemma.strip().lower():
                     existing_w = existing_words_by_lemma.get(lemma.strip().lower(), {})
                 effective_w_dest = (
@@ -3912,6 +4000,19 @@ class SqliteStorageAdapter(StorageAdapter):
                 }
                 word_list.append(word_entry)
 
+
+            if is_multi_sentence_existing:
+                for target_s_idx, new_dst in observed_dst.items():
+                    sent_map[target_s_idx]["sentence_destination"] = new_dst
+                for target_s_idx, new_dst2 in observed_dst2.items():
+                    sent_map[target_s_idx]["sentence_destination2"] = new_dst2
+                if text_provenance:
+                    for target_s_idx in updated_sent_indices:
+                        sent_map[target_s_idx]["text_provenance"] = text_provenance
+                    if not updated_sent_indices:
+                        for target_s_idx in sent_map:
+                            if not sent_map[target_s_idx].get("text_provenance"):
+                                sent_map[target_s_idx]["text_provenance"] = text_provenance
 
             if sentences is not None:
                 norm_sentences = [{**dict(s), "session_zid": session_zid} for s in sentences]
@@ -3962,12 +4063,7 @@ class SqliteStorageAdapter(StorageAdapter):
         zid: Optional[str] = None,
         **kwargs,
     ) -> Optional[Dict[str, Any]]:
-        bundle = self.db.get_session_bundle(session_zid, zid=zid)
-        if bundle:
-            return bundle
-        if working_tsv_path and working_tsv_path.exists():
-            return self._tsv_fallback.load_session(session_zid, working_tsv_path=working_tsv_path, zid=zid)
-        return None
+        return self.db.get_session_bundle(session_zid, zid=zid)
 
     def restore_session(
         self,
@@ -4419,52 +4515,51 @@ class SqliteStorageAdapter(StorageAdapter):
         if isinstance(tsv_path, str) and re.fullmatch(r'[A-Za-z0-9_-]+', tsv_path):
             restored = self.restore_session(tsv_path)
             return restored.get('comments', []), *reword.restored_manifest_rows(restored)
-        if tsv_path:
-            p = Path(tsv_path)
-            if p.exists():
-                sess_zid = extract_zid(p)
-                if sess_zid and sess_zid != "00000000000000":
-                    try:
-                        restored = self.restore_session(sess_zid)
-                        if restored is not None and "data_rows" in restored:
-                            tsv_match = re.match(r'^\d{14}-(.*?)(?:\.[a-z]{2})?\.tsv$', p.name, re.IGNORECASE)
-                            if tsv_match:
-                                file_slug = tsv_match.group(1).strip().lower()
-                                db_slug = str(restored.get("slug") or "").strip().lower()
-                                if db_slug and file_slug and db_slug != file_slug:
-                                    return self._tsv_fallback.load_tsv_rows(p)
-                            return (
-                                restored.get("comments", []),
-                                *reword.restored_manifest_rows(restored),
-                            )
-                    except Exception:
-                        pass
-                return self._tsv_fallback.load_tsv_rows(p)
-            else:
-                sess_zid = extract_zid(p)
-                candidates = []
-                if sess_zid and sess_zid != "00000000000000":
-                    candidates.append(sess_zid)
-                prefix_match = re.match(r'^([^-.]+)', p.name)
-                if prefix_match:
-                    cand = prefix_match.group(1).strip()
-                    if cand and cand not in candidates and cand != "00000000000000":
-                        candidates.append(cand)
-                for candidate_zid in candidates:
-                    try:
-                        restored = self.restore_session(candidate_zid)
-                        if restored is not None and "data_rows" in restored:
-                            return (
-                                restored.get("comments", []),
-                                *reword.restored_manifest_rows(restored),
-                            )
-                    except Exception:
-                        pass
-                raise StructuredError(
-                    ErrorCode.NOT_FOUND,
-                    f"Session TSV file not found on disk or SQLite storage: '{p}'"
+        if not tsv_path:
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                "Session identifier or path is required for SQLite lookup.",
+            )
+        p = Path(tsv_path)
+        candidates: List[str] = []
+        sess_zid = extract_zid(p)
+        if sess_zid and sess_zid != "00000000000000":
+            candidates.append(sess_zid)
+        prefix_match = re.match(r'^([^-.]+)', p.name)
+        if prefix_match:
+            cand = prefix_match.group(1).strip()
+            if cand and cand not in candidates and cand != "00000000000000":
+                candidates.append(cand)
+        if not candidates:
+            raise StructuredError(
+                ErrorCode.NOT_FOUND,
+                f"Session not found in SQLite storage: '{p}'",
+            )
+        tsv_match = re.match(r'^\d{14}-(.*?)(?:\.[a-z]{2})?\.tsv$', p.name, re.IGNORECASE)
+        for candidate_zid in candidates:
+            try:
+                restored = self.restore_session(candidate_zid)
+            except StructuredError as exc:
+                if exc.error_code == ErrorCode.NOT_FOUND:
+                    continue
+                raise
+            if restored is not None and "data_rows" in restored:
+                if tsv_match:
+                    file_slug = tsv_match.group(1).strip().lower()
+                    db_slug = str(restored.get("slug") or "").strip().lower()
+                    if db_slug and file_slug and db_slug != file_slug:
+                        raise StructuredError(
+                            ErrorCode.INVALID_STATE,
+                            f"Session '{candidate_zid}' slug mismatch between path ('{file_slug}') and SQLite record ('{db_slug}')",
+                        )
+                return (
+                    restored.get("comments", []),
+                    *reword.restored_manifest_rows(restored),
                 )
-        return self._tsv_fallback.load_tsv_rows(tsv_path)
+        raise StructuredError(
+            ErrorCode.NOT_FOUND,
+            f"Session not found in SQLite storage: '{p}'",
+        )
 
     @contextlib.contextmanager
     def file_lock(self, file_path):

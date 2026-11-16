@@ -376,6 +376,8 @@ class KardenwortDB:
             raise
 
     def _configure_connection(self, conn: KardenwortConnection, read_only: bool) -> None:
+        conn.execute(f"PRAGMA busy_timeout = {int(self.busy_timeout_ms)};")
+        conn.execute("PRAGMA foreign_keys = ON;")
         if read_only:
             conn.execute("PRAGMA query_only = ON;")
         else:
@@ -385,8 +387,6 @@ class KardenwortDB:
                         conn.execute("PRAGMA journal_mode = WAL;")
                         self._wal_initialized = True
             conn.execute("PRAGMA synchronous = NORMAL;")
-        conn.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms};")
-        conn.execute("PRAGMA foreign_keys = ON;")
 
     @contextmanager
     def transaction(
@@ -1138,6 +1138,49 @@ class KardenwortDB:
 
             return sessions, total_count
 
+    @staticmethod
+    def _existing_tables(conn: KardenwortConnection, names: Tuple[str, ...]) -> set:
+        placeholders = ",".join("?" for _ in names)
+        rows = conn.execute(
+            f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders});",
+            names,
+        ).fetchall()
+        return {row[0] for row in rows}
+
+    def _cleanup_session_runtime_state(
+        self, conn: KardenwortConnection, target_zids: List[str]
+    ) -> None:
+        if not target_zids:
+            return
+        tables = self._existing_tables(conn, ("client_view_state", "session_provider_state"))
+        params = [(z,) for z in target_zids]
+        if "client_view_state" in tables:
+            conn.executemany("DELETE FROM client_view_state WHERE session_zid = ?;", params)
+        if "session_provider_state" in tables:
+            conn.executemany("DELETE FROM session_provider_state WHERE session_zid = ?;", params)
+
+    def _purge_orphan_runtime_state_in_conn(self, conn: KardenwortConnection) -> int:
+        tables = self._existing_tables(conn, ("client_view_state", "session_provider_state"))
+        removed = 0
+        if "client_view_state" in tables:
+            cur = conn.execute(
+                "DELETE FROM client_view_state WHERE NOT EXISTS ("
+                "SELECT 1 FROM sessions s WHERE s.zid = client_view_state.session_zid AND s.deleted_at IS NULL);"
+            )
+            removed += cur.rowcount or 0
+        if "session_provider_state" in tables:
+            cur = conn.execute(
+                "DELETE FROM session_provider_state WHERE NOT EXISTS ("
+                "SELECT 1 FROM sessions s WHERE s.zid = session_provider_state.session_zid AND s.deleted_at IS NULL);"
+            )
+            removed += cur.rowcount or 0
+        return removed
+
+    def purge_orphan_runtime_state(self, zid: Optional[str] = None) -> int:
+        """Removes orphan client_view_state and session_provider_state rows without active sessions."""
+        with self.get_connection(zid=zid) as conn:
+            return self._purge_orphan_runtime_state_in_conn(conn)
+
     def soft_delete_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
         """
         Soft-deletes a session by setting deleted_at to current timestamp.
@@ -1145,11 +1188,18 @@ class KardenwortDB:
         now_iso = datetime.now(timezone.utc).isoformat()
         with self.get_connection(zid=zid) as conn:
             cursor = conn.cursor()
+            targets = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT zid FROM sessions WHERE zid = ? AND deleted_at IS NULL;",
+                    (session_zid,),
+                ).fetchall()
+            ]
             cursor.execute(
                 "UPDATE sessions SET deleted_at = ? WHERE zid = ? AND deleted_at IS NULL;",
                 (now_iso, session_zid),
             )
-            conn.execute('DELETE FROM client_view_state WHERE session_zid=?', (session_zid,))
+            self._cleanup_session_runtime_state(conn, targets)
             return cursor.rowcount > 0
 
     def soft_delete_sessions_batch(
@@ -1222,9 +1272,9 @@ class KardenwortDB:
 
         with self.get_connection(zid=zid) as conn:
             cursor = conn.cursor()
-            targets = conn.execute(f'SELECT zid FROM sessions {where_clause}', params[1:]).fetchall()
+            targets = [row[0] for row in conn.execute(f'SELECT zid FROM sessions {where_clause}', params[1:]).fetchall()]
             cursor.execute(sql, params)
-            conn.executemany('DELETE FROM client_view_state WHERE session_zid=?', [(row[0],) for row in targets])
+            self._cleanup_session_runtime_state(conn, targets)
             return cursor.rowcount
 
     def restore_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
@@ -1262,16 +1312,19 @@ class KardenwortDB:
         """
         Permanently hard-deletes soft-deleted sessions (and cascades to sentences/words).
         """
-        sql = "DELETE FROM sessions WHERE deleted_at IS NOT NULL"
+        where_clause = "WHERE deleted_at IS NOT NULL"
         params: List[Any] = []
         if older_than_days is not None:
-            sql += " AND (julianday('now') - julianday(deleted_at)) > ?"
+            where_clause += " AND (julianday('now') - julianday(deleted_at)) > ?"
             params.append(older_than_days)
-        sql += ";"
+        sql = f"DELETE FROM sessions {where_clause};"
 
         with self.get_connection(zid=zid) as conn:
             cursor = conn.cursor()
+            targets = [row[0] for row in conn.execute(f"SELECT zid FROM sessions {where_clause};", params).fetchall()]
             cursor.execute(sql, params)
+            self._cleanup_session_runtime_state(conn, targets)
+            self._purge_orphan_runtime_state_in_conn(conn)
             return cursor.rowcount
 
     def delete_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
@@ -1280,17 +1333,23 @@ class KardenwortDB:
         """
         with self.get_connection(zid=zid) as conn:
             cursor = conn.cursor()
+            targets = [row[0] for row in conn.execute("SELECT zid FROM sessions WHERE zid = ?;", (session_zid,)).fetchall()]
             cursor.execute("DELETE FROM sessions WHERE zid = ?;", (session_zid,))
+            self._cleanup_session_runtime_state(conn, targets)
             return cursor.rowcount > 0
 
     def cleanup_db(self, older_than_days: float, zid: Optional[str] = None) -> int:
         """
         Deletes sessions older than specified number of days (cascades to sentences and words).
         """
-        sql = "DELETE FROM sessions WHERE (julianday('now') - julianday(created_at)) > ?;"
+        where_clause = "WHERE (julianday('now') - julianday(created_at)) > ?"
+        sql = f"DELETE FROM sessions {where_clause};"
         with self.get_connection(zid=zid) as conn:
             cursor = conn.cursor()
+            targets = [row[0] for row in conn.execute(f"SELECT zid FROM sessions {where_clause};", (older_than_days,)).fetchall()]
             cursor.execute(sql, (older_than_days,))
+            self._cleanup_session_runtime_state(conn, targets)
+            self._purge_orphan_runtime_state_in_conn(conn)
             return cursor.rowcount
 
     def vacuum(self, zid: Optional[str] = None) -> bool:

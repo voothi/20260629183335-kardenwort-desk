@@ -1181,6 +1181,193 @@ def test_cross_process_busy_timeout_release_and_expiry(tmp_path):
     assert proc2.returncode == 0
 
 
+def test_pragma_ordering_before_wal_and_cold_wal_contention(tmp_path):
+    """Verify PRAGMA busy_timeout and foreign_keys execute before WAL, and cold WAL handles contention."""
+    from pathlib import Path
+    import sqlite3
+    import subprocess
+    import sys
+    import time
+
+    db_path = tmp_path / "cold_wal_order.db"
+    migrations_dir = Path(__file__).resolve().parents[1] / "schemas" / "migrations"
+    init_db = KardenwortDB(db_path=db_path, migrations_dir=migrations_dir, busy_timeout_ms=1350)
+    statements = []
+    orig_configure = init_db._configure_connection
+
+    class TracingConn:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, sql, *args, **kwargs):
+            statements.append(sql.strip())
+            return self._inner.execute(sql, *args, **kwargs)
+
+    conn = init_db.get_connection()
+    conn.close()
+    statements.clear()
+    raw_conn = sqlite3.connect(db_path)
+    try:
+        init_db._wal_initialized = False
+        orig_configure(TracingConn(raw_conn), read_only=False)
+    finally:
+        raw_conn.close()
+
+    idx_timeout = next(i for i, s in enumerate(statements) if s.startswith("PRAGMA busy_timeout = 1350"))
+    idx_fk = next(i for i, s in enumerate(statements) if s.startswith("PRAGMA foreign_keys = ON"))
+    idx_wal = next(i for i, s in enumerate(statements) if s.startswith("PRAGMA journal_mode = WAL"))
+    assert idx_timeout < idx_wal
+    assert idx_fk < idx_wal
+
+    # Cold WAL transition under contention on a DELETE-mode DB
+    wal_db_path = tmp_path / "cold_transition.db"
+    setup_conn = sqlite3.connect(wal_db_path)
+    setup_conn.execute("PRAGMA journal_mode = DELETE;")
+    setup_conn.execute("CREATE TABLE t (x INT);")
+    setup_conn.commit()
+    setup_conn.close()
+
+    holder = tmp_path / "wal_holder.py"
+    holder.write_text(
+        "import sqlite3, sys, time\n"
+        "from pathlib import Path\n"
+        "db_path, ready_path, stop_path = sys.argv[1:4]\n"
+        "c = sqlite3.connect(db_path, isolation_level=None, timeout=5.0)\n"
+        "c.execute('BEGIN EXCLUSIVE')\n"
+        "Path(ready_path).write_text('held', encoding='utf-8')\n"
+        "deadline = time.monotonic() + 10.0\n"
+        "if stop_path.startswith('sleep:'):\n"
+        "    time.sleep(float(stop_path.split(':', 1)[1]))\n"
+        "else:\n"
+        "    while not Path(stop_path).exists() and time.monotonic() < deadline:\n"
+        "        time.sleep(0.02)\n"
+        "c.commit()\n"
+        "c.close()\n",
+        encoding="utf-8",
+    )
+
+    ready1 = tmp_path / "wal_ready1.flag"
+    p1 = subprocess.Popen([sys.executable, str(holder), str(wal_db_path), str(ready1), "sleep:0.15"])
+    try:
+        for _ in range(100):
+            if ready1.exists():
+                break
+            time.sleep(0.02)
+        assert ready1.exists()
+        cold_ok = KardenwortDB(db_path=wal_db_path, migrations_dir=migrations_dir, busy_timeout_ms=2500)
+        with cold_ok.get_connection() as c:
+            assert c.execute("PRAGMA journal_mode;").fetchone()[0].lower() == "wal"
+    finally:
+        p1.wait(timeout=5)
+
+    wal_expire_path = tmp_path / "cold_expire.db"
+    sc2 = sqlite3.connect(wal_expire_path)
+    sc2.execute("PRAGMA journal_mode = DELETE;")
+    sc2.execute("CREATE TABLE t (x INT);")
+    sc2.commit()
+    sc2.close()
+
+    ready2 = tmp_path / "wal_ready2.flag"
+    stop2 = tmp_path / "wal_stop2.flag"
+    p2 = subprocess.Popen([sys.executable, str(holder), str(wal_expire_path), str(ready2), str(stop2)])
+    try:
+        for _ in range(100):
+            if ready2.exists():
+                break
+            time.sleep(0.02)
+        assert ready2.exists()
+        cold_fail = KardenwortDB(db_path=wal_expire_path, migrations_dir=migrations_dir, busy_timeout_ms=150)
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            cold_fail.get_connection()
+        assert cold_fail._wal_initialized is False
+    finally:
+        stop2.write_text("done", encoding="utf-8")
+        p2.wait(timeout=5)
+
+
+def test_session_deletion_purge_cleanup_orphans_and_late_worker_rejection(tmp_path):
+    """Verify deletion/purge/age/project cleanup removes view+provider state and blocks late recreation."""
+    from pathlib import Path
+    from kardenwort_client_views import ClientViewAdapter
+    from kardenwort_provider_state import cooldowns, providers, set_cooldown, set_providers
+
+    db_path = tmp_path / "lifecycle.db"
+    migrations_dir = Path(__file__).resolve().parents[1] / "schemas" / "migrations"
+    db = KardenwortDB(db_path=db_path, migrations_dir=migrations_dir)
+    db.run_migrations()
+
+    zids = {
+        "soft": "20261116210101",
+        "batch": "20261116210102",
+        "hard": "20261116210103",
+        "purge": "20261116210104",
+        "age": "20261116210105",
+        "keep": "20261116210106",
+    }
+    for key, z in zids.items():
+        db.save_session_bundle(
+            {"zid": z, "slug": key, "source_language": "de", "target_language": "ru",
+             "text_mode": "single", "source_raw_text": f"Text {key}."},
+            [{"session_zid": z, "sentence_index": 1, "sentence_source": f"Text {key}.", "sentence_destination": "T."}],
+            [{"session_zid": z, "sentence_index": 1, "token_order": 0, "quotation": "Wort", "lemma": "Wort", "selected": 0}],
+        )
+        set_providers(db, z, {"active_provider": "google", "active_text_provider": "deepl"})
+
+    proj_id = db.create_project(title="Cleanup Project", slug="cleanup-project")
+    db.link_session_to_project(proj_id, zids["batch"])
+    set_cooldown(db, "google", 9999999999.0)
+    with db.get_connection() as conn:
+        conn.execute("INSERT INTO preferences(key, value, revision) VALUES ('theme', '\"light\"', 1)")
+        conn.execute("INSERT INTO session_provider_state(session_zid, field, value) VALUES ('preexisting-orphan', 'active_provider', 'google')")
+
+    cv = ClientViewAdapter(db)
+    for z in zids.values():
+        cv.set(z, "a" * 32, 1, [{"sentence_idx": 1, "token_order": 0}])
+
+    # 1. soft_delete_session + late worker completion blocked
+    assert db.soft_delete_session(zids["soft"]) is True
+    assert providers(db, zids["soft"]) == {}
+    with db.get_connection(read_only=True) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM client_view_state WHERE session_zid=?", (zids["soft"],)).fetchone()[0] == 0
+    assert db.restore_session(zids["soft"]) is True
+    assert cv.get(zids["soft"], "a" * 32)["active_tokens"] == []
+    assert db.soft_delete_session(zids["soft"]) is True
+    set_providers(db, zids["soft"], {"active_provider": "argos"})
+    assert providers(db, zids["soft"]) == {}
+
+    # 2. soft_delete_sessions_batch(project_id=...) preserves exact count and unrelated sessions
+    assert db.soft_delete_sessions_batch(project_id=proj_id) == 1
+    assert providers(db, zids["batch"]) == {}
+    set_providers(db, zids["batch"], {"active_provider": "argos"})
+    assert providers(db, zids["batch"]) == {}
+
+    # 3. delete_session
+    assert db.delete_session(zids["hard"]) is True
+    assert providers(db, zids["hard"]) == {}
+    set_providers(db, zids["hard"], {"active_provider": "argos"})
+    assert providers(db, zids["hard"]) == {}
+
+    # 4. purge_deleted_sessions (also purges pre-existing orphans)
+    assert db.soft_delete_session(zids["purge"]) is True
+    purged = db.purge_deleted_sessions()
+    assert purged == 3
+    assert providers(db, "preexisting-orphan") == {}
+
+    # 5. cleanup_db (age-based deletion)
+    with db.get_connection() as conn:
+        conn.execute("UPDATE sessions SET created_at = datetime('now', '-30 days') WHERE zid = ?", (zids["age"],))
+    assert db.cleanup_db(older_than_days=7) == 1
+    assert providers(db, zids["age"]) == {}
+
+    # Unrelated session, cooldowns, and preferences remain untouched
+    assert providers(db, zids["keep"]) == {"active_provider": "google", "active_text_provider": "deepl"}
+    assert cv.get(zids["keep"], "a" * 32)["active_tokens"] == [{"sentence_idx": 1, "token_order": 0}]
+    assert cooldowns(db) == {"google": 9999999999.0}
+    with db.get_connection(read_only=True) as conn:
+        assert conn.execute("SELECT value FROM preferences WHERE key='theme'").fetchone()[0] == '"light"'
+
+
+
 
 
 

@@ -307,3 +307,54 @@ def test_tsv_and_sqlite_backend_regression_parity(tmp_path):
     ]
     assert content == "\n".join(expected_lines)
 
+
+def test_sqlite_load_tsv_rows_no_disk_fallback_or_slug_masking(tmp_path):
+    """Verify SQLite load paths never fall back to stale TSV files or mask DB failures."""
+    db_path = tmp_path / "strict_sqlite.db"
+    cfg = configparser.ConfigParser()
+    cfg.add_section("storage")
+    cfg.set("storage", "backend", "sqlite")
+    cfg.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths = {"sqlite_db_path": str(db_path), "results_dir": tmp_path / "results"}
+    adapter = SqliteStorageAdapter(config=cfg, resolved_paths=resolved_paths, db_path=db_path)
+
+    # 1. Missing session in SQLite with stale TSV present on disk -> NOT_FOUND, never reads disk TSV
+    missing_zid = "20261116210201"
+    stale_tsv = tmp_path / f"{missing_zid}-stale-slug.de.tsv"
+    TsvStorageAdapter().save_tsv_rows_safely(
+        stale_tsv, ["# stale"], ["Quotation", "WordSource", "WordDestination"], [["Stale", "Stale", "StaleTrans"]]
+    )
+    with pytest.raises(desk.StructuredError) as exc_missing:
+        adapter.load_tsv_rows(stale_tsv)
+    assert exc_missing.value.error_code == desk.ErrorCode.NOT_FOUND
+    assert adapter.load_session(missing_zid, working_tsv_path=stale_tsv) is None
+
+    # 2. Existing session whose DB slug differs from deprecated TSV filename -> INVALID_STATE, never reads disk TSV
+    real_zid = "20261116210202"
+    adapter.save_session(
+        session_zid=real_zid,
+        slug="canonical-slug",
+        source_language="de",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Haus.",
+        headers=["Quotation", "WordSource", "WordDestination", "SentenceSourceIndex", "SentenceSource"],
+        data_rows=[["Haus", "Haus", "дом", "1", "Haus."]],
+    )
+    mismatch_tsv = tmp_path / f"{real_zid}-wrong-slug.de.tsv"
+    TsvStorageAdapter().save_tsv_rows_safely(
+        mismatch_tsv, ["# stale"], ["Quotation", "WordSource", "WordDestination"], [["Wrong", "Wrong", "WrongTrans"]]
+    )
+    with pytest.raises(desk.StructuredError) as exc_mismatch:
+        adapter.load_tsv_rows(mismatch_tsv)
+    assert exc_mismatch.value.error_code == desk.ErrorCode.INVALID_STATE
+
+    # 3. Corrupt SQLite DB while disk TSV exists -> explicit storage error, not NOT_FOUND or disk TSV
+    corrupt_db_path = tmp_path / "corrupt.db"
+    corrupt_db_path.write_bytes(b"not a valid sqlite file")
+    corrupt_adapter = SqliteStorageAdapter(db_path=corrupt_db_path, read_only=True)
+    with pytest.raises(Exception) as exc_corrupt:
+        corrupt_adapter.load_tsv_rows(stale_tsv)
+    assert not (isinstance(exc_corrupt.value, desk.StructuredError) and exc_corrupt.value.error_code == desk.ErrorCode.NOT_FOUND)
+
+

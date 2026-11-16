@@ -25,10 +25,20 @@ def providers(db, zid):
 
 
 def set_providers(db, zid, values):
+    if not zid or not values:
+        return
     with db.transaction() as connection:
-        connection.executemany('INSERT INTO session_provider_state VALUES (?, ?, ?) '
-                               'ON CONFLICT(session_zid, field) DO UPDATE SET value=excluded.value',
-                               [(zid, field, value) for field, value in values.items()])
+        active = connection.execute(
+            'SELECT 1 FROM sessions WHERE zid=? AND deleted_at IS NULL',
+            (zid,),
+        ).fetchone()
+        if active is None:
+            return
+        connection.executemany(
+            'INSERT INTO session_provider_state VALUES (?, ?, ?) '
+            'ON CONFLICT(session_zid, field) DO UPDATE SET value=excluded.value',
+            [(zid, field, value) for field, value in values.items()],
+        )
 
 
 def clear(db):

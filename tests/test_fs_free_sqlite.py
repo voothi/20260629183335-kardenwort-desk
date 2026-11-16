@@ -452,3 +452,37 @@ def test_clean_sentence_translation_view_in_sentences_mode(monkeypatch, lookup_w
         restored_child2 = adapter.restore_session("20260822143002")
         assert restored_child2["sentence_translation"] == "Второе предложение."
 
+
+@pytest.mark.parametrize('controller_world', [{'backend': 'sqlite', 'seed_cache': False}], indirect=True)
+def test_controller_get_session_passes_relational_zid_not_synthetic_tsv(controller_world, monkeypatch):
+    from urllib.request import Request, urlopen
+    import kardenwort_controller as controller
+
+    base_url, server = controller_world
+    adapter = get_storage_adapter(server.config, server.resolved_paths)
+    zid = "20261116210401"
+    adapter.save_session(
+        session_zid=zid,
+        slug="rel-route",
+        source_language="en",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="House.",
+        headers=["Quotation", "WordSource", "WordDestination", "SentenceSourceIndex", "SentenceSource"],
+        data_rows=[["House", "house", "дом", "1", "House."]],
+    )
+
+    seen_tsv_args = []
+
+    def fake_render(**kwargs):
+        seen_tsv_args.append(kwargs.get("tsv_path"))
+        return "<html><head></head><body>ok</body></html>"
+
+    monkeypatch.setattr(controller, "run_render_flow", fake_render)
+    url = f"{base_url}/?session_zid={zid}&seq_num=1"
+    req = Request(url, headers={"X-API-Token": server.api_key})
+    with urlopen(req, timeout=5) as resp:
+        assert resp.status == 200
+    assert seen_tsv_args == [zid]
+
+

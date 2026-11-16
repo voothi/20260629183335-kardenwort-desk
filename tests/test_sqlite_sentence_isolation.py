@@ -688,3 +688,126 @@ def test_retext_child_card_translation_isolation(tmp_path, monkeypatch):
     assert by_idx[1] == "NEW:and mounting child nodes."
     assert by_idx[2] == "NEW:Applied matching type casting"
     assert "Applied" not in by_idx[1]
+
+
+def test_single_mode_multi_sentence_save_session_dest1_dest2_provenance_and_validation(tmp_path):
+    """Verify multi-sentence single-mode save_session persists dst1/dst2/provenance atomically and rejects conflicts."""
+    db_path = tmp_path / "single_multi_save.db"
+    cfg = configparser.ConfigParser()
+    cfg.add_section(SEC_LANGUAGES)
+    cfg.add_section(SEC_STORAGE)
+    cfg.set(SEC_STORAGE, "backend", "sqlite")
+    cfg.set(SEC_STORAGE, "sqlite_db_path", str(db_path))
+    resolved_paths = {
+        "sqlite_db_path": str(db_path),
+        "kardenwort_workspace": str(tmp_path),
+        "anki_mapping_file": str(tmp_path / "anki-mapping.ini"),
+    }
+
+    adapter = SqliteStorageAdapter(config=cfg, resolved_paths=resolved_paths, db_path=db_path)
+    zid = "20261116210301"
+    headers = [
+        "TokenOrder", "Quotation", "WordSource", "WordDestination",
+        "SentenceSourceIndex", "SentenceSource", "SentenceDestination", "SentenceDestination2", "DeskSelected"
+    ]
+    rows = [
+        ["0", "Haus", "Haus", "дом", "1", "Das Haus.", "Init 1", "Pad 1", "1"],
+        ["0", "Baum", "Baum", "дерево", "2", "Der Baum.", "Init 2", "Pad 2", "0"],
+    ]
+    adapter.save_session(
+        session_zid=zid,
+        slug="haus-baum",
+        source_language="de",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Das Haus. Der Baum.",
+        headers=headers,
+        data_rows=rows,
+        text_provenance="cached:sqlite",
+        sentences=[
+            {"session_zid": zid, "sentence_index": 1, "sentence_source": "Das Haus.", "sentence_destination": "Init 1", "sentence_destination2": "Pad 1", "text_provenance": "cached:sqlite"},
+            {"session_zid": zid, "sentence_index": 2, "sentence_source": "Der Baum.", "sentence_destination": "Init 2", "sentence_destination2": "Pad 2", "text_provenance": "cached:sqlite"},
+        ],
+    )
+
+    # 1. Update SentenceDestination, SentenceDestination2, and text_provenance in single mode
+    updated_rows = [
+        ["0", "Haus", "Haus", "дом", "1", "Das Haus.", "Updated 1", "Updated Pad 1", "1"],
+        ["0", "Baum", "Baum", "дерево", "2", "Der Baum.", "Updated 2", "Updated Pad 2", "0"],
+    ]
+    adapter.save_session(
+        session_zid=zid,
+        headers=headers,
+        data_rows=updated_rows,
+        text_provenance="live:deepl",
+    )
+
+    reopened = KardenwortDB(db_path=db_path)
+    sents = {s["sentence_index"]: s for s in reopened.get_sentences_by_session(zid)}
+    assert sents[1]["sentence_destination"] == "Updated 1"
+    assert sents[1]["sentence_destination2"] == "Updated Pad 1"
+    assert sents[1]["text_provenance"] == "live:deepl"
+    assert sents[2]["sentence_destination"] == "Updated 2"
+    assert sents[2]["sentence_destination2"] == "Updated Pad 2"
+    assert sents[2]["text_provenance"] == "live:deepl"
+
+    # 2. Absent SentenceDestination2 and empty SentenceDestination without clear flag preserve existing values
+    absent_headers = ["TokenOrder", "Quotation", "WordSource", "WordDestination", "SentenceSourceIndex", "SentenceSource", "SentenceDestination", "DeskSelected"]
+    adapter.save_session(
+        session_zid=zid,
+        headers=absent_headers,
+        data_rows=[
+            ["0", "Haus", "Haus", "дом", "1", "Das Haus.", "", "1"],
+            ["0", "Baum", "Baum", "дерево", "2", "Der Baum.", "Updated 2", "0"],
+        ],
+    )
+    sents = {s["sentence_index"]: s for s in reopened.get_sentences_by_session(zid)}
+    assert sents[1]["sentence_destination"] == "Updated 1"
+    assert sents[1]["sentence_destination2"] == "Updated Pad 1"
+
+    # 3. Explicitly authorized clear clears only the targeted empty destination field
+    adapter.save_session(
+        session_zid=zid,
+        headers=absent_headers,
+        data_rows=[
+            ["0", "Haus", "Haus", "дом", "1", "Das Haus.", "", "1"],
+            ["0", "Baum", "Baum", "дерево", "2", "Der Baum.", "Updated 2", "0"],
+        ],
+        clear_sentence_destinations=True,
+    )
+    sents = {s["sentence_index"]: s for s in reopened.get_sentences_by_session(zid)}
+    assert sents[1]["sentence_destination"] == ""
+    assert sents[1]["sentence_destination2"] == "Updated Pad 1"
+    assert sents[2]["sentence_destination"] == "Updated 2"
+
+    # 4. Conflicting destinations or missing/unknown SentenceSourceIndex reject atomically with zero partial writes
+    with pytest.raises(kardenwort_desk.StructuredError):
+        adapter.save_session(
+            session_zid=zid,
+            headers=headers,
+            data_rows=[
+                ["0", "Haus", "Haus", "дом_NEW", "1", "Das Haus.", "Conflict A", "Pad A", "1"],
+                ["1", "Das", "das", "то", "1", "Das Haus.", "Conflict B", "Pad A", "0"],
+            ],
+            text_provenance="live:bad",
+        )
+    with pytest.raises(kardenwort_desk.StructuredError):
+        adapter.save_session(
+            session_zid=zid,
+            headers=headers,
+            data_rows=[
+                ["0", "Haus", "Haus", "дом_NEW", "99", "Das Haus.", "Invalid Idx", "Pad A", "1"],
+            ],
+        )
+
+    reopened_after_fail = KardenwortDB(db_path=db_path)
+    sents_after_fail = {s["sentence_index"]: s for s in reopened_after_fail.get_sentences_by_session(zid)}
+    assert sents_after_fail[1]["sentence_source"] == "Das Haus."
+    assert sents_after_fail[1]["sentence_destination"] == ""
+    assert sents_after_fail[1]["text_provenance"] == "live:deepl"
+    words_after_fail = reopened_after_fail.get_words_by_session(zid)
+    assert [(w["sentence_index"], w["token_order"], w["word_destination"], w["selected"]) for w in words_after_fail] == [
+        (1, 0, "дом", 1),
+        (2, 0, "дерево", 0),
+    ]
+

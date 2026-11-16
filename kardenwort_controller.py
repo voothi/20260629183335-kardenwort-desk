@@ -4588,9 +4588,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         fingerprint=fingerprint,
                     )
                 else:
-                    results_dir = Path(self.server.resolved_paths.get('kardenwort_workspace', '.')) / "results"
-                    slug_suffix = f"-{slug}" if slug else ""
-                    tsv_path = results_dir / f"{session_zid}{slug_suffix}.{sess_lang}.tsv"
+                    if getattr(adapter, 'backend_name', '') == 'sqlite':
+                        tsv_path = str(session_zid)
+                    else:
+                        results_dir = Path(self.server.resolved_paths.get('kardenwort_workspace', '.')) / "results"
+                        slug_suffix = f"-{slug}" if slug else ""
+                        tsv_path = results_dir / f"{session_zid}{slug_suffix}.{sess_lang}.tsv"
                     seq_num = qs.get('seq_num', [None])[0] or qs.get('seq-num', [None])[0]
 
                     delivery_mode = "container"
