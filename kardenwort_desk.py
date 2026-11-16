@@ -2284,6 +2284,8 @@ def resolve_ui_config(config: Optional[configparser.ConfigParser] = None) -> Dic
     if not config:
         return ui_cfg
 
+    ui_cfg['client_view_enabled'] = config.get(SEC_STORAGE, 'backend', fallback='tsv').strip().lower() == 'sqlite'
+
     if SEC_UI in config:
         ui = config[SEC_UI]
         ui_cfg['auto_save_on_edit'] = ui.getboolean('auto_save_on_edit', fallback=False)
@@ -12662,6 +12664,7 @@ html, body {{
 
     # Stage 1: UI configuration and TTS settings
     ui_cfg = resolve_ui_config(config)
+    ui_cfg['client_view_enabled'] = storage_backend_setting(config, resolved_paths) == 'sqlite'
     ui_cfg["compound_joiners"] = "".join(sorted(COMPOUND_JOINERS))
     ui_cfg["grammar"] = get_grammar_payload()
     ui_cfg["audio_lmb_play"] = (lmb_play_val == "true")
@@ -13779,7 +13782,7 @@ def render_declarative_web_shell(
 
     # Inlined modular CSS and components for offline WebView2 execution
     web_dir = Path(__file__).resolve().parent / "web"
-    if ui_cfg.get("state_authority") == "sqlite" and not (mismatch_info and mismatch_info.get("is_mismatch")):
+    if ui_cfg.get("state_authority") == "sqlite" and ui_cfg.get("client_view_enabled", True) and not (mismatch_info and mismatch_info.get("is_mismatch")):
         presentation_js = read_required_asset(web_dir / "js/features/workspace-presentation.js")
         state_js = read_required_asset(web_dir / "js/features/sqlite-state.js")
         presentation_css = read_required_asset(web_dir / "css/workspace.css")

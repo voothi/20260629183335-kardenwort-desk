@@ -140,7 +140,7 @@
     }
     function start(state) {
         dispose(state);
-        if (!state.enabled || state.options.draft) {
+        if (!state.viewEnabled || state.options.draft) {
             state.phase = state.options.draft ? 'draft' : 'static';
             present(state, 'ready'); state.ready = Promise.resolve(); return state.ready;
         }
@@ -173,7 +173,7 @@
         state.phase = 'failed'; state.failure = error; state.options.failure(error);
     }
     function save(state) {
-        if (!state.enabled || state.phase === 'draft') return Promise.resolve();
+        if (!state.viewEnabled || state.phase === 'draft') return Promise.resolve();
         if (state.phase === 'initializing') return state.ready;
         if (state.phase === 'disposed') return Promise.resolve();
         return enqueueView(state, state.options.capture());
@@ -234,7 +234,8 @@
     }
     function create(options) {
         var enabled = options.ui.state_authority === 'sqlite' && options.connected !== false;
-        var state = {options: options, enabled: enabled, client: enabled && !options.draft ? clientSlot() : null,
+        var viewEnabled = enabled && options.ui.client_view_enabled !== false;
+        var state = {options: options, enabled: enabled, viewEnabled: viewEnabled, client: viewEnabled && !options.draft ? clientSlot() : null,
             revisions: Object.assign({}, options.ui.preference_revisions || {}), values: Object.assign({}, options.ui), viewRevision: 0,
             phase: options.draft ? 'draft' : 'initializing', failure: null, tail: Promise.resolve(), ready: null};
         return {start: start.bind(null, state), dispose: dispose.bind(null, state), save: save.bind(null, state), flush: flush.bind(null, state),

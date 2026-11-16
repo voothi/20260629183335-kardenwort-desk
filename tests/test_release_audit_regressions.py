@@ -417,6 +417,7 @@ def test_phase3_local_uncommitted_selections_preserved_during_recovery(page, tmp
     page.goto(url + "/")
     page.wait_for_function("typeof window.toggleRowSelection === 'function'")
 
+    page.evaluate("window.__stateReady")
     page.evaluate("SSEBridge.disconnect()")
 
     # 1. Local user selects Baum (row 1) while disconnected (uncommitted delta)
