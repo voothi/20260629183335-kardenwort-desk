@@ -2012,6 +2012,21 @@ class EnrichmentQueue:
                 "active_progressive_sessions": list(self._active_progressive_sessions.keys()),
             }
 
+    def _collect_task_errors(self, tasks, wait: bool) -> list:
+        calls = []
+        for task in tasks:
+            if not task.cancelled() and (wait or task.done()):
+                calls.append(lambda t=task: t.result(timeout=0))
+        return run_cleanup(calls)
+
+    def _record_shutdown_errors(self, errors: list):
+        with self._lock:
+            errors.extend(self._unobserved_progressive_failures)
+            self._unobserved_progressive_failures.clear()
+            for err in errors:
+                if not any(existing is err for existing in self._acknowledged_failures):
+                    self._acknowledged_failures.append(err)
+
     def shutdown(self, wait: bool = True):
         with self._lock:
             self._shutting_down = True
@@ -2019,20 +2034,10 @@ class EnrichmentQueue:
         if not wait:
             for task in tasks:
                 task.cancel()
-        errors = run_cleanup([lambda executor=executor: executor.shutdown(wait=wait)
-            for executor in (self._executor, self._translation_executor, self._progressive_executor)])
-        if wait:
-            errors.extend(run_cleanup([lambda task=task: task.result(timeout=0)
-                                       for task in tasks if not task.cancelled()]))
-        else:
-            errors.extend(run_cleanup([lambda task=task: task.result(timeout=0)
-                                       for task in tasks if task.done() and not task.cancelled()]))
-        with self._lock:
-            errors.extend(self._unobserved_progressive_failures)
-            self._unobserved_progressive_failures.clear()
-            for err in errors:
-                if not any(existing is err for existing in self._acknowledged_failures):
-                    self._acknowledged_failures.append(err)
+        executors = (self._executor, self._translation_executor, self._progressive_executor)
+        errors = run_cleanup([lambda executor=executor: executor.shutdown(wait=wait) for executor in executors])
+        errors.extend(self._collect_task_errors(tasks, wait))
+        self._record_shutdown_errors(errors)
         if errors:
             raise BaseExceptionGroup('Controller queue disposal failed', list({id(error): error for error in errors}.values()))
 

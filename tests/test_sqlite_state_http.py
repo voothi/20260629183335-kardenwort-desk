@@ -309,3 +309,118 @@ def test_concurrent_preference_revisions_and_view_updates(preference_world):
     assert data(post(url, '/api/v1/client-view', dict(session_zid=ZID, client_id='e' * 32))[1])['active_card'] == 1
     assert (path.read_bytes(), path.stat().st_mtime_ns) == before
 
+
+def test_clean_view_read_uses_single_readonly_connection_and_zero_writes(preference_world):
+    from kardenwort_client_views import ClientViewAdapter
+    from kardenwort_state_runtime import preference_store
+    url, server, _ = preference_world
+    adapter = seed(server)
+    store = preference_store(server.config, server.resolved_paths)
+    client = 'f' * 32
+    focus = [dict(sentence_idx=1, token_order=0)]
+    views = ClientViewAdapter(store.db)
+    views.set(ZID, client, 2, focus)
+
+    modes = []
+    statements = []
+    real_get_connection = store.db.get_connection
+
+    def traced_connection(*args, **kwargs):
+        modes.append(bool(kwargs.get('read_only', False)))
+        cm = real_get_connection(*args, **kwargs)
+        orig_enter = cm.__enter__
+
+        def tracked_enter():
+            conn = orig_enter()
+            conn.set_trace_callback(statements.append)
+            return conn
+
+        cm.__enter__ = tracked_enter
+        return cm
+
+    store.db.get_connection = traced_connection
+    try:
+        res_status, res_body = post(url, '/api/v1/client-view', dict(session_zid=ZID, client_id=client))
+        assert res_status == 200
+        payload = data(res_body)
+        assert payload['active_card'] == 2 and payload['active_tokens'] == focus
+        assert payload['revision'] == 1 and payload['browser_imported'] is False
+        assert modes == [True]
+        assert not any(stmt.lstrip().upper().startswith(('BEGIN IMMEDIATE', 'INSERT', 'UPDATE', 'DELETE')) for stmt in statements), statements
+        assert len([stmt for stmt in statements if stmt.lstrip().upper().startswith('SELECT')]) <= 5, statements
+    finally:
+        store.db.get_connection = real_get_connection
+
+
+def test_controlled_clock_touch_renewal_stale_repair_and_expiry(preference_world):
+    from kardenwort_client_views import ClientViewAdapter, RETENTION_SECONDS, TOUCH_RENEWAL_SECONDS
+    _, server, _ = preference_world
+    adapter = seed(server)
+    now = [1_700_000_000]
+    views = ClientViewAdapter(adapter.db, clock=lambda: now[0])
+    client = 'e' * 32
+    focus = [dict(sentence_idx=1, token_order=0)]
+
+    created = views.set(ZID, client, 2, focus)
+    assert created['revision'] == 1
+
+    now[0] += TOUCH_RENEWAL_SECONDS - 1
+    assert views.get(ZID, client)['revision'] == 1
+    with adapter.db.get_connection(read_only=True) as conn:
+        assert conn.execute('SELECT touched_at FROM client_view_state WHERE client_id=?', (client,)).fetchone()[0] == 1_700_000_000
+
+    now[0] += 1
+    renewed = views.get(ZID, client)
+    assert renewed['revision'] == 1 and renewed['cleared'] is False
+    with adapter.db.get_connection(read_only=True) as conn:
+        assert conn.execute('SELECT touched_at FROM client_view_state WHERE client_id=?', (client,)).fetchone()[0] == now[0]
+
+    with adapter.db.get_connection() as conn:
+        conn.execute('DELETE FROM words WHERE session_zid=? AND sentence_index=1 AND token_order=0', (ZID,))
+    repaired = views.get(ZID, client)
+    assert repaired['cleared'] is True and repaired['active_tokens'] == [] and repaired['revision'] == 2
+
+    now[0] += RETENTION_SECONDS + 1
+    expired = views.get(ZID, client)
+    assert expired == dict(active_card=1, active_tokens=[], revision=0, cleared=False)
+
+
+def test_view_writer_escalation_revalidates_against_dispose_and_set_races(preference_world):
+    import kardenwort_client_views as cv
+    _, server, _ = preference_world
+    adapter = seed(server)
+    now = [1_700_000_000]
+    views = cv.ClientViewAdapter(adapter.db, clock=lambda: now[0])
+    client = 'c' * 32
+    focus = [dict(sentence_idx=1, token_order=0)]
+    views.set(ZID, client, 1, focus)
+
+    now[0] += cv.TOUCH_RENEWAL_SECONDS + 10
+    real_inspect = cv.inspect_view
+    action = []
+
+    def racing_inspect(*args, **kwargs):
+        result = real_inspect(*args, **kwargs)
+        if action:
+            action.pop(0)()
+        return result
+
+    orig_inspect = cv.inspect_view
+    cv.inspect_view = racing_inspect
+    try:
+        # Race 1: dispose happens right after read observation, before writer escalation.
+        action.append(lambda: views.dispose(ZID, client))
+        disposed = views.get(ZID, client)
+        assert disposed == dict(active_card=1, active_tokens=[], revision=0, cleared=False)
+        with adapter.db.get_connection(read_only=True) as conn:
+            assert conn.execute('SELECT 1 FROM client_view_state WHERE client_id=?', (client,)).fetchone() is None
+
+        # Race 2: concurrent set happens right after read observation; writer keeps newer view.
+        views.set(ZID, client, 1, focus)
+        now[0] += cv.TOUCH_RENEWAL_SECONDS + 10
+        action.append(lambda: views.set(ZID, client, 3, focus))
+        merged = views.get(ZID, client)
+        assert merged['active_card'] == 3 and merged['revision'] == 2 and merged['cleared'] is False
+    finally:
+        cv.inspect_view = orig_inspect
+

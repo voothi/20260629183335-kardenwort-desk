@@ -81,24 +81,53 @@ def configured_preferences(config, keys=None):
 
 
 
-def command_key(body):
-    key = body.get('key')
-    if key:
-        return key
-    aliases = set(PREFERENCES).intersection(body)
-    if len(aliases) != 1:
+def _explicit_key(raw):
+    if not isinstance(raw, str):
+        raise ValueError('Preference section and key must be strings')
+    normalized = raw.strip().lower()
+    if normalized not in PREFERENCES:
+        raise ValueError('Preference key is not permitted')
+    return normalized
+
+
+def _alias_key(body):
+    matches = []
+    for raw in body:
+        if isinstance(raw, str) and raw.strip().lower() in PREFERENCES:
+            matches.append(raw)
+    if len(matches) != 1:
         raise ValueError('Exactly one preference key is required')
-    return next(iter(aliases))
+    return matches[0]
+
+
+def command_key(body):
+    if 'key' in body:
+        return _explicit_key(body['key'])
+    return _alias_key(body)
+
+
+def command_section(body, key):
+    canonical = PREFERENCES[key][0]
+    if 'section' not in body:
+        return canonical
+    section = body['section']
+    if not isinstance(section, str):
+        raise ValueError('Preference section and key must be strings')
+    if section.strip().lower() != canonical:
+        raise ValueError('Preference key is not permitted')
+    return canonical
 
 
 def parse_preference_command(body):
     if not isinstance(body, dict):
         raise ValueError('Preference command must be an object')
-    section, key = body.get('section', 'rendering'), command_key(body)
-    if not isinstance(section, str) or not isinstance(key, str):
-        raise ValueError('Preference section and key must be strings')
-    section, key = section.strip().lower(), key.strip().lower()
-    if key not in PREFERENCES or section != PREFERENCES[key][0]:
-        raise ValueError('Preference key is not permitted')
-    value = body.get('value') if body.get('key') else body[key]
-    return PreferenceCommand(section, key, preference_value(key, value))
+    raw_key = command_key(body)
+    key = raw_key.strip().lower()
+    section = command_section(body, key)
+    if 'key' in body:
+        if 'value' not in body:
+            raise ValueError('Preference value is required')
+        raw_value = body['value']
+    else:
+        raw_value = body[raw_key]
+    return PreferenceCommand(section, key, preference_value(key, raw_value))

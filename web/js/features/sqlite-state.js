@@ -203,7 +203,7 @@
     }
     function sendPreference(state, key, value) {
         return Promise.resolve(state.ready).then(function() {
-            return state.options.send('/api/v1/config', {section: 'rendering', key: key,
+            return state.options.send('/api/v1/config', {key: key,
                 value: String(value), expected_revision: state.revisions[key]});
         }).then(function(result) {
             if (state.enabled) {

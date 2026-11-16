@@ -64,46 +64,59 @@ def _has_pre_ddl_state(connection):
     return applied is None
 
 
+def _has_sequence_table(connection):
+    return bool(connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'"
+    ).fetchone())
+
+
+def _verify_backup_metadata(source, backup_conn):
+    if backup_conn.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+        raise sqlite3.DatabaseError('Existing pre-migration backup is invalid')
+    if not _has_pre_ddl_state(backup_conn):
+        raise sqlite3.DatabaseError(
+            'Existing pre-migration backup is not a pre-DDL preference-migration snapshot'
+        )
+    if not _has_pre_ddl_state(source):
+        raise sqlite3.DatabaseError(
+            'Source database already passed preference migration; cannot verify backup ownership'
+        )
+    if _database_identity(backup_conn) != _database_identity(source):
+        raise sqlite3.DatabaseError(
+            'Existing pre-migration backup database identity does not match source database'
+        )
+
+
+def _verify_backup_rows(source, backup_conn, table_names):
+    for table_name in table_names:
+        if _table_rows(backup_conn, table_name) != _table_rows(source, table_name):
+            raise sqlite3.DatabaseError(
+                f"Existing pre-migration backup content mismatch in table '{table_name}'"
+            )
+
+
+def _verify_backup_contents(source, backup_conn):
+    backup_schema = _schema_signature(backup_conn)
+    source_schema = _schema_signature(source)
+    if backup_schema != source_schema:
+        raise sqlite3.DatabaseError(
+            'Existing pre-migration backup schema does not match source database'
+        )
+    table_names = [name for kind, name, _ in source_schema if kind == 'table']
+    seq_in_source = _has_sequence_table(source)
+    if seq_in_source != _has_sequence_table(backup_conn):
+        raise sqlite3.DatabaseError(
+            'Existing pre-migration backup sequence state does not match source database'
+        )
+    if seq_in_source:
+        table_names.append('sqlite_sequence')
+    _verify_backup_rows(source, backup_conn, table_names)
+
+
 def _verify_existing_backup(source, target):
     with closing(sqlite3.connect(target.as_uri() + '?mode=ro', uri=True)) as backup_conn:
-        if backup_conn.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
-            raise sqlite3.DatabaseError('Existing pre-migration backup is invalid')
-        if not _has_pre_ddl_state(backup_conn):
-            raise sqlite3.DatabaseError(
-                'Existing pre-migration backup is not a pre-DDL preference-migration snapshot'
-            )
-        if not _has_pre_ddl_state(source):
-            raise sqlite3.DatabaseError(
-                'Source database already passed preference migration; cannot verify backup ownership'
-            )
-        if _database_identity(backup_conn) != _database_identity(source):
-            raise sqlite3.DatabaseError(
-                'Existing pre-migration backup database identity does not match source database'
-            )
-        backup_schema = _schema_signature(backup_conn)
-        source_schema = _schema_signature(source)
-        if backup_schema != source_schema:
-            raise sqlite3.DatabaseError(
-                'Existing pre-migration backup schema does not match source database'
-            )
-        table_names = [name for kind, name, _ in source_schema if kind == 'table']
-        seq_in_source = bool(source.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'"
-        ).fetchone())
-        seq_in_backup = bool(backup_conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'"
-        ).fetchone())
-        if seq_in_source != seq_in_backup:
-            raise sqlite3.DatabaseError(
-                'Existing pre-migration backup sequence state does not match source database'
-            )
-        if seq_in_source:
-            table_names.append('sqlite_sequence')
-        for table_name in table_names:
-            if _table_rows(backup_conn, table_name) != _table_rows(source, table_name):
-                raise sqlite3.DatabaseError(
-                    f"Existing pre-migration backup content mismatch in table '{table_name}'"
-                )
+        _verify_backup_metadata(source, backup_conn)
+        _verify_backup_contents(source, backup_conn)
 
 
 def _remove_staging_artifacts(staging):

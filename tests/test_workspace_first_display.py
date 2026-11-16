@@ -658,3 +658,80 @@ def test_format_initial_card_translations_multiline_pending_empty_escaped_and_ge
     expect(page.locator('#lemma-table')).to_contain_text('ˈalfə')
     expect(page.locator('#lemma-table')).to_contain_text('Subst.Fem')
 
+
+def test_offline_file_document_skips_client_view_fetch_and_keeps_shell_layout(page, tmp_path, component_configuration):
+    config, paths, _, _ = desk.load_config()
+    config.read_dict({'sentences_mode': {'enabled': 'true', 'delivery_mode': 'container'},
+                      'rendering': {'display_mode': 'progressive'},
+                      'pipeline': {'progressive_text_translation': 'true'},
+                      'triggers': {'run_text_translation': 'auto'},
+                      'server': {'enabled': 'false'}})
+    headers = ['Quotation', 'WordSource', 'WordDestination', 'SentenceSourceIndex', 'SentenceSource', 'SentenceDestination']
+    rows = [['Alpha', 'Alpha', '', '1', 'Alpha first!', '']]
+    text = 'Alpha first!'
+    seed_render_rows(config, paths, '20261114091622', text, 'en', headers, rows, text_mode='multi')
+    html = desk.run_render_flow(text=text, language='en', zid='20261114091622', text_mode='multi',
+                                config=config, resolved_paths=paths, spawn_children=False)
+    html_file = tmp_path / 'offline.html'
+    html_file.write_text(html, encoding='utf-8')
+    client_view_calls = []
+    page.on('request', lambda req: client_view_calls.append(req.url) if '/api/v1/client-view' in req.url else None)
+    page.goto(html_file.as_uri())
+    page.wait_for_function('window.__stateReady !== undefined')
+    page.evaluate('window.__stateReady')
+    assert client_view_calls == []
+    assert not page.locator('[role="status"][aria-label="Workspace readiness"]').is_visible()
+    assert page.locator('#source-container').is_visible()
+    assert page.locator('#kw-action-toolbar').is_visible()
+    assert page.locator('.skeleton-loader').count() > 0
+
+    about_page = page.context.new_page()
+    try:
+        about_calls = []
+        about_page.on('request', lambda req: about_calls.append(req.url) if '/api/v1/client-view' in req.url else None)
+        about_page.set_content(html)
+        about_page.wait_for_function('window.__stateReady !== undefined')
+        about_page.evaluate('window.__stateReady')
+        assert about_calls == []
+        assert about_page.locator('#source-container').is_visible()
+    finally:
+        about_page.close()
+
+
+def test_connected_file_document_restores_view_and_retains_shell_geometry(sqlite_page, tmp_path):
+    page, url, server, adapter, path = sqlite_page
+    page.goto(url + '/'); ready(page)
+    boot = json.loads(page.locator('#kardenwort-bootstrap').text_content())
+    source = page.locator('#source-container').inner_html()
+    html = desk.render_declarative_web_shell(boot, source_html=source)
+    file_page = page.context.new_page()
+    geometry = '''() => Array.from(document.querySelectorAll(
+        '#kw-action-toolbar,#source-container,#translation-container'
+    )).map(el => { const r = el.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })'''
+    try:
+        html_file = tmp_path / 'connected.html'
+        html_file.write_text(html, encoding='utf-8')
+        calls = []
+        held = []
+
+        def hold_first(route):
+            calls.append(route.request.url)
+            if not held:
+                held.append(route)
+            else:
+                route.continue_()
+
+        file_page.route('**/api/v1/client-view', hold_first)
+        file_page.goto(html_file.as_uri(), wait_until='domcontentloaded')
+        file_page.wait_for_function('window.__stateReady !== undefined')
+        before = file_page.evaluate(geometry)
+        assert file_page.locator('#source-container').is_visible()
+        assert file_page.locator('#kw-action-toolbar').is_visible()
+        held.pop(0).continue_()
+        ready(file_page)
+        after = file_page.evaluate(geometry)
+        assert any('/api/v1/client-view' in item for item in calls)
+        assert len(before) == len(after) and all(abs(a - b) < 1.0 for l, r in zip(before, after) for a, b in zip(l, r))
+    finally:
+        file_page.close()
+

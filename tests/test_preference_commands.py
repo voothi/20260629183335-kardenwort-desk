@@ -155,3 +155,66 @@ def test_serialized_language_writer_preserves_unrelated_bytes(tmp_path, newline,
     path.write_bytes(original)
     assert desk.persist_default_language('de', base_dir=tmp_path)
     assert path.read_bytes() == original.replace(b'default_language = en', b'default_language = de')
+
+
+def test_section_omitted_http_commands_section_mismatch_and_revision_conflict(preference_world):
+    url, server, path = preference_world
+    assert command(url, dict(key='theme', value='light'))[0] == 200
+    assert command(url, {'default_zoom': 125})[0] == 200
+    assert command(url, dict(key='default_language', value='fr'))[0] == 200
+    assert server.config.get('ui', 'theme') == 'light'
+    assert server.config.get('rendering', 'default_zoom') == '125'
+    assert server.config.get('settings', 'default_language') == 'fr'
+
+    mismatch_status, mismatch_data = command(url, dict(section='rendering', key='theme', value='dark'))
+    assert mismatch_status == 400 and mismatch_data['error_code'] == 'INVALID_PAYLOAD'
+    assert server.config.get('ui', 'theme') == 'light'
+
+    conflict_status, conflict_data = command(url, dict(key='theme', value='dark', expected_revision=0))
+    assert conflict_status == 409 and conflict_data['error_code'] == 'ROW_STALE'
+    assert server.config.get('ui', 'theme') == 'light'
+
+
+def test_refresh_preferences_skips_equal_snapshot_rejects_older_and_rolls_back_failure(preference_world):
+    from kardenwort_state_runtime import project_preferences, refresh_preferences, preference_store
+    _, server, _ = preference_world
+    first = refresh_preferences(server.config, server.resolved_paths)
+    calls = []
+    real_set = server.config.set
+
+    def tracked_set(section, option, value=None):
+        calls.append((section, option, value))
+        return real_set(section, option, value)
+
+    server.config.set = tracked_set
+    try:
+        second = refresh_preferences(server.config, server.resolved_paths)
+        assert second == first
+        assert calls == []
+    finally:
+        server.config.set = real_set
+
+    preference_store(server.config, server.resolved_paths).set('theme', 'light')
+    latest = refresh_preferences(server.config, server.resolved_paths)
+    assert latest['values']['theme'] == 'light'
+    older = dict(values=dict(first['values']), revisions=dict(first['revisions']))
+    returned = project_preferences(server.config, older)
+    assert returned['values']['theme'] == 'light'
+    assert server.config.get('ui', 'theme') == 'light'
+
+    next_snapshot = dict(values=dict(latest['values'], theme='white'),
+                         revisions=dict(latest['revisions'], theme=latest['revisions']['theme'] + 1))
+
+    def fail_on_theme(section, option, value=None):
+        if option == 'theme':
+            raise RuntimeError('projection write failure')
+        return real_set(section, option, value)
+
+    server.config.set = fail_on_theme
+    try:
+        with pytest.raises(RuntimeError, match='projection write failure'):
+            project_preferences(server.config, next_snapshot)
+        assert server.config.get('ui', 'theme') == 'light'
+        assert server.config._sqlite_preferences_snapshot == latest
+    finally:
+        server.config.set = real_set

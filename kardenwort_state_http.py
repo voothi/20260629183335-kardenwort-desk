@@ -13,26 +13,25 @@ def store_for(server):
 
 
 def config_snapshot(server, body):
-    with STATE_LOCK:
-        return project_snapshot(server, store_for(server).snapshot())
+    return project_snapshot(server, store_for(server).snapshot())
 
 
 def project_snapshot(server, snapshot):
-    project_preferences(server.config, snapshot)
-    static_ui = dict(getattr(server, 'ui_cfg', {}) or {})
-    static_ui.update(snapshot['values'])
-    static_ui.update(state_authority='sqlite', preference_revisions=snapshot['revisions'])
-    server.ui_cfg = static_ui
-    return dict(ok=True, ui=static_ui, default_language=snapshot['values']['default_language'],
-                preferences=snapshot, state_authority='sqlite')
+    with STATE_LOCK:
+        projected = project_preferences(server.config, snapshot)
+        static_ui = dict(getattr(server, 'ui_cfg', {}) or {})
+        static_ui.update(projected['values'])
+        static_ui.update(state_authority='sqlite', preference_revisions=dict(projected['revisions']))
+        server.ui_cfg = static_ui
+        return dict(ok=True, ui=dict(static_ui), default_language=projected['values']['default_language'],
+                    preferences=projected, state_authority='sqlite')
 
 
 def update_config(server, body):
     command = parse_preference_command(body)
-    with STATE_LOCK:
-        result = store_for(server).set(command.key, command.selected, body.get('expected_revision'))
-        snapshot = project_snapshot(server, result['snapshot'])['preferences']
-        EventDispatcher.get_instance().publish_global(dict(type='preferences_updated', preferences=snapshot))
+    result = store_for(server).set(command.key, command.selected, body.get('expected_revision'))
+    snapshot = project_snapshot(server, result['snapshot'])['preferences']
+    EventDispatcher.get_instance().publish_global(dict(type='preferences_updated', preferences=snapshot))
     return dict(ok=True, section=command.section, key=command.key, value=command.value,
                 committed_value=result['value'], revision=result['revision'])
 
@@ -44,12 +43,11 @@ def client_view(server, body):
         adapter.dispose(zid, client)
         return dict(ok=True, disposed=True)
     if 'active_card' in body:
-        result = adapter.set(zid, client, body['active_card'], body.get('active_tokens', []), body.get('expected_revision'))
+        result = adapter.set(zid, client, body['active_card'], body.get('active_tokens', []),
+                             body.get('expected_revision'), include_import=True)
     else:
-        result = adapter.get(zid, client)
-    with adapter.db.get_connection(read_only=True) as connection:
-        done = connection.execute('SELECT 1 FROM browser_state_imports WHERE client_id=?', (client,)).fetchone()
-    return dict(ok=True, browser_imported=done is not None, **result)
+        result = adapter.get(zid, client, include_import=True)
+    return dict(ok=True, **result)
 
 
 def import_browser(server, body):
@@ -61,11 +59,10 @@ def import_browser(server, body):
         if not isinstance(view, dict) or not {'active_card', 'active_tokens'} <= view.keys():
             raise ValueError('Invalid browser view')
         callback = lambda connection: write_view(connection, zid, client, view['active_card'], view['active_tokens'], view.get('expected_revision'))
-    with STATE_LOCK:
-        result = store.import_browser(client, body.get('preferences', {}), body.get('revisions', {}), callback)
-        snapshot = dict(values=result['values'], revisions=result['revisions'])
-        project_snapshot(server, snapshot)
-        EventDispatcher.get_instance().publish_global(dict(type='preferences_updated', preferences=snapshot))
+    result = store.import_browser(client, body.get('preferences', {}), body.get('revisions', {}), callback)
+    snapshot = dict(values=result['values'], revisions=result['revisions'])
+    projected = project_snapshot(server, snapshot)['preferences']
+    EventDispatcher.get_instance().publish_global(dict(type='preferences_updated', preferences=projected))
     return dict(ok=True, **result)
 
 

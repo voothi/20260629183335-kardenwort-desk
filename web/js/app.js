@@ -8970,6 +8970,18 @@
         }
         window.getApiToken = getApiToken;
 
+        function hasHttpServerUrl() {
+            var url = String(SERVER_URL || '');
+            return url.indexOf('http://') === 0 || url.indexOf('https://') === 0;
+        }
+
+        function hasConnectedTransport() {
+            if (location.protocol === 'http:' || location.protocol === 'https:') {
+                return true;
+            }
+            return Boolean(getApiToken() && hasHttpServerUrl() && (SERVER_ENABLED || window.API_TOKEN));
+        }
+
         function rowRetryPayload(sessionZid, rowId, row) {
             var targets = getLookupRowTargets(row);
             if (targets.length) return {session_zid: sessionZid, language: getSessionLang(),
@@ -10969,7 +10981,7 @@
             window.rebindMVPBookmarks();
         }
         stateClient = window.SqliteState.create({ui: window.__CONFIG__ || {}, zid: getSessionZid(), send: stateRequest,
-            connected: location.protocol !== 'about:' || SERVER_ENABLED || !!window.API_TOKEN,
+            connected: hasConnectedTransport(),
             draft: !!(bData && bData.mismatch_info && bData.mismatch_info.is_mismatch),
             current: preferenceCommands.current, unresolved: preferenceCommands.unresolved,
             present: window.WorkspacePresentation && window.WorkspacePresentation.project,
