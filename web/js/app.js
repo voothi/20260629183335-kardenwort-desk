@@ -7467,6 +7467,111 @@
         }
         window.applyOccurrenceView = applyOccurrenceView;
 
+        function rowHighlightGroup(tr) {
+            var ids = getRowGroupIds(tr);
+            return { ids: ids, lemmas: ids.map(function(id) { return String(getLemmaByRowId(id) || '').trim().toLowerCase(); }) };
+        }
+
+        function collectCompoundVisualIndices(span, cache) {
+            var key = span.getAttribute('data-word-idx');
+            if (!cache[key]) {
+                var siblings = findCompoundSiblingSpans(span);
+                var indices = siblings.map(function(sibling) { return String(sibling.getAttribute('data-word-idx')); });
+                siblings.forEach(function(sibling) { cache[sibling.getAttribute('data-word-idx')] = indices; });
+            }
+            return cache[key];
+        }
+
+        function rowHighlightTokenData(token) {
+            return {
+                rowIds: (token.row_ids || []).map(String),
+                lemma: String(token.lemma || token.lower_clean || '').trim().toLowerCase(),
+                partnersByRow: token.bound_visual_idxs_by_row || {}
+            };
+        }
+
+        function sourceSpanIsRendered(span) {
+            for (var element = span; element; element = element.parentElement) {
+                if (element.hidden || element.style.display === 'none') return false;
+            }
+            return true;
+        }
+
+        function collectRowHighlightOccurrences(tokensByVisual) {
+            var activeSentence = window.WorkspaceTabs ? window.WorkspaceTabs.getActiveSentenceIdx() : 0;
+            var compounds = {};
+            return Array.prototype.map.call(document.querySelectorAll('#source-container span.word'), function(span) {
+                var visual = String(span.getAttribute('data-word-idx'));
+                var token = tokensByVisual[visual] || {};
+                var sentence = span.getAttribute('data-sentence-idx') || token.source_sentence_idx;
+                var occurrence = rowHighlightTokenData(token);
+                occurrence.visual = visual;
+                occurrence.renderable = sourceSpanIsRendered(span) && (activeSentence === 0 || String(sentence) === String(activeSentence));
+                occurrence.compoundVisuals = collectCompoundVisualIndices(span, compounds);
+                return occurrence;
+            });
+        }
+
+        // Pure: preserve every group owner when constituent row IDs overlap.
+        function indexHighlightGroups(groups) {
+            var byRow = {};
+            groups.forEach(function(group, index) {
+                group.ids.forEach(function(id) {
+                    if (!byRow[id]) byRow[id] = [];
+                    byRow[id].push(index);
+                });
+            });
+            return byRow;
+        }
+
+        function boundGroupVisuals(occurrence, group, byVisual) {
+            var visuals = [occurrence.visual];
+            group.ids.forEach(function(id) {
+                visuals = visuals.concat(occurrence.partnersByRow[id] || []);
+            });
+            occurrence.compoundVisuals.forEach(function(visual) {
+                var sibling = byVisual[visual];
+                if (sibling && sibling.rowIds.some(function(id) { return group.ids.indexOf(id) !== -1; })) visuals.push(visual);
+            });
+            return visuals;
+        }
+
+        function claimHighlightGroups(occurrence, groups, byRow, byVisual, claimed, primary) {
+            if (!occurrence.renderable) return;
+            occurrence.rowIds.forEach(function(id) {
+                (byRow[id] || []).forEach(function(index) {
+                    if (claimed[index]) return;
+                    claimed[index] = true;
+                    boundGroupVisuals(occurrence, groups[index], byVisual).forEach(function(visual) { primary[visual] = true; });
+                });
+            });
+        }
+
+        // Pure: inputs are plain records in source DOM order; roles never mutate selection.
+        function resolveRowHighlightRoles(occurrences, groups, sameLemmaOn) {
+            var byRow = indexHighlightGroups(groups), byVisual = {}, primary = {}, claimed = {}, lemmas = {}, roles = {};
+            groups.forEach(function(group) { group.lemmas.forEach(function(lemma) { if (lemma) lemmas[lemma] = true; }); });
+            occurrences.forEach(function(occurrence) { byVisual[occurrence.visual] = occurrence; });
+            occurrences.forEach(function(occurrence) { claimHighlightGroups(occurrence, groups, byRow, byVisual, claimed, primary); });
+            occurrences.forEach(function(occurrence) {
+                var selected = occurrence.rowIds.some(function(id) { return !!byRow[id]; }) || !!lemmas[occurrence.lemma];
+                var role = sameLemmaOn && selected ? 'peer' : 'baseline';
+                roles[occurrence.visual] = primary[occurrence.visual] ? 'primary' : role;
+            });
+            return roles;
+        }
+
+        function applyRowHighlightRole(span, role) {
+            if (!span || role === 'baseline') return;
+            if (role === 'peer') {
+                span.classList.add('lemma-peer-highlight');
+            } else if (span.classList.contains('highlight-purple')) {
+                span.classList.add('highlight-purple-active');
+            } else if (span.classList.contains('highlight-orange')) {
+                span.classList.add('highlight-orange-active');
+            }
+        }
+
         function updateBidirectionalHighlights() {
             try { applyOccurrenceView(); } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             var tokByVidx = {},  spanByVidx = {},  sentByRowId = {};
@@ -7502,6 +7607,7 @@
             var selLemmas = (window.AppState && window.AppState.selectedLemmas) ? window.AppState.selectedLemmas : {};
             var activeTargetRowIds = {};
             var primaryTargetRowIds = {};
+            var selectedHighlightGroups = [];
             for (var rId in selectedRowIdsMap) {
                 if (!selectedRowIdsMap.hasOwnProperty(rId)) continue;
                 var rowId = parseInt(String(rId), 10);
@@ -7517,6 +7623,7 @@
                 var trId = String(tr.getAttribute('data-row-id'));
                 var trSelected = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
                 if (trSelected) {
+                    selectedHighlightGroups.push(rowHighlightGroup(tr));
                     var trIdInt = parseInt(String(trId), 10);
                     var primarySentIdx = null;
                     if (!isNaN(trIdInt)) {
@@ -7657,8 +7764,16 @@
                 if (window.AppState) window.AppState.activeLemmas = {};
             }
             if (window.AppState) window.AppState.activeLemmas = activeLemmas;
+            var rowHighlightRoles = null;
+            if (!hasActiveTokens && !isLegacyOverview) {
+                rowHighlightRoles = resolveRowHighlightRoles(collectRowHighlightOccurrences(tokByVidx), selectedHighlightGroups, isSameLemmaOn);
+            }
             for (var i = 0; i < tokenMap.length; i++) {
                 var token = tokenMap[i];
+                if (rowHighlightRoles && token.row_ids && token.row_ids.length > 0) {
+                    if (displayActiveFocus) applyRowHighlightRole(spanByVidx[String(token.visual_idx)], rowHighlightRoles[String(token.visual_idx)] || 'baseline');
+                    continue;
+                }
                 var isOrphanSelected = (typeof selectedOrphanWordIdxsMap !== 'undefined' && selectedOrphanWordIdxsMap && selectedOrphanWordIdxsMap.hasOwnProperty(String(token.visual_idx)));
                 var tokRowIds = [];
                 if (token.atomic_row_ids && token.atomic_row_ids.length > 0) {

@@ -9618,16 +9618,17 @@ def resolve_row_inflected_form(row, col_inflected, col_inflected2=-1, col_quotat
 SPLIT_GAP_LIMIT = 60
 
 
-def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit, sentence_boundaries=None):
+def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit, sentence_boundaries=None, *, grouped=False):
     """
     Finds the set of non-overlapping minimum-span ordered tuples of source-word positions.
     inflected_words: list of lowered, cleaned inflected form words.
     source_word_cleans: list of lowered, cleaned source words.
     gap_limit: int, maximum allowed distance between consecutive positions.
     sentence_boundaries: optional list of sentence indices per word position, or list of (start, end) word index tuples.
+    grouped: return the established occurrence tuples instead of their flattened set.
     """
     if len(inflected_words) < 2:
-        return set(), False
+        return ([] if grouped else set()), False
 
     # Collect occurrence lists
     occs = []
@@ -9636,7 +9637,7 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit, s
 
     # If any of the words are not in the source text, no tuple can be formed
     if any(not lst for lst in occs):
-        return set(), False
+        return ([] if grouped else set()), False
 
     get_sent_id = None
     if sentence_boundaries is not None:
@@ -9680,7 +9681,7 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit, s
     backtrack(0, [])
 
     if not valid_tuples:
-        return set(), False
+        return ([] if grouped else set()), False
 
     if k == 2:
         # For discontinuous 2-word verb+particle constructs, disambiguate identical preposition tokens
@@ -9706,15 +9707,38 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit, s
 
     used_positions = set()
     selected_positions = set()
+    selected_occurrences = []
 
     for t in valid_tuples:
         if any(p in used_positions for p in t):
             continue
+        selected_occurrences.append(t)
         for p in t:
             used_positions.add(p)
             selected_positions.add(p)
 
-    return selected_positions, len(selected_positions) > 0
+    return (selected_occurrences if grouped else selected_positions), len(selected_positions) > 0
+
+def _bind_source_visuals(bindings, positions, row_id, visual_idxs):
+    for position in positions:
+        by_row = bindings.setdefault(position, {})
+        previous = by_row.get(str(row_id))
+        if previous is not None and previous != visual_idxs:
+            raise ValueError(f"Ambiguous source binding for row {row_id} at word {position}")
+        by_row[str(row_id)] = visual_idxs
+
+
+def project_bound_visual_indices(occurrences_by_row, source_word_visual_idxs):
+    """Translate established document word ordinals into row-scoped visual bindings."""
+    bindings = {}
+    for row_id, occurrences in occurrences_by_row.items():
+        for positions in occurrences:
+            if any(p < 0 or p >= len(source_word_visual_idxs) for p in positions):
+                raise ValueError(f"Source binding outside document for row {row_id}: {positions}")
+            visual_idxs = [source_word_visual_idxs[p] for p in positions]
+            _bind_source_visuals(bindings, positions, row_id, visual_idxs)
+    return bindings
+
 
 def parse_source_sentences(text, text_mode, config):
     smc = SentencesModeConfig.from_config(config)
@@ -11580,12 +11604,14 @@ html, body {{
 
     single_word_rows = set()
     anchored_positions = {}
+    anchored_occurrences = {}
     for row_id, row in enumerate(data_rows):
         inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
         forms = [f.strip() for f in inflected_val.split(',')] if inflected_val else []
 
         has_single_word_form = False
         row_anchored_pos = set()
+        row_anchor_occurrences = []
 
         # Check explicit multi-token indices in TokenOrder first
         if col_token_order != -1 and len(row) > col_token_order:
@@ -11595,6 +11621,7 @@ html, body {{
                     parsed_indices = {int(p.strip()) for p in t_ord_val.split('+') if p.strip().isdigit()}
                     if parsed_indices:
                         row_anchored_pos.update(parsed_indices)
+                        row_anchor_occurrences.append(tuple(sorted(parsed_indices)))
                 except Exception:
                     pass
 
@@ -11606,9 +11633,10 @@ html, body {{
                 inf_words = [w for w in inf_words if w]
 
                 if len(inf_words) >= 2 and not any(ch in form for ch in SINGLE_WORD_DELIMITERS):
-                    pos_set, ok = resolve_anchored_positions(inf_words, source_word_cleans, split_gap_limit, sentence_boundaries=source_word_sentences)
+                    occurrences, ok = resolve_anchored_positions(inf_words, source_word_cleans, split_gap_limit, sentence_boundaries=source_word_sentences, grouped=True)
                     if ok:
-                        row_anchored_pos.update(pos_set)
+                        row_anchor_occurrences.extend(occurrences)
+                        row_anchored_pos.update(p for occurrence in occurrences for p in occurrence)
                 elif len(inf_words) == 1 or any(ch in form for ch in SINGLE_WORD_DELIMITERS):
                     has_single_word_form = True
 
@@ -11616,8 +11644,11 @@ html, body {{
                 single_word_rows.add(row_id)
 
         anchored_positions[row_id] = row_anchored_pos
+        anchored_occurrences[row_id] = row_anchor_occurrences
 
     paired_rows = {row_id for row_id, pos_set in anchored_positions.items() if pos_set}
+    bound_visual_indices = project_bound_visual_indices(
+        anchored_occurrences, [t['visual_idx'] for t in source_tokens if t.get('is_word') and 'lower_clean' in t])
 
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
     row_to_c_idx = {}
@@ -12028,11 +12059,13 @@ html, body {{
         tok_data = {
             "text": token["text"],
             "is_word": token["is_word"],
-            "visual_idx": token["visual_idx"]
+            "visual_idx": token["visual_idx"],
+            "source_sentence_idx": token.get("sentence_idx", 1),
         }
         if token["is_word"] and "lower_clean" in token:
             lower_clean = token["lower_clean"]
             tok_data["lower_clean"] = lower_clean
+            tok_data["bound_visual_idxs_by_row"] = bound_visual_indices.get(word_counter, {})
             mapped_rows = token.get("filtered_mapped_rows", token_to_rows.get(lower_clean, []))
             if not mapped_rows:
                 stem = re.sub(r"(?:n[" + "".join(re.escape(c) for c in apo_set) + r"]t|[" + "".join(re.escape(c) for c in apo_set) + r"](?:s|ve|ll|d|re|m)?)$", "", lower_clean, flags=re.IGNORECASE)

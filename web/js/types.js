@@ -13,6 +13,8 @@
  * @property {string|number} [row_id] - Associated vocabulary table row ID
  * @property {number} [token_order] - Strict sequential token ordering
  * @property {number} [sentence_idx] - Associated sentence card sequence index
+ * @property {number} [source_sentence_idx] - Source sentence independent of vocabulary-row identity
+ * @property {Object<string, Array<number>>} [bound_visual_idxs_by_row] - Transient exact source anchor tuple, keyed by row ID; document visual indices, not stored token coordinates
  * @property {boolean} [is_word] - Flag indicating word vs punctuation/whitespace
  * @property {string} [lower_clean] - Lowercased sanitized token string
  * @property {Array<string|number>} [atomic_row_ids] - Linked row IDs for compound tokens
