@@ -218,10 +218,22 @@ def test_run_lookup_flow_sentence_strategy_reuse(tmp_path, monkeypatch):
         return {0: "External Translation Call"}
     monkeypatch.setattr(desk, "translate_source_text", failing_translate)
 
-    # Mock prepare_lookup_tsv to create rows
+    # Mock prepare_lookup_tsv to create SQLite session and rows
     def mock_prepare_lookup_tsv(*args, **kwargs):
         tsv_path = tmp_path / "20260822100004-hello-world.en.tsv"
         tsv_path.write_text("# Comment\nSentenceSourceIndex\tSentenceSource\tSentenceDestination\n1\tHello world.\t\n", encoding="utf-8")
+        db.save_session_bundle(
+            {
+                "zid": "20260822100004",
+                "slug": "hello-world",
+                "source_language": "en",
+                "target_language": "ru",
+                "text_mode": "single",
+                "source_raw_text": "Hello world.",
+            },
+            [{"session_zid": "20260822100004", "sentence_index": 1, "sentence_source": "Hello world.", "sentence_destination": ""}],
+            [],
+        )
         return tsv_path
     monkeypatch.setattr(desk, "prepare_lookup_tsv", mock_prepare_lookup_tsv)
 
@@ -296,6 +308,18 @@ def test_run_lookup_flow_no_checksum_bypass(tmp_path, monkeypatch):
     def mock_prepare_lookup_tsv(*args, **kwargs):
         tsv_path = tmp_path / "20260822100006-bypass.en.tsv"
         tsv_path.write_text("# Comment\nSentenceSourceIndex\tSentenceSource\tSentenceDestination\n1\tBypass sentence.\t\n", encoding="utf-8")
+        db.save_session_bundle(
+            {
+                "zid": "20260822100006",
+                "slug": "bypass",
+                "source_language": "en",
+                "target_language": "ru",
+                "text_mode": "single",
+                "source_raw_text": "Bypass sentence.",
+            },
+            [{"session_zid": "20260822100006", "sentence_index": 1, "sentence_source": "Bypass sentence.", "sentence_destination": ""}],
+            [],
+        )
         return tsv_path
     monkeypatch.setattr(desk, "prepare_lookup_tsv", mock_prepare_lookup_tsv)
 

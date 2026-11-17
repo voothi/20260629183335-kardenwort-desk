@@ -1407,15 +1407,16 @@ class EnrichmentQueue:
                 occ_provs = reword_query_provenances(storage_adapter, session_zid)
                 row_occurrences = reword_query_occurrences(storage_adapter, session_zid)
                 sent_field = snap_roles.get("sentence_index", "SentenceSourceIndex")
-                for index, key in enumerate(reword.row_keys(snap_rows, snap_headers, sent_field)):
-                    prov = occ_provs.get(tuple(map(str, key)), "")
-                    if prov:
-                        fin_row_provs[index] = prov
-                        fin_row_provs[str(index)] = prov
-                        t_ord = str(key[1])
-                        fin_row_provs[t_ord] = prov
-                        if t_ord.isdigit():
-                            fin_row_provs[int(t_ord)] = prov
+                if is_sqlite:
+                    for index, key in enumerate(reword.row_keys(snap_rows, snap_headers, sent_field, min_sentence=0)):
+                        prov = occ_provs.get(tuple(map(str, key)), "")
+                        if prov:
+                            fin_row_provs[index] = prov
+                            fin_row_provs[str(index)] = prov
+                            t_ord = str(key[1])
+                            fin_row_provs[t_ord] = prov
+                            if t_ord.isdigit():
+                                fin_row_provs[int(t_ord)] = prov
                 db_sents = restored.get("sentences") or []
                 if db_sents:
                     snap_sents = [
@@ -1631,7 +1632,7 @@ class EnrichmentQueue:
             col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
             col_sentence_idx = headers.index(role_fields['sentence_index']) if 'sentence_index' in role_fields and role_fields['sentence_index'] in headers else (headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1)
             col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-            occurrence_keys = reword.row_keys(data_rows, headers, role_fields.get('sentence_index', 'SentenceSourceIndex')) if is_sqlite else None
+            occurrence_keys = reword.row_keys(data_rows, headers, role_fields.get('sentence_index', 'SentenceSourceIndex'), min_sentence=0) if is_sqlite else None
 
             # Emit initial source stage if not already emitted
             sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)

@@ -1104,25 +1104,21 @@ def test_cross_process_busy_timeout_release_and_expiry(tmp_path):
     import sqlite3
     import subprocess
     import sys
-    import time
 
     db_path = tmp_path / "cross_proc_lock.db"
     migrations_dir = Path(__file__).resolve().parents[1] / "schemas" / "migrations"
     holder_script = tmp_path / "lock_holder.py"
     holder_script.write_text(
-        "import sqlite3, sys, time\n"
-        "from pathlib import Path\n"
-        "db_path, ready_path, stop_path, zid = sys.argv[1:5]\n"
+        "import sqlite3, sys, threading\n"
+        "db_path, mode, zid = sys.argv[1:4]\n"
         "conn = sqlite3.connect(db_path, isolation_level=None, timeout=5.0)\n"
         "conn.execute('BEGIN IMMEDIATE')\n"
         "conn.execute(\"INSERT INTO sessions (zid, slug, source_language, target_language, text_mode, source_raw_text) VALUES (?, 'lock', 'de', 'ru', 'single', 'Wort.')\", (zid,))\n"
-        "Path(ready_path).write_text('locked', encoding='utf-8')\n"
-        "deadline = time.monotonic() + 10.0\n"
-        "if stop_path.startswith('sleep:'):\n"
-        "    time.sleep(float(stop_path.split(':', 1)[1]))\n"
+        "print('locked', flush=True)\n"
+        "if mode.startswith('hold:'):\n"
+        "    threading.Event().wait(float(mode.split(':', 1)[1]))\n"
         "else:\n"
-        "    while not Path(stop_path).exists() and time.monotonic() < deadline:\n"
-        "        time.sleep(0.02)\n"
+        "    sys.stdin.read(1)\n"
         "conn.commit()\n"
         "conn.close()\n",
         encoding="utf-8",
@@ -1134,19 +1130,14 @@ def test_cross_process_busy_timeout_release_and_expiry(tmp_path):
         assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 2500
 
     # Schedule A: child releases lock (~0.2s) before parent's 2500ms busy_timeout_ms expires
-    ready1 = tmp_path / "ready1.flag"
     proc1 = subprocess.Popen(
-        [sys.executable, str(holder_script), str(db_path), str(ready1), "sleep:0.2", "20261116210001"],
+        [sys.executable, str(holder_script), str(db_path), "hold:0.2", "20261116210001"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
     try:
-        for _ in range(100):
-            if ready1.exists():
-                break
-            time.sleep(0.02)
-        assert ready1.exists(), proc1.communicate(timeout=2)
+        assert proc1.stdout.readline().strip() == "locked"
         with db_wait.get_connection() as conn:
             conn.execute(
                 "INSERT INTO sessions (zid, slug, source_language, target_language, text_mode, source_raw_text) "
@@ -1158,25 +1149,21 @@ def test_cross_process_busy_timeout_release_and_expiry(tmp_path):
 
     # Schedule B: child holds lock past short non-default busy_timeout_ms=200
     db_short = KardenwortDB(db_path=db_path, migrations_dir=migrations_dir, busy_timeout_ms=200)
-    ready2 = tmp_path / "ready2.flag"
-    stop2 = tmp_path / "stop2.flag"
     proc2 = subprocess.Popen(
-        [sys.executable, str(holder_script), str(db_path), str(ready2), str(stop2), "20261116210003"],
+        [sys.executable, str(holder_script), str(db_path), "stdin", "20261116210003"],
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
     try:
-        for _ in range(100):
-            if ready2.exists():
-                break
-            time.sleep(0.02)
-        assert ready2.exists(), proc2.communicate(timeout=2)
+        assert proc2.stdout.readline().strip() == "locked"
         with pytest.raises(sqlite3.OperationalError, match="locked"):
             with db_short.get_connection():
                 pass
     finally:
-        stop2.write_text("release", encoding="utf-8")
+        if proc2.stdin:
+            proc2.stdin.close()
         proc2.wait(timeout=5)
     assert proc2.returncode == 0
 
@@ -1187,7 +1174,6 @@ def test_pragma_ordering_before_wal_and_cold_wal_contention(tmp_path):
     import sqlite3
     import subprocess
     import sys
-    import time
 
     db_path = tmp_path / "cold_wal_order.db"
     migrations_dir = Path(__file__).resolve().parents[1] / "schemas" / "migrations"
@@ -1229,31 +1215,28 @@ def test_pragma_ordering_before_wal_and_cold_wal_contention(tmp_path):
 
     holder = tmp_path / "wal_holder.py"
     holder.write_text(
-        "import sqlite3, sys, time\n"
-        "from pathlib import Path\n"
-        "db_path, ready_path, stop_path = sys.argv[1:4]\n"
+        "import sqlite3, sys, threading\n"
+        "db_path, mode = sys.argv[1:3]\n"
         "c = sqlite3.connect(db_path, isolation_level=None, timeout=5.0)\n"
         "c.execute('BEGIN EXCLUSIVE')\n"
-        "Path(ready_path).write_text('held', encoding='utf-8')\n"
-        "deadline = time.monotonic() + 10.0\n"
-        "if stop_path.startswith('sleep:'):\n"
-        "    time.sleep(float(stop_path.split(':', 1)[1]))\n"
+        "print('held', flush=True)\n"
+        "if mode.startswith('hold:'):\n"
+        "    threading.Event().wait(float(mode.split(':', 1)[1]))\n"
         "else:\n"
-        "    while not Path(stop_path).exists() and time.monotonic() < deadline:\n"
-        "        time.sleep(0.02)\n"
+        "    sys.stdin.read(1)\n"
         "c.commit()\n"
         "c.close()\n",
         encoding="utf-8",
     )
 
-    ready1 = tmp_path / "wal_ready1.flag"
-    p1 = subprocess.Popen([sys.executable, str(holder), str(wal_db_path), str(ready1), "sleep:0.15"])
+    p1 = subprocess.Popen(
+        [sys.executable, str(holder), str(wal_db_path), "hold:0.15"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     try:
-        for _ in range(100):
-            if ready1.exists():
-                break
-            time.sleep(0.02)
-        assert ready1.exists()
+        assert p1.stdout.readline().strip() == "held"
         cold_ok = KardenwortDB(db_path=wal_db_path, migrations_dir=migrations_dir, busy_timeout_ms=2500)
         with cold_ok.get_connection() as c:
             assert c.execute("PRAGMA journal_mode;").fetchone()[0].lower() == "wal"
@@ -1267,21 +1250,22 @@ def test_pragma_ordering_before_wal_and_cold_wal_contention(tmp_path):
     sc2.commit()
     sc2.close()
 
-    ready2 = tmp_path / "wal_ready2.flag"
-    stop2 = tmp_path / "wal_stop2.flag"
-    p2 = subprocess.Popen([sys.executable, str(holder), str(wal_expire_path), str(ready2), str(stop2)])
+    p2 = subprocess.Popen(
+        [sys.executable, str(holder), str(wal_expire_path), "stdin"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     try:
-        for _ in range(100):
-            if ready2.exists():
-                break
-            time.sleep(0.02)
-        assert ready2.exists()
+        assert p2.stdout.readline().strip() == "held"
         cold_fail = KardenwortDB(db_path=wal_expire_path, migrations_dir=migrations_dir, busy_timeout_ms=150)
         with pytest.raises(sqlite3.OperationalError, match="locked"):
             cold_fail.get_connection()
         assert cold_fail._wal_initialized is False
     finally:
-        stop2.write_text("done", encoding="utf-8")
+        if p2.stdin:
+            p2.stdin.close()
         p2.wait(timeout=5)
 
 

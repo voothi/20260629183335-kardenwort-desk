@@ -161,7 +161,7 @@ def test_selected_filter_persistence_request(page, tmp_path):
     config_fetches = [f for f in fetches if f.get("url") == "/api/v1/config"]
     assert len(config_fetches) == 1
     assert config_fetches[0]["url"] == "/api/v1/config"
-    assert config_fetches[0]["body"]["section"] == "rendering"
+    assert "section" not in config_fetches[0]["body"]
     assert config_fetches[0]["body"]["key"] == "filter_selected_only"
     assert config_fetches[0]["body"]["value"] == "true"
     assert page.evaluate("() => localStorage.getItem('kw_filter_selected_only')") is None
@@ -175,7 +175,7 @@ def test_selected_filter_persistence_request(page, tmp_path):
     config_fetches = [f for f in fetches if f.get("url") == "/api/v1/config"]
     assert len(config_fetches) == 2
     assert config_fetches[1]["url"] == "/api/v1/config"
-    assert config_fetches[1]["body"]["section"] == "rendering"
+    assert "section" not in config_fetches[1]["body"]
     assert config_fetches[1]["body"]["key"] == "filter_selected_only"
     assert config_fetches[1]["body"]["value"] == "false"
     assert page.evaluate("() => localStorage.getItem('kw_filter_selected_only')") is None

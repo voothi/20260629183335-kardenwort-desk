@@ -84,9 +84,9 @@ def restored_manifest_rows(restored):
                                      for row, word in zip(rows, words)]
 
 
-def row_keys(rows, headers, sentence_field='SentenceSourceIndex'):
+def row_keys(rows, headers, sentence_field='SentenceSourceIndex', min_sentence=1):
     sent_col, token_col = manifest_columns(rows, headers, sentence_field)
-    keys = [(index_value(row[sent_col], 1), index_value(row[token_col])) for row in rows]
+    keys = [(index_value(row[sent_col], min_sentence), index_value(row[token_col])) for row in rows]
     if len(set(keys)) != len(keys):
         raise InvalidRewordTarget('Duplicate occurrence identity in manifest')
     return keys

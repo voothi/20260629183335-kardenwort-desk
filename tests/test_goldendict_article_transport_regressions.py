@@ -526,6 +526,15 @@ def test_2_5_credential_safety_and_authentication_failure_mutation(running_contr
 
     tsv_path = Path(server.resolved_paths["results_dir"]) / f"{session_zid}.de.tsv"
     desk.save_tsv_rows_safely(tsv_path, [], headers, data_rows)
+    adapter.save_session(
+        session_zid=session_zid,
+        source_language="de",
+        target_language="ru",
+        source_raw_text="Haus Baum",
+        text_mode="single",
+        headers=headers,
+        data_rows=data_rows,
+    )
 
     html = render_test_lookup(
         server_enabled=True,
@@ -582,8 +591,8 @@ def test_2_5_credential_safety_and_authentication_failure_mutation(running_contr
     # Verify persisted TSV rows and shared selection unchanged
     tsv_path = Path(server.resolved_paths["results_dir"]) / f"{session_zid}.de.tsv"
     assert tsv_path.exists()
-    _, _, cur_rows = adapter.load_tsv_rows(tsv_path)
-    dest_col = headers.index("WordDestination")
+    _, cur_headers, cur_rows = adapter.load_tsv_rows(tsv_path)
+    dest_col = cur_headers.index("WordDestination")
     assert cur_rows[0][dest_col] == "дом", (
         f"WordDestination must remain 'дом', not 'hacked'. Got: {cur_rows[0][dest_col]}"
     )

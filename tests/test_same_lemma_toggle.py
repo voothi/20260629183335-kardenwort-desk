@@ -110,11 +110,11 @@ def test_same_lemma_toggle_interaction(page, tmp_path):
     assert page.evaluate("() => window.AppState.highlightSameLemma") is True
     assert "Lemma highlighting enabled" in page.locator("#kw-toast-container").inner_text()
     
-    # Verify fetch was called to persist config
+    # Verify fetch was called to persist config without hardcoded section
     fetches = page.evaluate("() => window.__fetches")
     assert len(fetches) == 1
     assert fetches[0]["url"] == "/api/v1/config"
-    assert fetches[0]["body"]["section"] == "rendering"
+    assert "section" not in fetches[0]["body"]
     assert fetches[0]["body"]["key"] == "highlight_same_lemma"
     assert fetches[0]["body"]["value"] == "true"
     
