@@ -1,0 +1,103 @@
+--- U:\voothi.vault\kardenwort-desk\openspec\specs\same-lemma-highlight-toggle\spec.md
++++ proposed/same-lemma-highlight-toggle/spec.md
+@@ -21,7 +21,7 @@
+ - **AND** the preference is saved to configuration via `/api/v1/config`.
+ 
+ ### Requirement: Isolated Selection Highlighting when Same Lemma is OFF
+-When `Lemma` highlighting is OFF (default), selecting a token in the text panel SHALL apply active solid highlight styling strictly to the clicked token. Selecting a row in `#lemma-table` SHALL apply active solid highlight styling to the active constituent subtoken (or the first occurrence if no subtoken was active). All other tokens sharing any of the same lemmas in the document SHALL remain in their baseline styling. Highlighting a token with active solid highlight SHALL require that its mapped table row or lemma is confirmed selected in `#lemma-table` (or that the token is an orphan word without table rows).
++When `Lemma` highlighting is OFF (default), selecting a token in the text panel SHALL apply active solid highlight styling strictly to the clicked token (and any compound or separable-verb sibling bound to that single occurrence). Selecting a row in `#lemma-table` SHALL apply active solid highlight styling strictly to the primary constituent occurrence of that row (preserving any bound compound or separable-verb partner of that single primary occurrence, and respecting the active constituent subtoken if one is active, or otherwise the first occurrence in document order within the active view). All other occurrences and tokens sharing the same unified row or any of the same lemmas in the document (both within the same sentence and across sentences) SHALL remain in their baseline styling. Highlighting a token with active solid highlight SHALL require that its mapped table row or lemma is confirmed selected in `#lemma-table` (or that the token is an orphan word without table rows).
+ 
+ #### Scenario: Clicking word with Lemma OFF
+ - **GIVEN** `Lemma` highlighting is OFF
+@@ -44,23 +44,62 @@
+ 
+ #### Scenario: Selecting table row with Lemma OFF
+ - **GIVEN** `Lemma` highlighting is OFF
++- **AND** `#lemma-table` contains a row for "der" mapped to multiple occurrences within a sentence (such as "das, den, der, die" in "Er fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde.")
+ - **WHEN** the user selects the overview table row for "der"
+-- **THEN** the active subtoken (or first occurrence if none active) in the text receives `.highlight-orange-active`
+-- **AND** other occurrences remain in baseline text styling.
++- **THEN** only the primary occurrence (first occurrence "der") in `#source-container` receives `.highlight-orange-active`
++- **AND** all other occurrences ("die", "das", "den", and the second "der") remain in baseline text styling without `.highlight-orange-active` or `.lemma-peer-highlight`.
+ 
+ #### Scenario: Unselected table row suppresses text active highlight
+ - **GIVEN** a token exists in text with a corresponding row in `#lemma-table`
+ - **WHEN** the table row is not selected in `selectedRowIdsMap` or `AppState.selectedLemmas`
+ - **THEN** the token does not receive `.highlight-orange-active` or `.highlight-purple-active`.
+ 
++#### Scenario: Multiple occurrences share one unified row ID
++- **GIVEN** modern row-scoped selection with Lemma OFF and several tokens mapped to the same single row ID
++- **WHEN** the user selects that row
++- **THEN** only its first renderable occurrence in document order within the active view receives solid active styling
++- **AND** all remaining occurrences stay baseline even though they share that row ID.
++
++#### Scenario: Later sentence tab owns its primary occurrence
++- **GIVEN** a consolidated row spans multiple sentences and an earlier sentence is hidden
++- **WHEN** the user selects that row in a later sentence tab
++- **THEN** the first renderable mapped occurrence in that sentence is primary, even if the canonical row ID belongs to the earlier sentence
++- **AND** the hidden earlier occurrence does not consume the primary claim
++- **WHEN** the user returns to Overview without exact token focus
++- **THEN** primary ownership is recomputed in Overview document order.
++
++#### Scenario: Multiple selected row groups remain independent
++- **GIVEN** modern row-scoped selection with Lemma OFF and multiple selected row groups, including POS-separated rows sharing a lemma
++- **WHEN** highlighting is projected
++- **THEN** each selected group receives its own primary occurrence and exact bound partners
++- **AND** shared lemma text alone does not merge the groups or change selection/export membership.
++
++#### Scenario: SQLite reload preserves selection without resurrecting focus
++- **GIVEN** row selection has cleared exact token focus and saves have committed through real HTTP to SQLite
++- **WHEN** the user reloads and committed state finishes hydrating
++- **THEN** committed selection and Lemma preference are restored according to their existing contracts
++- **AND** prior exact-token or transient table focus is not resurrected solely from saved row membership
++- **WHEN** the user freshly deselects and selects the row
++- **THEN** the primary occurrence is resolved within the active view using the restored Lemma preference.
++
+ ### Requirement: Muted Peer Highlighting when Same Lemma is ON
+-When `Lemma` highlighting is ON, selecting a token in the text panel SHALL apply primary active highlight styling (`.highlight-orange-active` or `.highlight-purple-active`) to the clicked token (and any compound sibling bound to the same compound occurrence), and secondary muted highlight styling (`.lemma-peer-highlight`) to all other occurrences and tokens in the document that share any of its constituent lemmas. Secondary muted peer highlights (`.lemma-peer-highlight`) SHALL persist across user cursor movements and mouseout events over other text words, and SHALL NOT be cleared on mouseout. When selecting an individual constituent subtoken of a compound, the system SHALL restrict active lemma activation strictly to the clicked subtoken's atomic lemma and SHALL NOT activate parent compound lemmas, preventing unrelated subtoken components (such as single-letter prefixes) from receiving peer highlighting. Selecting a row in `#lemma-table` SHALL apply primary active highlight styling to all constituent occurrences of that lemma in the active sentence chunk. Clicking an already-highlighted constituent token in the text SHALL immediately deselect the lemma and clear all active and peer highlights without requiring multiple clicks.
++When `Lemma` highlighting is ON, selecting a token in the text panel SHALL apply primary active highlight styling (`.highlight-orange-active` or `.highlight-purple-active`) to the clicked token (and any compound or separable sibling bound to the same compound occurrence), and secondary muted highlight styling (`.lemma-peer-highlight`, retaining muted amber background `rgba(210, 153, 34, 0.25)` and `1px dashed` outline) to all other occurrences and tokens in the document that share any of its constituent lemmas. Secondary muted peer highlights (`.lemma-peer-highlight`) SHALL persist across user cursor movements and mouseout events over other text words, and SHALL NOT be cleared on mouseout. When selecting an individual constituent subtoken of a compound, the system SHALL restrict active lemma activation strictly to the clicked subtoken's atomic lemma and SHALL NOT activate parent compound lemmas, preventing unrelated subtoken components (such as single-letter prefixes) from receiving peer highlighting. Selecting a row in `#lemma-table` SHALL apply primary active highlight styling (`.highlight-orange-active` or `.highlight-purple-active`) strictly to the primary occurrence of that row (and any bound partner of that primary occurrence), and SHALL apply `.lemma-peer-highlight` to all non-primary occurrences of that row or lemma across both intra-sentence and multi-sentence texts. Toggling `#kw-btn-same-lemma` while a table row is selected SHALL dynamically add or remove `.lemma-peer-highlight` on those non-primary occurrences in real time without changing the primary occurrence's active highlight. Clicking an already-highlighted constituent token in the text SHALL immediately deselect the lemma and clear all active and peer highlights without requiring multiple clicks.
+ 
+ #### Scenario: Clicking word with Lemma ON
+ - **GIVEN** `Lemma` highlighting is ON
+ - **WHEN** the user clicks the token "den" in a sentence containing "den ... das ... die"
+ - **THEN** "den" receives the primary active highlight class `.highlight-orange-active`
+ - **AND** peer tokens "das" and "die" receive the muted highlight class `.lemma-peer-highlight`.
++
++#### Scenario: Selecting consolidated table row with Lemma ON and toggling state
++- **GIVEN** `#lemma-table` contains a row for "der" mapped to "der", "die", "das", "den", and a second "der" in `#source-container`
++- **AND** `Lemma` highlighting is OFF
++- **WHEN** the user selects the table row for "der" and then clicks `#kw-btn-same-lemma` to enable `Lemma` highlighting
++- **THEN** the primary occurrence (first "der") retains `.highlight-orange-active`
++- **AND** all remaining occurrences ("die", "das", "den", second "der") dynamically receive `.lemma-peer-highlight`
++- **WHEN** the user clicks `#kw-btn-same-lemma` again to disable `Lemma` highlighting
++- **THEN** the primary occurrence retains `.highlight-orange-active`
++- **AND** all remaining occurrences immediately lose `.lemma-peer-highlight`.
+ 
+ #### Scenario: Cursor movement preserves peer highlights with Lemma ON
+ - **GIVEN** `Lemma` highlighting is ON and tokens "das" and "die" are displaying `.lemma-peer-highlight`
+@@ -85,6 +124,25 @@
+ - **WHEN** the user clicks a verb token of the first occurrence
+ - **THEN** only the clicked token and its bound compound sibling in the first occurrence receive primary active highlighting (`.highlight-orange-active`)
+ - **AND** the verb and particle tokens of the second occurrence receive secondary muted highlighting (`.lemma-peer-highlight`).
++
++#### Scenario: Table selection separates repeated verb occurrences within one sentence
++- **GIVEN** a modern view containing two separable-verb occurrences in one sentence mapped to the same selected row group
++- **WHEN** the user selects the table row with Lemma OFF
++- **THEN** only the first occurrence and its exactly bound partner receive solid active styling
++- **AND** the second verb and its particle remain baseline
++- **WHEN** Lemma is enabled
++- **THEN** both tokens of the second occurrence receive `.lemma-peer-highlight` and neither active highlight class
++- **AND** the primary occurrence remains solid, including when its particle precedes its verb in document order
++- **WHEN** Lemma is disabled again
++- **THEN** the second occurrence returns to baseline without changing primary ownership.
++
++#### Scenario: Primary ownership does not alter selection controls or layout
++- **GIVEN** selected table rows and their primary/peer projection in a supported theme
++- **WHEN** the user toggles Lemma OFF/ON/OFF or moves the pointer between words
++- **THEN** row membership, export targets, source-token bounding boxes, line wrapping, and toolbar geometry remain unchanged
++- **AND** a single click on a selected peer deselects according to the existing token-click contract
++- **AND** keyboard Space retains its existing selection and exact-token focus semantics
++- **AND** legacy Overview retains its existing highlighting behavior.
+ 
+ #### Scenario: Clicking subtoken of compound with Lemma ON isolates peer highlighting to subtoken lemma
+ - **GIVEN** `Lemma` highlighting is ON
