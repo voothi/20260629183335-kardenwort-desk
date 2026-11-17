@@ -7495,6 +7495,9 @@
             var isLegacyOverview = isLegacyOverviewContext();
             var hasActiveTokens = !isLegacyOverview && (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
             var isSameLemmaOn = !!(window.AppState && window.AppState.highlightSameLemma);
+            var displayActiveFocus = !(window.__CONFIG__ && window.__CONFIG__.state_authority === 'sqlite') ||
+                hasActiveTokens || lastClickedRowId !== null || focusedRowId !== null;
+
 
             var selLemmas = (window.AppState && window.AppState.selectedLemmas) ? window.AppState.selectedLemmas : {};
             var activeTargetRowIds = {};
@@ -7838,7 +7841,7 @@
                     }
                 }
 
-                if (hasMatchingRow) {
+                if (hasMatchingRow && displayActiveFocus) {
                     var span = spanByVidx[String(token.visual_idx)] || null;
                     if (span) {
                         try {

@@ -10090,23 +10090,23 @@ def format_provider_skeleton_label(provider_name: str) -> str:
 
 
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level=None, theme=None, tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None):
-    if resolved_paths.get('storage_backend') == 'sqlite':
-        from kardenwort_state_runtime import refresh_preferences
-        refresh_preferences(config, resolved_paths)
-    zoom_level = zoom_level or config.get('rendering', 'default_zoom', fallback='100')
-    theme = theme or config.get('ui', 'theme', fallback='dark')
-    with _ACTIVE_ZIDS_LOCK:
-        if zid in _ACTIVE_ZIDS:
-            logger.warning(f"[{zid}] Concurrent render skipped — already active. Rapid duplicate hotkey fire detected.")
-            if return_children:
-                return "", []
-            return ""
-        _ACTIVE_ZIDS.add(zid)
-    try:
-        return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num, trace_id=trace_id, spawn_children=spawn_children, return_children=return_children, mismatch_info=mismatch_info)
-    finally:
+    from kardenwort_state_runtime import preference_operation
+    with preference_operation(config, resolved_paths,
+                              refresh=resolved_paths.get('storage_backend') == 'sqlite') as config:
+        zoom_level = zoom_level or config.get('rendering', 'default_zoom', fallback='100')
+        theme = theme or config.get('ui', 'theme', fallback='dark')
         with _ACTIVE_ZIDS_LOCK:
-            _ACTIVE_ZIDS.discard(zid)
+            if zid in _ACTIVE_ZIDS:
+                logger.warning(f"[{zid}] Concurrent render skipped — already active. Rapid duplicate hotkey fire detected.")
+                if return_children:
+                    return "", []
+                return ""
+            _ACTIVE_ZIDS.add(zid)
+        try:
+            return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num, trace_id=trace_id, spawn_children=spawn_children, return_children=return_children, mismatch_info=mismatch_info)
+        finally:
+            with _ACTIVE_ZIDS_LOCK:
+                _ACTIVE_ZIDS.discard(zid)
 
 def tag_server_compound_tokens(source_tokens: List[Dict[str, Any]]) -> None:
     """

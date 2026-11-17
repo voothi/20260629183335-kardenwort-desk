@@ -865,6 +865,7 @@ class KardenwortDB:
         started_at: Optional[Union[str, datetime]] = None,
         finished_at: Optional[Union[str, datetime]] = None,
         zid: Optional[str] = None,
+        connection=None,
     ) -> bool:
         """
         Updates worker lifecycle status and timestamps on a session record.
@@ -887,7 +888,7 @@ class KardenwortDB:
         values.append(target_zid)
 
         sql = f"UPDATE sessions SET {', '.join(set_clauses)} WHERE zid = ?;"
-        with self.get_connection(zid=zid or target_zid) as conn:
+        with (nullcontext(connection) if connection is not None else self.get_connection(zid=zid or target_zid)) as conn:
             cursor = conn.cursor()
             cursor.execute(sql, values)
             return cursor.rowcount > 0
@@ -2768,13 +2769,13 @@ class KardenwortDB:
         return session_zid
 
     def get_session_bundle(
-        self, session_zid: str, parse_json: bool = True, zid: Optional[str] = None
+        self, session_zid: str, parse_json: bool = True, zid: Optional[str] = None, connection=None
     ) -> Optional[Dict[str, Any]]:
         """
         Retrieves the complete bundle for a session: session record, sentences, and words
         within a single atomic read connection/transaction.
         """
-        with self.get_connection(read_only=True, zid=zid) as conn:
+        with (nullcontext(connection) if connection is not None else self.get_connection(read_only=True, zid=zid)) as conn:
             cursor = conn.cursor()
 
             # 1. Fetch session record (includes source_raw_text used by restore_session)

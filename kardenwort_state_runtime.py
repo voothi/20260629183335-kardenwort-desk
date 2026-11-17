@@ -1,11 +1,16 @@
 """Committed preference projections; configuration files remain static inputs."""
 import threading
+import copy
+import configparser
+from contextlib import contextmanager
+from contextvars import ContextVar
+from functools import wraps
 import sqlite3
 from pathlib import Path
 
 from kardenwort_db import KardenwortDB
-from kardenwort_sqlite_preferences import PreferencesAdapter
-from kardenwort_preference_contract import PREFERENCES
+from kardenwort_sqlite_preferences import PreferencesAdapter, read_snapshot
+from kardenwort_preference_contract import PREFERENCES, configured_preferences
 
 
 STATE_LOCK = threading.RLock()
@@ -112,3 +117,125 @@ def project_preferences(config, snapshot):
 def refresh_preferences(config, paths):
     snapshot = preference_store(config, paths).snapshot()
     return project_preferences(config, snapshot)
+
+
+_OPERATION_CONFIGS = ContextVar('committed_operation_configurations', default=None)
+
+
+def _configuration_source(config):
+    return getattr(config, '_operation_source', config)
+
+
+def operation_configuration(config):
+    source = _configuration_source(config)
+    active = _OPERATION_CONFIGS.get() or {}
+    return active.get(id(source), config)
+
+
+class OperationConfiguration:
+    """Expose an operation's captured parser while retaining the shared static owner."""
+    def __get__(self, owner, owner_type=None):
+        if owner is None:
+            return self
+        return operation_configuration(owner._configuration)
+
+    def __set__(self, owner, config):
+        owner._configuration = config
+
+
+def _copy_operation_configuration(config):
+    result = copy.copy(config)
+    result._defaults = dict(config._defaults)
+    result._sections = {name: dict(values) for name, values in config._sections.items()}
+    result._proxies = {name: configparser.SectionProxy(result, name)
+                       for name in [config.default_section, *result._sections]}
+    _copy_operation_converters(config, result)
+    snapshot = getattr(config, '_sqlite_preferences_snapshot', None)
+    result._sqlite_preferences_snapshot = _clone_snapshot(snapshot) if snapshot is not None else None
+    result._operation_source = _configuration_source(config)
+    return result
+
+
+def _copy_operation_converters(source, target):
+    target._converters = configparser.ConverterMapping(target)
+    for name, converter in source.converters.items():
+        if converter is not None:
+            target.converters[name] = converter
+
+
+def _has_preference_owner(config, paths):
+    return (getattr(config, '_preference_store', None) is not None or
+            paths.get('storage_backend') == 'sqlite' or
+            config.get('storage', 'backend', fallback='tsv') == 'sqlite')
+
+
+def capture_operation_configuration(config, paths, refresh=True):
+    source = _configuration_source(config)
+    with STATE_LOCK:
+        captured = _copy_operation_configuration(source)
+    if refresh and _has_preference_owner(captured, paths):
+        snapshot = _read_operation_preferences(captured, paths)
+        if snapshot is not None:
+            captured._sqlite_preferences_snapshot = None
+            project_preferences(captured, snapshot)
+    return captured
+
+
+def _read_operation_preferences(config, paths):
+    store = getattr(config, '_preference_store', None)
+    if _store_matches(store, paths):
+        return store.snapshot()
+    db = KardenwortDB(config=config, resolved_paths=paths, read_only=True)
+    if not db.db_path.exists():
+        return None
+    with db.get_connection(read_only=True) as connection:
+        return _read_unimported_operation_preferences(config, connection)
+
+
+def _read_unimported_operation_preferences(config, connection):
+    table = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='preferences'").fetchone()
+    if table is None:
+        return None
+    snapshot = read_snapshot(connection)
+    existing = {row[0] for row in connection.execute('SELECT key FROM preferences')}
+    snapshot['values'].update(configured_preferences(config, PREFERENCES.keys()-existing))
+    return snapshot
+
+
+@contextmanager
+def preference_operation(config, paths, refresh=True):
+    source = _configuration_source(config)
+    active = _OPERATION_CONFIGS.get() or {}
+    if config is None or id(source) in active:
+        yield operation_configuration(config)
+        return
+    captured = capture_operation_configuration(config, paths, refresh)
+    # Integer owner identities keep nested entry points on the same captured parser.
+    bound = dict(active)
+    bound[id(source)] = captured
+    token = _OPERATION_CONFIGS.set(bound)
+    try:
+        yield captured
+    finally:
+        _OPERATION_CONFIGS.reset(token)
+
+
+def operation_preferences(command):
+    @wraps(command)
+    def captured(owner, *args, **kwargs):
+        with preference_operation(owner.config, owner.resolved_paths):
+            return command(owner, *args, **kwargs)
+    return captured
+
+
+def request_preferences(uses_preferences):
+    def decorate_request(command):
+        @wraps(command)
+        def captured_request(handler, *args, **kwargs):
+            path = handler.path.split('?', 1)[0]
+            if not uses_preferences(path):
+                return command(handler, *args, **kwargs)
+            with preference_operation(handler.server.config, handler.server.resolved_paths):
+                return command(handler, *args, **kwargs)
+        return captured_request
+    return decorate_request
