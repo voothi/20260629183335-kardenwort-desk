@@ -5,7 +5,51 @@ import configparser
 import kardenwort_desk
 from tests.test_preference_commands import preference_world  # noqa: F401
 from tests.sqlite_document_support import serve_document, wait_state
-from tests.render_test_support import seed_render_tsv
+from tests.render_test_support import seed_render_rows, seed_render_tsv
+
+
+def _row_highlight_document(tmp_path, text, rows, theme='dark'):
+    """Render explicit owned SQLite rows, without introducing browser state owners."""
+    config, paths, _, _ = kardenwort_desk.load_config()
+    config.read_dict({
+        'sentences_mode': {'enabled': 'true', 'delivery_mode': 'container'},
+        'settings': {'unify_article_pronoun_lemmas': 'false', 'deduplicate_pos_aware': 'true'},
+    })
+    from kardenwort_state_runtime import preference_store
+    preference_store(config, paths).set('highlight_same_lemma', False)
+    headers = ['Quotation', 'WordSource', 'WordSourcePOS', 'WordDestination',
+               'SentenceSourceIndex', 'SentenceSource', 'SentenceDestination', 'DeskSelected']
+    sentences = text.split('\n')
+    data = [[quotation, lemma, pos, 'meaning', str(sentence), sentences[sentence-1], 'Translation.', '0']
+            for quotation, lemma, pos, sentence in rows]
+    zid = '20261117225056'
+    seed_render_rows(config, paths, zid, text, 'de', headers, data, text_mode='multi')
+    html = kardenwort_desk.run_render_flow(
+        text=text, language='de', zid=zid, text_mode='multi', config=config,
+        resolved_paths=paths, theme=theme, tsv_path=zid, spawn_children=False,
+        seq_num=1, wordfill_cfg={'enabled': False})
+    return html, {'headers': headers, 'data_rows': data}
+
+
+def _source_words(page, words):
+    return page.locator(', '.join('#source-container span.word[data-lower-clean='+json.dumps(word, ensure_ascii=False)+']' for word in words))
+
+
+def _assert_source_roles(page, words, roles, primary='highlight-orange-active'):
+    classes = _source_words(page, words).evaluate_all("""els => els.map(el =>
+        ['highlight-orange-active', 'highlight-purple-active', 'lemma-peer-highlight'].filter(c => el.classList.contains(c)))""")
+    expected = {'primary': [primary], 'peer': ['lemma-peer-highlight'], 'baseline': []}
+    assert classes == [expected[role] for role in roles]
+
+
+def _open_row_highlight_document(page, html):
+    page.set_content(inject_mock_fetch(html))
+    page.wait_for_selector('#lemma-table tbody tr[data-row-id]')
+
+
+def _switch_highlight_sentence(page, sentence):
+    page.evaluate('sentence => WorkspaceTabs.switchToTab(WorkspaceTabs.getCards().find(c => c.sentence_idx === sentence).seq_num)', sentence)
+    assert page.evaluate('WorkspaceTabs.getActiveSentenceIdx()') == sentence
 
 def get_desk_page_html(tmp_path, theme="dark", zid="20261002101427", text_mode="multi", highlight_same_lemma=False):
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
@@ -1037,8 +1081,8 @@ def test_table_row_click_clears_storage_and_prevents_reload_resurrection(page, t
     assert "highlight-orange-active" not in (second_der_reloaded.get_attribute("class") or "")
 
 
-def test_table_row_click_highlights_all_der_occurrences(page, tmp_path):
-    """Verifies that selecting 'der' in the lemma table highlights all 'der' occurrences in active orange (20261004001104)."""
+def test_table_row_click_highlights_one_der_primary_and_toggleable_peers(page, tmp_path):
+    """A consolidated row owns one occurrence; Lemma controls every remaining peer."""
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
     if not config.has_section("rendering"):
         config.add_section("rendering")
@@ -1092,16 +1136,26 @@ def test_table_row_click_highlights_all_der_occurrences(page, tmp_path):
     # 1. Click table row for 'der'
     table_row.click()
 
-    # 2. Both 'der' tokens AND all inflected row constituents (die, das, den) must be highlighted in active yellow (highlight-orange-active)
+    # Complete row membership is retained while only the first occurrence is primary.
     die_span = page.locator('#source-container span.word:has-text("die")').first
     das_span = page.locator('#source-container span.word:has-text("das")').first
     den_span = page.locator('#source-container span.word:has-text("den")').first
 
     assert "highlight-orange-active" in (first_der.get_attribute("class") or "")
-    assert "highlight-orange-active" in (second_der.get_attribute("class") or "")
-    assert "highlight-orange-active" in (die_span.get_attribute("class") or "")
-    assert "highlight-orange-active" in (das_span.get_attribute("class") or "")
-    assert "highlight-orange-active" in (den_span.get_attribute("class") or "")
+    peers = [second_der, die_span, das_span, den_span]
+    membership = page.evaluate('getSelectedRowsArray()')
+    assert membership == [0]
+    for enabled in (False, True, False):
+        if page.evaluate('AppState.highlightSameLemma') != enabled:
+            page.locator('#kw-btn-same-lemma').click()
+        assert 'highlight-orange-active' in first_der.get_attribute('class')
+        assert 'lemma-peer-highlight' not in first_der.get_attribute('class')
+        for peer in peers:
+            classes = peer.get_attribute('class')
+            assert 'highlight-orange-active' not in classes
+            assert 'highlight-purple-active' not in classes
+            assert ('lemma-peer-highlight' in classes) is enabled
+        assert page.evaluate('getSelectedRowsArray()') == membership
 
 
 def test_frontend_pos_display_order_injected(page, tmp_path):
@@ -1572,6 +1626,255 @@ def test_compound_subtoken_row_ids_and_highlight_isolation(page, tmp_path):
     active_lemmas = page.evaluate("() => (window.AppState && window.AppState.activeLemmas) ? Object.keys(window.AppState.activeLemmas) : []")
     assert "postfach" in active_lemmas
     assert "e-mail-postfach" not in active_lemmas
+
+
+@pytest.mark.parametrize('theme', ['dark', 'light', 'white'])
+@pytest.mark.parametrize('particle_first', [False, True])
+def test_row_bound_pairs_toggle_without_reflow(page, tmp_path, theme, particle_first):
+    text = 'An fängt er heute, an fängt er morgen.' if particle_first else 'Er fängt heute an und er fängt morgen an.'
+    quotation = 'An + fängt' if particle_first else 'fängt + an'
+    html, _ = _row_highlight_document(tmp_path, text, [(quotation, 'anfangen', 'verb', 1)], theme)
+    _open_row_highlight_document(page, html)
+    page.locator('#lemma-table tbody tr').first.click()
+    geometry = """() => Array.from(document.querySelectorAll(
+        '#source-container span.word, .kw-action-toolbar, #kw-btn-same-lemma, #kw-btn-filter-selected'
+    )).map(el => {const r=el.getBoundingClientRect(); return [r.x,r.y,r.width,r.height];})"""
+    before = page.evaluate(geometry)
+    membership = page.evaluate('getSelectedRowsArray()')
+    frames = [before]
+    _assert_source_roles(page, ['fängt', 'an'], ['primary', 'primary', 'baseline', 'baseline'], 'highlight-purple-active')
+    for peer in ('peer', 'baseline'):
+        page.locator('#kw-btn-same-lemma').click()
+        _assert_source_roles(page, ['fängt', 'an'], ['primary', 'primary', peer, peer], 'highlight-purple-active')
+        frames.append(page.evaluate(geometry))
+        assert frames[-1] == before
+        assert page.evaluate('getSelectedRowsArray()') == membership
+    (tmp_path/'highlight-geometry.json').write_text(json.dumps(frames), encoding='utf-8')
+
+
+def test_row_separable_peers_across_sentences(page, tmp_path):
+    html, _ = _row_highlight_document(tmp_path,
+        'Er fängt heute an.\nEr fängt morgen an.',
+        [('fängt + an', 'anfangen', 'verb', 1), ('fängt + an', 'anfangen', 'verb', 2)])
+    _open_row_highlight_document(page, html)
+    row = page.locator('#lemma-table tbody tr').first
+    assert row.get_attribute('data-all-row-ids') == '0,1'
+    row.click()
+    assert page.evaluate('getSelectedRowsArray()') == [0, 1]
+    _assert_source_roles(page, ['fängt', 'an'], ['primary', 'primary', 'baseline', 'baseline'], 'highlight-purple-active')
+    page.locator('#kw-btn-same-lemma').click()
+    _assert_source_roles(page, ['fängt', 'an'], ['primary', 'primary', 'peer', 'peer'], 'highlight-purple-active')
+    page.locator('#kw-btn-same-lemma').click()
+    _assert_source_roles(page, ['fängt', 'an'], ['primary', 'primary', 'baseline', 'baseline'], 'highlight-purple-active')
+
+
+def test_row_compound_and_independent_groups_keep_exact_membership(page, tmp_path):
+    html, _ = _row_highlight_document(tmp_path, 'E-Mail bleibt E-Mail und Haus bleibt Haus.',
+        [('E-Mail', 'E-Mail', 'noun', 1), ('Haus', 'Haus', 'noun', 1)])
+    _open_row_highlight_document(page, html)
+    page.locator('#lemma-table tr[data-row-id="0"]').click()
+    page.locator('#lemma-table tr[data-row-id="1"]').click()
+    assert page.evaluate('getSelectedRowsArray()') == [0, 1]
+    _assert_source_roles(page, ['e', 'mail'], ['primary', 'primary', 'baseline', 'baseline'])
+    _assert_source_roles(page, ['haus'], ['primary', 'baseline'])
+    page.locator('#kw-btn-same-lemma').click()
+    _assert_source_roles(page, ['e', 'mail'], ['primary', 'primary', 'peer', 'peer'])
+    _assert_source_roles(page, ['haus'], ['primary', 'peer'])
+    page.locator('#kw-btn-same-lemma').click()
+    _assert_source_roles(page, ['e', 'mail'], ['primary', 'primary', 'baseline', 'baseline'])
+    _assert_source_roles(page, ['haus'], ['primary', 'baseline'])
+
+
+def test_row_pos_separated_same_lemma_groups_have_independent_primaries(page, tmp_path):
+    html, _ = _row_highlight_document(tmp_path, 'Dieser passt dieser, derjenige passt derjenige.',
+        [('dieser', 'der', 'art.', 1), ('derjenige', 'der', 'pron.', 1)])
+    _open_row_highlight_document(page, html)
+    rows = page.locator('#lemma-table tbody tr[data-row-id]')
+    assert rows.count() == 2
+    assert rows.nth(0).locator('.col-pos').inner_text() != rows.nth(1).locator('.col-pos').inner_text()
+    rows.nth(0).click()
+    assert page.evaluate('getSelectedRowsArray()') == [0, 1]
+    _assert_source_roles(page, ['dieser', 'derjenige'], ['primary', 'baseline', 'primary', 'baseline'])
+    page.locator('#kw-btn-same-lemma').click()
+    _assert_source_roles(page, ['dieser', 'derjenige'], ['primary', 'peer', 'primary', 'peer'])
+    page.locator('#kw-btn-same-lemma').click()
+    _assert_source_roles(page, ['dieser', 'derjenige'], ['primary', 'baseline', 'primary', 'baseline'])
+
+
+@pytest.mark.parametrize('same_lemma', [False, True])
+def test_row_merged_membership_rebinds_through_later_sentence_and_selected_filter(page, tmp_path, same_lemma):
+    _open_row_highlight_document(page, get_multi_occurrence_desk_page_html(tmp_path))
+    row = page.locator('#lemma-table tbody tr').first
+    assert row.get_attribute('data-all-row-ids') == '0,1'
+    row.click()
+    if same_lemma:
+        page.locator('#kw-btn-same-lemma').click()
+    peer = 'peer' if same_lemma else 'baseline'
+    _assert_source_roles(page, ['am', 'beim'], ['primary', peer])
+    page.locator('#kw-btn-filter-selected').click()
+    _switch_highlight_sentence(page, 2)
+    assert _source_words(page, ['am']).is_hidden()
+    assert _source_words(page, ['beim']).is_visible()
+    # Tab selection is already committed in the card; freshly reselect its row.
+    row = page.locator('#lemma-table tbody tr').first
+    assert row.get_attribute('data-selected') == '1'
+    row.click()
+    page.locator('#kw-btn-filter-selected').click()
+    row.click()
+    _assert_source_roles(page, ['am', 'beim'], [peer, 'primary'])
+    _switch_highlight_sentence(page, 0)
+    _assert_source_roles(page, ['am', 'beim'], ['primary', peer])
+    assert page.evaluate('getSelectedRowsArray()') == [0, 1]
+
+
+def test_row_primary_can_use_extra_id_when_canonical_span_is_hidden(page, tmp_path):
+    _open_row_highlight_document(page, get_multi_occurrence_desk_page_html(tmp_path))
+    page.locator('#lemma-table tbody tr').first.click()
+    _source_words(page, ['am']).evaluate("span => {span.hidden = true;}")
+    page.evaluate('updateBidirectionalHighlights()')
+    _assert_source_roles(page, ['am', 'beim'], ['baseline', 'primary'])
+    assert page.evaluate('getSelectedRowsArray()') == [0, 1]
+
+
+@pytest.mark.parametrize('same_lemma', [False, True])
+def test_row_peer_single_click_deselects_and_cleans_all_roles(page, tmp_path, same_lemma):
+    html, _ = _row_highlight_document(tmp_path, 'Haus bleibt Haus.', [('Haus', 'Haus', 'noun', 1)])
+    _open_row_highlight_document(page, html)
+    page.locator('#lemma-table tbody tr').first.click()
+    if same_lemma:
+        page.locator('#kw-btn-same-lemma').click()
+    _assert_source_roles(page, ['haus'], ['primary', 'peer' if same_lemma else 'baseline'])
+    _source_words(page, ['haus']).nth(1).click()
+    assert page.evaluate('getSelectedRowsArray()') == []
+    assert page.evaluate('AppState.activeTokenSelections') == []
+    _assert_source_roles(page, ['haus'], ['baseline', 'baseline'])
+
+
+def test_row_drag_projects_one_primary_per_group_and_cleans_deselection(page, tmp_path):
+    html, _ = _row_highlight_document(tmp_path, 'Haus Haus Baum Baum.',
+        [('Haus', 'Haus', 'noun', 1), ('Baum', 'Baum', 'noun', 1)])
+    _open_row_highlight_document(page, html)
+    def drag():
+        first = page.locator('#lemma-table tr[data-row-id="0"]').bounding_box()
+        last = page.locator('#lemma-table tr[data-row-id="1"]').bounding_box()
+        page.mouse.move(first['x']+10, first['y']+first['height']/2)
+        page.mouse.down()
+        page.mouse.move(last['x']+10, last['y']+last['height']/2, steps=4)
+        page.mouse.up()
+    drag()
+    assert page.evaluate('getSelectedRowsArray()') == [0, 1]
+    _assert_source_roles(page, ['haus', 'baum'], ['primary', 'baseline', 'primary', 'baseline'])
+    page.locator('#kw-btn-same-lemma').click()
+    _assert_source_roles(page, ['haus', 'baum'], ['primary', 'peer', 'primary', 'peer'])
+    drag()
+    assert page.evaluate('getSelectedRowsArray()') == []
+    _assert_source_roles(page, ['haus', 'baum'], ['baseline']*4)
+
+
+@pytest.mark.parametrize('token_focus', [False, True])
+def test_row_space_preserves_existing_token_focus_and_row_scopes(page, tmp_path, token_focus):
+    html, _ = _row_highlight_document(tmp_path, 'Haus Haus Baum Baum.',
+        [('Haus', 'Haus', 'noun', 1), ('Baum', 'Baum', 'noun', 1)])
+    _open_row_highlight_document(page, html)
+    if token_focus:
+        _source_words(page, ['haus']).nth(1).click()
+        focused_tokens = page.evaluate('JSON.stringify(AppState.activeTokenSelections)')
+    else:
+        focused_tokens = '[]'
+    page.keyboard.press('ArrowDown')
+    page.keyboard.press('ArrowDown')
+    assert page.locator('#lemma-table tr.focused-row').get_attribute('data-row-id') == '1'
+    page.keyboard.press('Space')
+    assert page.evaluate('JSON.stringify(AppState.activeTokenSelections)') == focused_tokens
+    assert page.evaluate('getSelectedRowsArray()') == ([0, 1] if token_focus else [1])
+    _assert_source_roles(page, ['haus'], ['baseline', 'primary'] if token_focus else ['baseline', 'baseline'])
+    # Exact-token mode deliberately retains its existing primary-ID expansion.
+    _assert_source_roles(page, ['baum'], ['primary', 'primary'] if token_focus else ['primary', 'baseline'])
+    page.keyboard.press('Space')
+    assert page.evaluate('JSON.stringify(AppState.activeTokenSelections)') == focused_tokens
+    _assert_source_roles(page, ['baum'], ['baseline', 'baseline'])
+
+
+@pytest.mark.parametrize('same_lemma', [False, True])
+def test_row_highlight_preference_and_selection_reload_through_real_sqlite(page, tmp_path, preference_world, same_lemma):
+    from kardenwort_state_runtime import preference_store
+    _, server, config_path = preference_world
+    store = preference_store(server.config, server.resolved_paths)
+    store.set('auto_save_on_close', False)
+    initial_config = config_path.read_bytes()
+    html, stored = _row_highlight_document(tmp_path, 'Haus bleibt Haus.', [('Haus', 'Haus', 'noun', 1)])
+    adapter = serve_document(page, preference_world, html, stored)
+    zid = '20261117225056'
+    page.wait_for_selector('#lemma-table tbody tr')
+    _source_words(page, ['haus']).nth(1).click()
+    page.evaluate('flushPendingSaves()')
+    page.evaluate('saveClientView()')
+    with adapter.db.get_connection(read_only=True) as connection:
+        assert json.loads(connection.execute('SELECT active_tokens FROM client_view_state WHERE session_zid=?', (zid,)).fetchone()[0])
+    # Deselect then freshly select through the row, clearing the old second-token focus.
+    row = page.locator('#lemma-table tbody tr').first
+    row.click()
+    row.click()
+    # Exercise a real preference transition and wait for its response in both cases.
+    for _ in range(1 if same_lemma else 2):
+        with page.expect_response('**/api/v1/config') as response:
+            page.locator('#kw-btn-same-lemma').click()
+        assert response.value.ok
+    assert store.get('highlight_same_lemma') is same_lemma
+    _assert_source_roles(page, ['haus'], ['primary', 'peer' if same_lemma else 'baseline'])
+    page.evaluate('flushPendingSaves()')
+    page.evaluate('saveClientView()')
+    assert [word['selected'] for word in adapter.db.get_words_by_session(zid)] == [1]
+    with adapter.db.get_connection(read_only=True) as connection:
+        assert json.loads(connection.execute('SELECT active_tokens FROM client_view_state WHERE session_zid=?', (zid,)).fetchone()[0]) == []
+    page.reload()
+    wait_state(page)
+    assert page.evaluate('AppState.highlightSameLemma') is same_lemma
+    assert page.evaluate('getSelectedRowsArray()') == [0]
+    assert page.evaluate('AppState.activeTokenSelections') == []
+    _assert_source_roles(page, ['haus'], ['baseline', 'baseline'])
+    assert page.evaluate("sessionStorage.getItem('kw_active_tokens_20261117225056')") is None
+    assert page.evaluate("localStorage.getItem('highlight_same_lemma')") is None
+    row = page.locator('#lemma-table tbody tr').first
+    row.click()
+    row.click()
+    _assert_source_roles(page, ['haus'], ['primary', 'peer' if same_lemma else 'baseline'])
+    assert config_path.read_bytes() == initial_config
+
+
+@pytest.mark.parametrize('selection_scope', ['row', 'token'])
+def test_row_lemma_toggles_preserve_complete_or_exact_export_targets(page, tmp_path, selection_scope):
+    _open_row_highlight_document(page, get_multi_occurrence_desk_page_html(tmp_path))
+    if selection_scope == 'row':
+        page.locator('#lemma-table tbody tr').first.click()
+        targets = [0, 1]
+    else:
+        _source_words(page, ['beim']).click()
+        targets = [1]
+    # Saved row membership is lemma-wide; exact token focus narrows only export targets.
+    assert page.evaluate('getSelectedRowsArray()') == [0, 1]
+    for index, enabled in enumerate((False, True, False)):
+        if enabled != page.evaluate('AppState.highlightSameLemma'):
+            page.locator('#kw-btn-same-lemma').click()
+        assert page.evaluate('getSelectedRowsArray()') == [0, 1]
+        page.locator('#kw-btn-export').click()
+        page.wait_for_function('count => window.__fetches.filter(f => f.url === "/session/export").length === count', arg=index+1)
+        payload = page.evaluate('window.__fetches.filter(f => f.url === "/session/export").slice(-1)[0].body')
+        assert payload['row_ids'] == targets
+        assert payload['selected_row_ids'] == targets
+        if selection_scope == 'row':
+            _assert_source_roles(page, ['am', 'beim'], ['primary', 'peer' if enabled else 'baseline'])
+        else:
+            _assert_source_roles(page, ['am', 'beim'], ['peer' if enabled else 'baseline', 'primary'])
+
+
+def test_row_legacy_overview_preserves_primary_id_highlighting(page, tmp_path):
+    _open_row_highlight_document(page, get_multi_occurrence_desk_page_html(tmp_path, zid='20260930101427'))
+    assert page.evaluate('isLegacyOverviewContext()') is True
+    page.locator('#lemma-table tbody tr').first.click()
+    _assert_source_roles(page, ['am', 'beim'], ['primary', 'primary'])
+    page.locator('#kw-btn-same-lemma').click()
+    _assert_source_roles(page, ['am', 'beim'], ['primary', 'primary'])
 
 
 
