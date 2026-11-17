@@ -161,16 +161,36 @@ def recovery_row_order(rows, headers, roles, memo):
     return [row for key, row in sorted(zip(keys, rows), key=lambda pair: rank.get(pair[0], len(rank)))]
 
 
-def recovery_update_rows(restored, rows, headers, roles):
-    """Project rows and occurrence facts from the same restored storage bundle."""
+def restored_occurrence_metadata(restored):
+    """Project occurrence facts without reading outside the restored transaction."""
     from kardenwort_db import sanitize_extra_fields
     words = restored.get('words', [])
     occurrences = {(str(word['sentence_index']), str(word['token_order'])):
         sanitize_extra_fields(word.get('extra_fields')).get('occurrence_data', {}) for word in words}
     provenances = {(str(word['sentence_index']), str(word['token_order'])):
         word.get('word_provenance', '') for word in words}
-    return format_update_rows_dict(rows, headers, roles, row_occurrences=occurrences,
-                                   occurrence_provenances=provenances)
+    return dict(row_occurrences=occurrences, occurrence_provenances=provenances)
+
+
+def recovery_update_rows(restored, rows, headers, roles):
+    """Project rows and occurrence facts from the same restored storage bundle."""
+    return format_update_rows_dict(rows, headers, roles, **restored_occurrence_metadata(restored))
+
+
+def progressive_delivery_failure(error, session_zid, fingerprint, committed):
+    failure = StructuredError(ErrorCode.DESK_FAILED, 'Progressive terminal update could not be delivered',
+        details=dict(committed=committed, session_zid=session_zid, fingerprint=fingerprint,
+                     recovery_url=f'/session/status?zid={session_zid}&committed=1'))
+    failure.__cause__ = error
+    return failure
+
+
+def raise_progressive_finalization_errors(status_error, delivery_error):
+    errors = [error for error in (status_error, delivery_error) if error is not None]
+    if len(errors) == 1:
+        raise errors[0]
+    if errors:
+        raise BaseExceptionGroup('Progressive finalization failed', errors)
 
 
 def _session_cache_revision(session):
@@ -1382,7 +1402,7 @@ class EnrichmentQueue:
                         "provider": "controller",
                         "details": {},
                     }
-                arbiter.emit_event(session_zid, {
+                failed_event = {
                     "type": "update",
                     "stage": "finished",
                     "status": "failed",
@@ -1391,11 +1411,16 @@ class EnrichmentQueue:
                     "rows": {},
                     "row_provenances": {},
                     "rowProvenances": {},
-                })
-                with self._lock:
-                    self._acknowledged_failures.append(dict(worker_error))
-                if status_persist_err is not None:
-                    raise status_persist_err
+                }
+                delivery_error = None
+                try:
+                    arbiter.emit_event(session_zid, failed_event)
+                except Exception as exc:
+                    delivery_error = progressive_delivery_failure(exc, session_zid, '', False)
+                else:
+                    with self._lock:
+                        self._acknowledged_failures.append(dict(worker_error))
+                raise_progressive_finalization_errors(status_persist_err, delivery_error)
                 return
 
             if restored:
@@ -1404,8 +1429,9 @@ class EnrichmentQueue:
                 snap_rows = sort_session_data_rows(
                     raw_snap_rows, snap_headers, sess_lang, self.config, self.resolved_paths, role_fields=snap_roles
                 )
-                occ_provs = reword_query_provenances(storage_adapter, session_zid)
-                row_occurrences = reword_query_occurrences(storage_adapter, session_zid)
+                metadata = restored_occurrence_metadata(restored)
+                occ_provs = metadata['occurrence_provenances']
+                row_occurrences = metadata['row_occurrences']
                 sent_field = snap_roles.get("sentence_index", "SentenceSourceIndex")
                 if is_sqlite:
                     for index, key in enumerate(reword.row_keys(snap_rows, snap_headers, sent_field, min_sentence=0)):
@@ -1447,9 +1473,6 @@ class EnrichmentQueue:
             return
 
         status_val = "failed" if worker_error else "success"
-        if worker_error is not None:
-            with self._lock:
-                self._acknowledged_failures.append(dict(worker_error))
         new_fp = compute_content_fingerprint(snap_rows) if snap_rows else ""
 
         with arbiter._lock:
@@ -1514,23 +1537,13 @@ class EnrichmentQueue:
                     occurrence_provenances=occ_provs or None,
                 )
             arbiter.emit_event(session_zid, finished_event)
+            if worker_error is not None:
+                with self._lock:
+                    self._acknowledged_failures.append(dict(worker_error))
         except Exception as exc:
-            delivery_error = StructuredError(
-                ErrorCode.DESK_FAILED,
-                "Progressive task committed; update delivery failed",
-                details={
-                    "committed": worker_error is None,
-                    "session_zid": session_zid,
-                    "fingerprint": new_fp,
-                    "recovery_url": f"/session/status?zid={session_zid}&committed=1",
-                },
-            )
-            delivery_error.__cause__ = exc
+            delivery_error = progressive_delivery_failure(exc, session_zid, new_fp, worker_error is None)
 
-        if status_persist_err is not None:
-            raise status_persist_err
-        if delivery_error is not None and worker_error is None:
-            raise delivery_error
+        raise_progressive_finalization_errors(status_persist_err, delivery_error)
 
     def _execute_progressive_task(
         self,
