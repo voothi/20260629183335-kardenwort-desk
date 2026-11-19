@@ -5,12 +5,22 @@ import wave
 
 MAX_TEXT = 2000
 MAX_BYTES = 8 * 1024 * 1024
+VALID_PLAYBACK_ENGINES = ('anki_tts_cli', 'browser_tts', 'stateless_gtts')
 
 
 class AudioError(ValueError):
     def __init__(self, message, code='SERVER_ERROR'):
         super().__init__(message)
         self.code = code
+
+
+def playback_engine(raw):
+    value = 'anki_tts_cli' if raw is None else str(raw).strip().lower()
+    if not value:
+        return 'anki_tts_cli'
+    if value not in VALID_PLAYBACK_ENGINES:
+        raise AudioError(f'Invalid audio playback_engine: {raw}', 'CONFIGURATION_ERROR')
+    return value
 
 
 def audio_request(body):

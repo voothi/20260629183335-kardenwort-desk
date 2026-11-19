@@ -128,5 +128,77 @@
         this.retry = function () { if (last) play(last.text, last.language); };
         this.getState = function () { return state; };
     }
+
+    function BrowserSpeechPlayback(options) {
+        var current = null;
+        var state = 'idle';
+        var last = null;
+
+        function emit(next, message) {
+            state = next;
+            options.onState({ state: next, message: message || '' });
+        }
+
+        function stopSpeech() {
+            if (!current) return;
+            current = null;
+            if (global.speechSynthesis && global.speechSynthesis.cancel) global.speechSynthesis.cancel();
+            emit('cancelled');
+        }
+
+        function failSpeech(owner, message) {
+            if (current !== owner) return;
+            current = null;
+            emit('failed', message);
+            options.onError(message);
+        }
+
+        function bindUtterance(owner, utterance) {
+            utterance.onstart = function () {
+                if (current === owner) emit('playing');
+            };
+            utterance.onend = function () {
+                if (current === owner) speakNext(owner);
+            };
+            utterance.onerror = function (event) {
+                var code = event && event.error;
+                if (code === 'canceled' || code === 'interrupted') return;
+                failSpeech(owner, code || 'Browser speech synthesis failed');
+            };
+        }
+
+        function speakNext(owner) {
+            if (owner.index === owner.segments.length) {
+                current = null;
+                emit('finished');
+                return;
+            }
+            emit('loading');
+            var utterance = new global.SpeechSynthesisUtterance(owner.segments[owner.index++]);
+            utterance.lang = owner.language;
+            bindUtterance(owner, utterance);
+            global.speechSynthesis.speak(utterance);
+        }
+
+        function startSpeech(text, language) {
+            stopSpeech();
+            last = { text: text, language: language };
+            var segments = text.split('|||').map(function (part) { return part.trim(); }).filter(Boolean);
+            var owner = { segments: segments, language: language, index: 0 };
+            current = owner;
+            if (!global.speechSynthesis || !global.SpeechSynthesisUtterance) {
+                failSpeech(owner, 'Browser speech synthesis is unavailable');
+                return;
+            }
+            speakNext(owner);
+        }
+
+        this.play = startSpeech;
+        this.cancel = stopSpeech;
+        this.retry = function () { if (last) startSpeech(last.text, last.language); };
+        this.getState = function () { return state; };
+    }
+
     global.DeskAudioPlayback = AudioPlayback;
+    global.DeskBrowserSpeechPlayback = BrowserSpeechPlayback;
 }(window));

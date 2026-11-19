@@ -353,6 +353,65 @@ def test_generated_document_owned_browser_synthesis_roundtrip(page, tmp_path, au
     assert page.evaluate("window.__audioStates") == ["loading", "playing", "finished"]
 
 
+def test_browser_tts_engine_bypasses_backend_and_sequences_segments(page, tmp_path):
+    config, paths = _isolated_tsv_config(tmp_path, lmb_source="lemma", rmb_source="word_translation", rmb_play=True)
+    config.set("audio", "playback_engine", "browser_tts")
+    tsv = tmp_path / "20261118183557-haus.de.tsv"
+    tsv.write_text(
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "Haus\tHaus\tHäuser\thouse\t1\tDas Haus.\tThe house.\t0\n",
+        encoding="utf-8",
+    )
+    html = kardenwort_desk.run_render_flow(
+        text="Das Haus.",
+        language="de",
+        zid="20261118183557",
+        text_mode="single",
+        config=config,
+        resolved_paths=paths,
+        theme="dark",
+        tsv_path=str(tsv),
+        wordfill_cfg={"enabled": False},
+        spawn_children=False,
+    )
+    speech_stub = """<script>
+    window.__utterances = [];
+    window.__speechCancels = 0;
+    window.__audioStates = [];
+    window.addEventListener('desk-audio-state', e => window.__audioStates.push(e.detail.state));
+    window.SpeechSynthesisUtterance = class {
+        constructor(text) { this.text = text; this.lang = ''; }
+    };
+    Object.defineProperty(window, 'speechSynthesis', {
+        configurable: true,
+        value: {
+            cancel() { window.__speechCancels++; },
+            speak(u) { window.__utterances.push(u); },
+        },
+    });
+    </script>"""
+    device_head = f"<script>({DEVICE})();\nwindow.EventSource = class {{ close() {{}} }};</script>" + speech_stub
+    errors = []
+    page.on("pageerror", lambda err: errors.append(str(err)))
+    page.set_content(html.replace("<head>", "<head>" + device_head, 1))
+    page.wait_for_selector('#lemma-table tbody tr[data-row-id="0"]')
+
+    page.locator('#lemma-table tbody tr[data-row-id="0"]').click(button="right")
+    assert _captured_requests(page) == []
+    assert page.evaluate("window.__utterances.map(u => [u.text, u.lang])") == [["house", "en"]]
+    page.evaluate("() => { window.__utterances[0].onstart(); window.__utterances[0].onend(); }")
+    assert page.evaluate("window.audioPlayback.getState()") == "finished"
+
+    page.evaluate("() => { window.playAudio('bei ||| der', 'de'); }")
+    assert page.evaluate("window.__utterances.map(u => [u.text, u.lang])") == [["house", "en"], ["bei", "de"]]
+    page.evaluate("() => { window.__utterances[1].onstart(); window.__utterances[1].onend(); }")
+    assert page.evaluate("window.__utterances.map(u => [u.text, u.lang])") == [["house", "en"], ["bei", "de"], ["der", "de"]]
+    page.evaluate("() => { window.__utterances[2].onstart(); window.__utterances[2].onend(); }")
+    assert page.evaluate("window.audioPlayback.getState()") == "finished"
+    assert _captured_requests(page) == []
+    assert errors == []
+
+
 def test_generated_document_deprecated_native_ahk_bridge_boundary(page, tmp_path):
     html = _render_haus_document(tmp_path, lmb_source="inflection", rmb_source="word_translation", rmb_play=True)
     device_head = f"<script>({DEVICE})();\nwindow.EventSource = class {{ close() {{}} }};</script>"

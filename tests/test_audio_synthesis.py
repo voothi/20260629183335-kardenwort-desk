@@ -201,6 +201,37 @@ def test_invalid_media_is_not_a_success(data):
         media_type(data)
 
 
+def test_default_anki_tts_cli_engine_uses_audio_dictionary_and_streams_mpeg(audio_server):
+    server, owner = audio_server
+    server.config.remove_option('audio', 'playback_engine')
+    dict_dir = owner / 'forvo' / 'de' / 'speaker'
+    dict_dir.mkdir(parents=True)
+    expected = (ROOT / 'tests/fixtures/silence.mp3').read_bytes()
+    (dict_dir / 'haus.mp3').write_bytes(expected)
+    (owner / 'addon' / 'config.json').write_text(json.dumps({
+        'audio_dictionary_enabled': True,
+        'audio_dictionary_path': str(owner / 'forvo'),
+        'audio_dictionary_cycle_enabled': False,
+        'persistent_cache_enabled': False,
+        'gtts_enabled': False,
+        'piper_enabled': False,
+    }))
+    with request(server, {'text': 'Haus', 'language': 'de'}) as response:
+        assert response.status == 200
+        assert response.headers['Content-Type'] == 'audio/mpeg'
+        assert response.headers['Cache-Control'] == 'no-store'
+        assert response.read() == expected
+
+
+def test_invalid_playback_engine_is_explicit_configuration_error(audio_server):
+    server, _ = audio_server
+    server.config.set('audio', 'playback_engine', 'bogus_engine')
+    with pytest.raises(urllib.error.HTTPError) as failure:
+        request(server, {'text': 'Haus', 'language': 'de'})
+    assert failure.value.code == 500
+    assert json.load(failure.value)['error_code'] == 'CONFIGURATION_ERROR'
+
+
 def test_audio_slice_dependencies_and_complexity():
     for name in ('kardenwort_audio', 'kardenwort_audio_runtime', 'kardenwort_audio_windows'):
         tree = ast.parse((ROOT/(name+'.py')).read_text())

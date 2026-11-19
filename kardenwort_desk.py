@@ -10821,6 +10821,7 @@ html, body {{
     table_range_mode_val = "none"
     rmb_play_val = "false"
     rmb_chain_mode_val = "separate"
+    playback_engine_val = "anki_tts_cli"
     if config.has_section(SEC_AUDIO):
         lmb_play_val = "true" if config.getboolean(SEC_AUDIO, 'lmb_play', fallback=False) else "false"
         lmb_source_val = config.get(SEC_AUDIO, 'lmb_source', fallback='lemma').strip().lower()
@@ -10830,6 +10831,7 @@ html, body {{
         rmb_play_val = "true" if config.getboolean(SEC_AUDIO, 'rmb_play', fallback=False) else "false"
         rmb_chain_mode_val = config.get(SEC_AUDIO, 'rmb_chain_mode', fallback='separate').strip().lower()
         rmb_source_val = config.get(SEC_AUDIO, 'rmb_source', fallback='word_translation').strip().lower()
+        playback_engine_val = config.get(SEC_AUDIO, 'playback_engine', fallback='anki_tts_cli').strip().lower() or 'anki_tts_cli'
     else:
         rmb_source_val = "word_translation"
 
@@ -12853,6 +12855,7 @@ html, body {{
     ui_cfg["audio_rmb_play"] = (rmb_play_val == "true")
     ui_cfg["audio_rmb_chain_mode"] = rmb_chain_mode_val
     ui_cfg["audio_rmb_source"] = rmb_source_val
+    ui_cfg["audio_playback_engine"] = playback_engine_val
     ui_cfg["audio_anki_tts_cli"] = anki_tts_cli_path
     ui_cfg["audio_python_exe"] = python_exe_path
     ui_cfg["has_highlight_col"] = bool(col_highlighted != -1)

@@ -10,7 +10,7 @@ import tempfile
 import threading
 import time
 
-from kardenwort_audio import AudioError, MAX_BYTES, audio_request, media_type
+from kardenwort_audio import AudioError, MAX_BYTES, audio_request, media_type, playback_engine
 
 _SLOTS = threading.BoundedSemaphore(2)
 
@@ -211,10 +211,26 @@ def release_media(owner):
             threading.Event().wait(0.005)
 
 
+def configured_playback_engine(config):
+    raw = config.get('audio', 'playback_engine', fallback='anki_tts_cli') if config else 'anki_tts_cli'
+    return playback_engine(raw)
+
+
+def synthesis_arguments(script, text, language, output, stateless):
+    arguments = [script]
+    if output is not None:
+        arguments.extend(['--no-play', '--output', str(output)])
+        if stateless:
+            arguments.insert(2, '--stateless')
+    arguments.extend(['--', text, language])
+    return arguments
+
+
 def execute_audio(body, paths, config, connection, job_factory, synthesize=True):
     text, language = audio_request(body)
     if synthesize and '|||' in text:
         raise AudioError('Separate audio must be requested in sequence by the client', 'INVALID_PAYLOAD')
+    stateless = configured_playback_engine(config) == 'stateless_gtts' if synthesize else False
     python, script = capability(paths)
     timeout = execution_timeout(config)
     if not _SLOTS.acquire(blocking=False):
@@ -222,17 +238,14 @@ def execute_audio(body, paths, config, connection, job_factory, synthesize=True)
     try:
         with media_directory() as directory:
             return execute_owned(python, script, text, language, directory, timeout,
-                connection, job_factory, synthesize)
+                connection, job_factory, synthesize, stateless)
     finally:
         _SLOTS.release()
 
 
-def execute_owned(python, script, text, language, directory, timeout, connection, job_factory, synthesize):
+def execute_owned(python, script, text, language, directory, timeout, connection, job_factory, synthesize, stateless=False):
     output = Path(directory) / 'speech.media' if synthesize else None
-    arguments = [script]
-    if synthesize:
-        arguments.extend(['--no-play', '--stateless', '--output', str(output)])
-    arguments.extend(['--', text, language])
+    arguments = synthesis_arguments(script, text, language, output, stateless)
     with process_owner(python, arguments, directory, job_factory) as process:
         wait_process(process, connection, timeout, output)
     if output is None:

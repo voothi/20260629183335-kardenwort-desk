@@ -79,7 +79,7 @@ def audio_server(tmp_path):
     server = create_browser_test_server(ControllerRequestHandler)
     server.api_key = 'owned-audio-token'
     server.config = configparser.ConfigParser()
-    server.config.read_dict({'audio': {'synthesis_timeout': '2'},
+    server.config.read_dict({'audio': {'synthesis_timeout': '2', 'playback_engine': 'stateless_gtts'},
         'storage': {'backend':'sqlite','sqlite_db_path':str(tmp_path/'audio.db')}})
     server.resolved_paths = {'anki_tts_cli': launcher, 'kardenwort_python': sys.executable,
         'sqlite_db_path':tmp_path/'audio.db','storage_backend':'sqlite','base_dir':tmp_path}

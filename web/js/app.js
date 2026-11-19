@@ -5613,6 +5613,7 @@
         var audioRmbPlay = Boolean(window.__CONFIG__ && window.__CONFIG__.audio_rmb_play);
         var audioRmbChainMode = ((window.__CONFIG__ && window.__CONFIG__.audio_rmb_chain_mode) || "auto");
         var audioRmbSource = ((window.__CONFIG__ && window.__CONFIG__.audio_rmb_source) || "word_translation");
+        var audioPlaybackEngine = ((window.__CONFIG__ && window.__CONFIG__.audio_playback_engine) || "anki_tts_cli");
         var audioAnkiTtsCli = ((window.__CONFIG__ && window.__CONFIG__.audio_anki_tts_cli) || "");
         var audioPythonExe = ((window.__CONFIG__ && window.__CONFIG__.audio_python_exe) || "");
 
@@ -5639,32 +5640,58 @@
         }
 
         var browserAudio = null;
-        function clientAudio() {
-            if (browserAudio) return browserAudio;
-            browserAudio = new window.DeskAudioPlayback({
-                url: function () { return resolveBackendUrl('/api/v1/audio/synthesize'); },
-                token: function () { return getApiToken(); },
+        var browserSpeech = null;
+        function audioCallbacks() {
+            return {
                 onState: function (detail) {
                     window.dispatchEvent(new CustomEvent('desk-audio-state', { detail: detail }));
                 },
                 onError: function (message) {
                     window.showToast('Audio failed: ' + message + '. Click again to retry.', 'error');
                 }
+            };
+        }
+        function clientAudio() {
+            if (browserAudio) return browserAudio;
+            var cb = audioCallbacks();
+            browserAudio = new window.DeskAudioPlayback({
+                url: function () { return resolveBackendUrl('/api/v1/audio/synthesize'); },
+                token: function () { return getApiToken(); },
+                onState: cb.onState,
+                onError: cb.onError
             });
             window.audioPlayback = browserAudio;
             return browserAudio;
         }
-        window.addEventListener('pagehide', function () { if (browserAudio) browserAudio.cancel(); });
+        function browserSpeechAudio() {
+            if (browserSpeech) return browserSpeech;
+            browserSpeech = new window.DeskBrowserSpeechPlayback(audioCallbacks());
+            window.audioPlayback = browserSpeech;
+            return browserSpeech;
+        }
+        function effectiveAudioPlaybackEngine() {
+            var cfg = window.__CONFIG__ || {};
+            var raw = cfg.audio_playback_engine || bootstrapUiConfig().audio_playback_engine || audioPlaybackEngine;
+            return String(raw || 'anki_tts_cli').trim().toLowerCase();
+        }
+        window.addEventListener('pagehide', function () {
+            if (browserAudio) browserAudio.cancel();
+            if (browserSpeech) browserSpeech.cancel();
+        });
 
         /** @param {string} text @param {string} lang */
         function playAudio(text, lang) {
             if (!text || !lang) return;
+            var clean = sanitizeSpokenText(text);
+            if (!clean) return;
+            if (effectiveAudioPlaybackEngine() === 'browser_tts') {
+                browserSpeechAudio().play(clean, lang);
+                return;
+            }
             if (isServerDisabled()) {
                 window.showToast('Audio unavailable: server interaction is disabled', 'warning');
                 return;
             }
-            var clean = sanitizeSpokenText(text);
-            if (!clean) return;
             if (window.ahkCall && audioAnkiTtsCli && audioPythonExe) {
                 var sanitizedText = clean.replace(/\r?\n|\r/g, ' ');
                 var escapedText = sanitizedText.replace(/\\/g, '\\\\').replace(/"/g, '\\"');

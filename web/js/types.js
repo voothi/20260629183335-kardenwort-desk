@@ -87,6 +87,7 @@
  * @property {string} [audio_lmb_chain_mode] - 'separate' | 'joined'
  * @property {string} [audio_source_range_mode] - 'all' | 'sentence'
  * @property {string} [audio_table_range_mode] - 'none' | 'row'
+ * @property {string} [audio_playback_engine] - 'anki_tts_cli' | 'browser_tts' | 'stateless_gtts'
  * @property {number} [zoom_scale] - UI scale factor
  * @property {boolean} [auto_save_on_edit] - Cell-edit autosave; selection persistence is independent
  * @property {boolean} [auto_save_on_close] - Persist current pending edits when closing
