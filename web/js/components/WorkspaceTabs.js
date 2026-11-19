@@ -720,7 +720,7 @@
                     var selAttr = isSel ? '1' : '0';
                     var hlClass = wordObj.highlight_class || 'highlight-orange';
                     if (isSel) hlClass += ' selected kw-row-selected';
-                    var effectiveProv = wordObj.provenance || (appRow && appRow.provenance) || (w.AppState && w.AppState.rows && ((tOrdStr && w.AppState.rows[tOrdStr] && w.AppState.rows[tOrdStr].provenance) || (rIdStr && w.AppState.rows[rIdStr] && w.AppState.rows[rIdStr].provenance))) || (w.AppState && w.AppState.rowProvenances && (w.AppState.rowProvenances[tOrdStr] || w.AppState.rowProvenances[rIdStr])) || '';
+                    var effectiveProv = wordObj.provenance || (appRow && appRow.provenance) || (w.AppState && w.AppState.rows && ((rIdStr && w.AppState.rows[rIdStr] && w.AppState.rows[rIdStr].provenance) || (!(Number(wordObj.sentence_idx) > 0) && tOrdStr && w.AppState.rows[tOrdStr] && w.AppState.rows[tOrdStr].provenance))) || (w.AppState && w.AppState.rowProvenances && (w.AppState.rowProvenances[rIdStr] || (!(Number(wordObj.sentence_idx) > 0) && w.AppState.rowProvenances[tOrdStr]))) || '';
                     if (effectiveProv && !wordObj.provenance) {
                         wordObj.provenance = effectiveProv;
                     }

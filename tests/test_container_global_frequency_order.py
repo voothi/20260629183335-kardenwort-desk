@@ -204,12 +204,19 @@ def _extract_island(html: str, island_id: str):
             "en",
             ("alpha", "color", "zebra"),
             [
-                ["unlisted-term", "1", "0"],
+                ["unlisted-b", "1", "0"],
                 ["zebra", "1", "1"],
                 ["color/colour", "2", "0"],
                 ["alpha", "2", "1"],
+                ["unlisted-a", "2", "2"],
             ],
-            [("alpha", "2", "1"), ("color/colour", "2", "0"), ("zebra", "1", "1"), ("unlisted-term", "1", "0")],
+            [
+                ("alpha", "2", "1"),
+                ("color/colour", "2", "0"),
+                ("zebra", "1", "1"),
+                ("unlisted-a", "2", "2"),
+                ("unlisted-b", "1", "0"),
+            ],
         ),
     ],
 )
@@ -484,6 +491,8 @@ def test_progressive_delivery_keeps_global_order_and_exact_occurrence_provenance
     """1.2 / 1.3: Progressive completion snapshot emits globally ordered rows and routes repeated token_order=0."""
     url, server, adapter = running_controller
     _configure_owned_world(server, tmp_path, lang="de", freq_lines=("Alpha", "Zebra"))
+    server.config.set("triggers", "run_text_translation", "auto")
+    server.config.set("triggers", "run_lemma_base_translation", "auto")
     source_text = _seed_multi_sentence_session(adapter, include_merged_baum=False)
 
     # Clear translations so progressive worker fills them via owned DeterministicTranslationHandler.
@@ -531,6 +540,9 @@ def test_progressive_delivery_keeps_global_order_and_exact_occurrence_provenance
     assert finished["rows"]["0"]["sentence_idx"] == "2"
     assert finished["rows"]["1"]["lemma"] == "Zebra"
     assert finished["rows"]["1"]["sentence_idx"] == "1"
+    expected_alpha_trans = finished["rows"]["0"]["trans"]
+    expected_zebra_trans = finished["rows"]["1"]["trans"]
+    assert expected_alpha_trans and expected_zebra_trans and expected_alpha_trans != expected_zebra_trans
 
     # Render page and verify memoized /session/status & finished event both project Alpha before Zebra.
     html = desk.run_render_flow(
@@ -545,15 +557,15 @@ def test_progressive_delivery_keeps_global_order_and_exact_occurrence_provenance
     )
     errors = _open_page(page, url, html)
     try:
-        page.evaluate("(evt) => window.receiveUpdate(evt)", finished)
+        page.evaluate("(raw) => window.receiveUpdate(JSON.parse(raw))", json.dumps(finished))
         page.evaluate("window.WorkspaceTabs.switchToTab(1)")
         rows_loc = page.locator("#lemma-table tbody tr")
         assert [rows_loc.nth(i).locator("td.col-lemma").inner_text().strip() for i in range(2)] == [
             "Alpha",
             "Zebra",
         ]
-        assert rows_loc.nth(0).locator("td.col-translation").inner_text().strip() == "google: Alpha"
-        assert rows_loc.nth(1).locator("td.col-translation").inner_text().strip() == "google: Zebra"
+        assert rows_loc.nth(0).locator("td.col-translation").inner_text().strip() == expected_alpha_trans
+        assert rows_loc.nth(1).locator("td.col-translation").inner_text().strip() == expected_zebra_trans
     finally:
         page.context.close()
         assert errors == []

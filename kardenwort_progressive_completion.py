@@ -83,11 +83,16 @@ def eligible_wordfill(row, lemma_column, translation_column):
 
 def indexed_provenances(keys, provenances):
     result = {}
+    unique_tokens = len({str(key[1]) for key in keys}) == len(keys)
     for index, key in enumerate(keys):
         value = provenances.get(tuple(map(str, key)))
-        if value:
-            for alias in (index, str(index), key[1], str(key[1])):
-                result[alias] = value
+        if not value:
+            continue
+        result[index] = value
+        result[str(index)] = value
+        if unique_tokens:
+            result.setdefault(key[1], value)
+            result.setdefault(str(key[1]), value)
     return result
 
 

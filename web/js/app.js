@@ -113,8 +113,25 @@
         return result;
     }
 
-    function normalizeOccurrenceRowDeltas(rows, cards) {
-        var identities = occurrenceRowIds(cards), result = {};
+    function domOccurrenceRowIds() {
+        var result = {};
+        if (typeof document === 'undefined' || !document.querySelectorAll) return result;
+        var trs = document.querySelectorAll('#lemma-table tbody tr[data-row-id]');
+        Array.prototype.forEach.call(trs, function(tr) {
+            var sIdx = tr.getAttribute('data-sentence-idx');
+            var tOrd = tr.getAttribute('data-token-order');
+            var rId = tr.getAttribute('data-row-id');
+            if (Number(sIdx) > 0 && tOrd !== null && tOrd !== '' && rId !== null && rId !== '') {
+                var key = String(sIdx) + ':' + String(tOrd);
+                if (!Object.prototype.hasOwnProperty.call(result, key)) result[key] = String(rId);
+            }
+        });
+        return result;
+    }
+
+    function normalizeOccurrenceRowDeltas(rows, cards, fallbackIdentities) {
+        var identities = (cards && cards.length) ? occurrenceRowIds(cards) : (fallbackIdentities || {});
+        var result = {};
         Object.keys(rows).forEach(function(id) {
             var delta = rows[id];
             if (Number(delta.sentence_idx) > 0 && delta.token_order !== undefined) {
@@ -168,8 +185,10 @@
     function normalizeLegacyRowDeltas(rows, payload) {
         var tabs = window.WorkspaceTabs;
         var cards = tabs && tabs.getCards ? tabs.getCards() : [];
+        var domIds = !cards.length ? domOccurrenceRowIds() : null;
+        if (!cards.length && (!domIds || !Object.keys(domIds).length)) return rows;
+        rows = normalizeOccurrenceRowDeltas(rows, cards, domIds);
         if (!cards.length) return rows;
-        rows = normalizeOccurrenceRowDeltas(rows, cards);
         var active = tabs.getActiveCard ? tabs.getActiveCard() : null;
         var activeSentence = active && active.sentence_idx !== undefined ? String(active.sentence_idx) : null;
         var legacy = {}, matches = {}, rowMatches = {}, result = {};
@@ -1157,12 +1176,17 @@
                 var colGen = headers.indexOf('WordSourceGender');
                 if (colGen === -1) colGen = headers.indexOf('gender');
                 if (colGen === -1) colGen = headers.indexOf('g');
+                var colTokenOrder = headers.indexOf('TokenOrder');
+                var colSentIdx = headers.indexOf('SentenceSourceIndex');
 
                 var hydrationBody = tbody;
                 session.data_rows.forEach(/** @param {string[]} row @param {number} idx */ function (row, idx) {
+                    var tokOrderVal = (colTokenOrder !== -1 && row[colTokenOrder] !== undefined && String(row[colTokenOrder]).trim() !== '') ? String(row[colTokenOrder]).trim() : String(idx);
+                    var sentIdxVal = (colSentIdx !== -1 && row[colSentIdx] !== undefined && String(row[colSentIdx]).trim() !== '') ? String(row[colSentIdx]).trim() : '1';
                     var tr = document.createElement('tr');
                     tr.setAttribute('data-row-id', String(idx));
-                    tr.setAttribute('data-token-order', String(idx));
+                    tr.setAttribute('data-token-order', tokOrderVal);
+                    tr.setAttribute('data-sentence-idx', sentIdxVal);
                     var isInitSel = (window.AppState && window.AppState.selected_ids && window.AppState.selected_ids.indexOf(idx) !== -1);
                     tr.setAttribute('data-selected', String(isInitSel ? '1' : '0'));
                     tr.setAttribute('data-filter-hidden', String(isInitSel ? '0' : '1'));
@@ -1177,7 +1201,7 @@
                         cb.type = 'checkbox';
                         cb.className = 'kw-tag-checkbox';
                         cb.setAttribute('data-row-id', String(idx));
-                        cb.setAttribute('data-token-order', String(idx));
+                        cb.setAttribute('data-token-order', tokOrderVal);
                         cb.onchange = function () { window.kwToggleTag(cb, idx); };
                         tdTag.appendChild(cb);
                         tr.appendChild(tdTag);
@@ -2937,7 +2961,7 @@
                                         cw.gender = nextGender;
                                         cwMutated = true;
                                     }
-                                    var newProv = (matchingDelta.provenance !== undefined && matchingDelta.provenance !== null && String(matchingDelta.provenance).trim() !== "") ? matchingDelta.provenance : (cw.provenance || (window.AppState && window.AppState.rows && ((cw.token_order !== undefined && window.AppState.rows[String(cw.token_order)] && window.AppState.rows[String(cw.token_order)].provenance) || (cw.row_id !== undefined && window.AppState.rows[String(cw.row_id)] && window.AppState.rows[String(cw.row_id)].provenance))) || "");
+                                    var newProv = (matchingDelta.provenance !== undefined && matchingDelta.provenance !== null && String(matchingDelta.provenance).trim() !== "") ? matchingDelta.provenance : (cw.provenance || (window.AppState && window.AppState.rows && ((cw.row_id !== undefined && window.AppState.rows[String(cw.row_id)] && window.AppState.rows[String(cw.row_id)].provenance) || (!(Number(cw.sentence_idx) > 0) && cw.token_order !== undefined && window.AppState.rows[String(cw.token_order)] && window.AppState.rows[String(cw.token_order)].provenance))) || "");
                                     if (newProv && cw.provenance !== newProv) {
                                         cw.provenance = newProv;
                                         cwMutated = true;
@@ -3019,10 +3043,14 @@
                                 while (node && node.nodeName !== 'TR') { node = node.parentElement; }
                                 return node;
                             })(skel);
+                            var trSentIdx = tr ? tr.getAttribute('data-sentence-idx') : null;
                             var cleanupRowId = tr ? (tr.getAttribute('data-row-id') || tr.getAttribute('data-token-order')) : null;
                             if (cleanupRowId !== null && cleanupRowId !== undefined) {
                                 var skelTarget = (p && p.classList.contains('scrollable-cell') ? p : skel);
                                 var rStateS = window.AppState.rows[cleanupRowId];
+                                if (rStateS && Number(trSentIdx) > 0 && Number(rStateS.sentence_idx) > 0 && String(rStateS.sentence_idx) !== String(trSentIdx)) {
+                                    rStateS = null;
+                                }
                                 var rTransS = rStateS ? (rStateS.trans || rStateS.WordDestination || rStateS.word_translation || '') : '';
                                 if (rTransS && rTransS !== '') {
                                     if (typeof setCellText === 'function') setCellText(skelTarget, rTransS);
@@ -3048,13 +3076,17 @@
                         var rowEl = allRows[r];
                         var rId = rowEl.getAttribute('data-row-id') || rowEl.getAttribute('data-token-order');
                         var tOrd = rowEl.getAttribute('data-token-order');
+                        var rowSentIdx = rowEl.getAttribute('data-sentence-idx');
                         var tdsEl = rowEl.getElementsByTagName('td');
                         if (tdsEl.length >= 3 && rId !== null && rId !== undefined) {
                             var transTd = (rowEl.querySelector('td[data-col="WordDestination"]')) || tdsEl[2];
                             var transDiv = (transTd.querySelector('.scrollable-cell')) || transTd;
                             var transContent = (transDiv.textContent || transDiv.innerText || "").trim();
+                            var rState = window.AppState.rows[rId] || (!(Number(rowSentIdx) > 0) && tOrd ? window.AppState.rows[tOrd] : null);
+                            if (rState && Number(rowSentIdx) > 0 && Number(rState.sentence_idx) > 0 && String(rState.sentence_idx) !== String(rowSentIdx)) {
+                                rState = null;
+                            }
                             if (!transContent || transContent === '...' || transContent === 'Loading...' ||  (transDiv.querySelector('.skeleton-loader'))) {
-                                var rState = window.AppState.rows[rId] || (tOrd ? window.AppState.rows[tOrd] : null);
                                 var rTrans = rState ? (rState.trans || rState.WordDestination || rState.word_translation || '') : '';
                                 if (rTrans && rTrans !== '') {
                                     if (!transTd.classList.contains('editing')) {
@@ -3080,7 +3112,6 @@
                                 }
                                 updated = true;
                             } else {
-                                var rState = window.AppState.rows[rId] || (tOrd ? window.AppState.rows[tOrd] : null);
                                 var rProv = rState ? (rState.provenance || rState._provenance || rState.transProvenance) : null;
                                 if (rProv && !transTd.classList.contains('dirty') && !transTd.classList.contains('editing')) {
                                     if (! (transDiv.querySelector('.skeleton-loader'))) {
@@ -3227,17 +3258,7 @@
                         }
                     }
                     var hasTransProp = rowData.hasOwnProperty('trans') || rowData.hasOwnProperty('WordDestination') || rowData.hasOwnProperty('word_translation');
-                    var rowProv = rowData.provenance || rowData._provenance || rowData.transProvenance;
-                    if (!rowProv && rowData.token_order !== undefined && rowData.token_order !== null) {
-                        for (var rk in window.AppState.rows) {
-                            if (window.AppState.rows[rk] && String(window.AppState.rows[rk].token_order) === String(rowData.token_order)) {
-                                if (window.AppState.rows[rk].provenance) {
-                                    rowProv = window.AppState.rows[rk].provenance;
-                                    break;
-                                }
-                            }
-                        }
-                    }
+                    var rowProv = rowData.provenance || rowData._provenance || rowData.transProvenance || findRowProvenanceFallback(rowData);
                     /** @param {string} effectiveVal */
                     function applyCellProvenance(effectiveVal) {
                         if (!transTd) return;
@@ -3539,15 +3560,8 @@
                                     effProv = transCell.getAttribute('data-provenance') || ( (transCell.querySelector('[data-provenance]')) ?  (transCell.querySelector('[data-provenance]')).getAttribute('data-provenance') : null) || undefined;
                                 }
                             }
-                            if (!effProv && rowData.token_order !== undefined && rowData.token_order !== null && window.AppState && window.AppState.rows) {
-                                for (var rk in window.AppState.rows) {
-                                    if (window.AppState.rows[rk] && String(window.AppState.rows[rk].token_order) === String(rowData.token_order)) {
-                                        if (window.AppState.rows[rk].provenance) {
-                                            effProv = window.AppState.rows[rk].provenance;
-                                            break;
-                                        }
-                                    }
-                                }
+                            if (!effProv) {
+                                effProv = findRowProvenanceFallback(rowData);
                             }
                             var genTip = formatGenderTooltip(rawGender, rowLemma, effProv);
                             if (genTip) {
@@ -3587,23 +3601,61 @@
             }
         } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
 
+        function findRowProvenanceFallback(rowData) {
+            if (!rowData || rowData.token_order === undefined || rowData.token_order === null || !window.AppState || !window.AppState.rows) {
+                return undefined;
+            }
+            var targetSent = (rowData.sentence_idx !== undefined && rowData.sentence_idx !== null && Number(rowData.sentence_idx) > 0)
+                ? String(rowData.sentence_idx) : null;
+            for (var rk in window.AppState.rows) {
+                var candidate = window.AppState.rows[rk];
+                if (!candidate || !candidate.provenance) continue;
+                if (String(candidate.token_order) !== String(rowData.token_order)) continue;
+                if (targetSent && candidate.sentence_idx !== undefined && candidate.sentence_idx !== null && Number(candidate.sentence_idx) > 0 && String(candidate.sentence_idx) !== targetSent) {
+                    continue;
+                }
+                return candidate.provenance;
+            }
+            return undefined;
+        }
+
+        function resolveCardAppRow(word, rIdStr, tOrdStr) {
+            if (!window.AppState || !window.AppState.rows) return null;
+            var wSent = (word && Number(word.sentence_idx) > 0) ? String(word.sentence_idx) : null;
+            if (wSent && tOrdStr) {
+                for (var rk in window.AppState.rows) {
+                    var cand = window.AppState.rows[rk];
+                    if (cand && String(cand.sentence_idx) === wSent && String(cand.token_order) === tOrdStr) {
+                        return cand;
+                    }
+                }
+            }
+            var byId = rIdStr ? window.AppState.rows[rIdStr] : null;
+            if (byId) {
+                if (wSent && Number(byId.sentence_idx) > 0 && String(byId.sentence_idx) !== wSent) {
+                    return null;
+                }
+                return byId;
+            }
+            if (!wSent && tOrdStr) {
+                var byTok = window.AppState.rows[tOrdStr];
+                if (byTok && (!word || !word.lemma || !byTok.lemma || String(byTok.lemma).trim().toLowerCase() === String(word.lemma).trim().toLowerCase())) {
+                    return byTok;
+                }
+            }
+            return null;
+        }
+
         try {
             var initRows = (document.querySelectorAll('tr[data-row-id]'));
             for (var ir = 0; ir < initRows.length; ir++) {
                 var rEl = initRows[ir];
                 var rId = rEl.getAttribute('data-row-id');
-                var tOrd = rEl.getAttribute('data-token-order');
                 var transTd = (rEl.querySelector('td.col-translation, td[data-col="WordDestination"]'));
                 var rProv = transTd ? transTd.getAttribute('data-provenance') : null;
-                if (rProv) {
-                    if (rId) {
-                        if (!window.AppState.rows[rId]) window.AppState.rows[rId] = {};
-                        window.AppState.rows[rId].provenance = rProv;
-                    }
-                    if (tOrd && tOrd !== rId) {
-                        if (!window.AppState.rows[tOrd]) window.AppState.rows[tOrd] = {};
-                        window.AppState.rows[tOrd].provenance = rProv;
-                    }
+                if (rProv && rId) {
+                    if (!window.AppState.rows[rId]) window.AppState.rows[rId] = {};
+                    window.AppState.rows[rId].provenance = rProv;
                 }
             }
         } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
@@ -3704,7 +3756,7 @@
                                 word.row_html = null;
                                 var rIdStr = String(word.row_id !== undefined && word.row_id !== null ? word.row_id : '');
                                 var tOrdStr = String(word.token_order !== undefined && word.token_order !== null ? word.token_order : rIdStr);
-                                var appRow = (window.AppState && window.AppState.rows) ? ((tOrdStr && window.AppState.rows[tOrdStr]) || (rIdStr && window.AppState.rows[rIdStr])) : null;
+                                var appRow = resolveCardAppRow(word, rIdStr, tOrdStr);
                                 var resolvedTrans = appRow ? (appRow.trans !== undefined && appRow.trans !== "" ? appRow.trans : (appRow.WordDestination !== undefined && appRow.WordDestination !== "" ? appRow.WordDestination : (appRow.word_translation || ''))) : '';
                                 if (appRow && resolvedTrans && resolvedTrans.indexOf('skeleton-loader') === -1 && resolvedTrans !== '[FAILED]') {
                                     word.translation = resolvedTrans;

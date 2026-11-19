@@ -5631,9 +5631,8 @@ def sort_session_data_rows(
     delivery_mode: Optional[str] = None,
 ) -> List[List[str]]:
     """
-    Sorts session data rows consistently for UI display, enrichment, and rewording.
-    If multiple sentences are present in container delivery mode, rows are grouped
-    per-sentence and frequency-sorted within each sentence group to match the UI layout.
+    Sorts session data rows globally by configured language frequency across the
+    complete active material while preserving source sentence/token coordinates.
     """
     if not data_rows or not headers:
         return data_rows
@@ -5645,58 +5644,7 @@ def sort_session_data_rows(
             else "en"
         )
 
-    try:
-        sent_col = (
-            role_fields.get('sentence_index', 'SentenceSourceIndex')
-            if isinstance(role_fields, dict)
-            else 'SentenceSourceIndex'
-        )
-        col_index = (
-            headers.index(sent_col)
-            if sent_col in headers
-            else (headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1)
-        )
-
-        num_sentences = len(source_sentences) if source_sentences else 0
-        sent_vals = set()
-        if col_index != -1:
-            for r in data_rows:
-                if len(r) > col_index:
-                    v = str(r[col_index]).strip()
-                    if v.isdigit():
-                        sent_vals.add(int(v))
-            if num_sentences == 0 and len(sent_vals) >= 2:
-                num_sentences = max(sent_vals)
-
-        is_container = False
-        if col_index != -1 and num_sentences >= 2:
-            if delivery_mode is not None:
-                is_container = (delivery_mode == 'container')
-            else:
-                deliv = None
-                if config and hasattr(config, "get"):
-                    deliv = config.get(SEC_SENTENCES_MODE, "delivery_mode", fallback=None)
-                if deliv:
-                    is_container = (deliv == 'container')
-                else:
-                    is_container = True
-
-        if is_container and col_index != -1:
-            sentence_sorted_rows = []
-            target_range = range(1, num_sentences + 1) if num_sentences >= 2 else sorted(s for s in sent_vals if s >= 1)
-            for s_idx in target_range:
-                s_rows = [r for r in data_rows if len(r) > col_index and str(r[col_index]).strip() == str(s_idx)]
-                s_sorted = sort_rows_by_frequency(s_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                sentence_sorted_rows.extend(s_sorted)
-            other_rows = [r for r in data_rows if not (len(r) > col_index and str(r[col_index]).strip().isdigit() and int(str(r[col_index]).strip()) in target_range)]
-            if other_rows:
-                sentence_sorted_rows.extend(sort_rows_by_frequency(other_rows, headers, lang, config, resolved_paths, role_fields=role_fields))
-            return sentence_sorted_rows
-
-        return sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-    except Exception as sort_err:
-        logger.warning(f"Failed to sort session data rows: {sort_err}")
-        return sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+    return sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
 
 
 def synthesize_project_materials(
@@ -12415,16 +12363,6 @@ html, body {{
             if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ov_morph.strip() and not llm_filled:
                 ov_morph = f'<span class="skeleton-loader kw-skeleton-cell" title="{enrich_provider_label}">{enrich_provider_label}</span>'
             ov_token_order = ov_r[col_token_order] if col_token_order != -1 and len(ov_r) > col_token_order and str(ov_r[col_token_order]).strip() else str(ov_id)
-            ov_is_sel = "0"
-            if is_container:
-                try:
-                    ov_ord_int = int(ov_token_order)
-                except (ValueError, TypeError):
-                    ov_ord_int = None
-                if ov_ord_int is not None and ov_ord_int in saved_overview_selections:
-                    ov_is_sel = "1"
-            elif col_highlighted != -1 and len(ov_r) > col_highlighted and str(ov_r[col_highlighted]).strip().lower() in ["1", "true"]:
-                ov_is_sel = "1"
 
             ov_lem_clean = ov_lemma.strip().lower()
             ov_pos_clean = ov_r[col_pos_dedup].strip().lower() if col_pos_dedup != -1 and len(ov_r) > col_pos_dedup else ""
@@ -12439,6 +12377,28 @@ html, body {{
 
             ov_k = (ov_lem_clean, ov_eff_pos) if col_pos_dedup != -1 else ov_lem_clean
             matched_ids = lemma_pos_to_row_ids.get(ov_k) or lemma_pos_to_row_ids.get(ov_lem_clean) or [ov_id]
+
+            ov_is_sel = "0"
+            if is_container:
+                try:
+                    ov_ord_int = int(ov_token_order)
+                except (ValueError, TypeError):
+                    ov_ord_int = None
+                if ov_ord_int is not None and ov_ord_int in saved_overview_selections:
+                    if col_highlighted == -1 or any(
+                        0 <= mid < len(overview_data_rows)
+                        and len(overview_data_rows[mid]) > col_highlighted
+                        and str(overview_data_rows[mid][col_highlighted]).strip().lower() in ["1", "true"]
+                        for mid in matched_ids
+                    ):
+                        ov_is_sel = "1"
+            elif col_highlighted != -1 and any(
+                0 <= mid < len(overview_data_rows)
+                and len(overview_data_rows[mid]) > col_highlighted
+                and str(overview_data_rows[mid][col_highlighted]).strip().lower() in ["1", "true"]
+                for mid in matched_ids
+            ):
+                ov_is_sel = "1"
 
             # Translation deduplication and rollup across atomic occurrences for merged rows
             if col_word_dest != -1 and matched_ids and len(matched_ids) > 1:
