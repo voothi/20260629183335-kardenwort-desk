@@ -12975,6 +12975,7 @@ html, body {{
         table_header_html=table_header_html,
         lemma_col_name=lemma_col_name,
         inflected_col_name=inflected_col_name,
+        trans_col_name=trans_col_name,
     )
 
     _html_gen_timer.__exit__(None, None, None)
@@ -13636,6 +13637,7 @@ def render_declarative_web_shell(
     table_header_html="",
     lemma_col_name="WordSource",
     inflected_col_name="WordSourceInflectedForm",
+    trans_col_name="WordDestination",
 ):
     """All JSON data islands MUST be serialized with serialize_json_island()."""
     base_html = get_web_index_html()
@@ -14010,6 +14012,7 @@ def render_declarative_web_shell(
             s_code = s_code.replace('lang + "\\\\n"', 'lang + "\\n"')
             s_code = s_code.replace("{lemma_col_name}", lemma_col_name)
             s_code = s_code.replace("{inflected_col_name}", inflected_col_name)
+            s_code = s_code.replace("{trans_col_name}", trans_col_name)
             s_code = s_code.replace("{has_highlight_col}", "true" if ui_cfg.get("has_highlight_col") else "false")
         tag_to_replace = f'<script src="/js/{script_rel}"></script>'
         if tag_to_replace in base_html:

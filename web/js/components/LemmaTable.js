@@ -8,6 +8,91 @@
 
 (function () {
     // Adapt the supported matrix entry point to the canonical workspace row owner.
+    function bootUiConfig(w) {
+        var b = w.AppState && w.AppState.bootstrap;
+        return (b && b.ui_config) || {};
+    }
+
+    function resolveRmbConfig(w) {
+        var bootCfg = bootUiConfig(w);
+        var winCfg = w.__CONFIG__ || {};
+        var enabled = (winCfg.audio_rmb_play !== undefined) ? winCfg.audio_rmb_play : bootCfg.audio_rmb_play;
+        var rawSource = winCfg.audio_rmb_source || bootCfg.audio_rmb_source || 'word_translation';
+        return { enabled: Boolean(enabled), source: String(rawSource).trim().toLowerCase() };
+    }
+
+    function isPendingCell(cell) {
+        if (!cell) return true;
+        if (cell.getAttribute('data-pending') === 'true') return true;
+        if (cell.classList && cell.classList.contains('skeleton-loader')) return true;
+        return Boolean(cell.querySelector && cell.querySelector('.skeleton-loader, [data-pending="true"]'));
+    }
+
+    function isUnfinishedTranslation(cell, raw) {
+        if (!raw || raw === '[FAILED]' || raw.indexOf('[Error') === 0) return true;
+        if (raw.slice(-3) !== '...') return false;
+        return !(cell.hasAttribute('data-provenance') || (cell.querySelector && cell.querySelector('[data-provenance]')));
+    }
+
+    function sanitizeSpokenText(text) {
+        if (!text) return '';
+        var s = String(text);
+        s = s.replace(/(^|[^0-9])[0-9]{14}(?![0-9])/g, '$1 ');
+        s = s.replace(/[\/\\_:]/g, ' ');
+        s = s.replace(/(^|\s)[0-9]+(?=\s|$)/g, ' ');
+        return s.replace(/\s+/g, ' ').trim();
+    }
+
+    function readCellText(row, selector) {
+        var cell = row.querySelector(selector);
+        return cell ? (cell.textContent || cell.innerText || '').trim() : '';
+    }
+
+    function resolveRowTranslationText(row) {
+        var cell = row.querySelector('td.col-translation, td[data-col="WordDestination"], td[data-col="word_translation"]');
+        if (isPendingCell(cell)) return '';
+        var raw = (cell.textContent || cell.innerText || '').trim();
+        return isUnfinishedTranslation(cell, raw) ? '' : sanitizeSpokenText(raw);
+    }
+
+    function resolveRowSourceText(row, mode) {
+        var lemma = readCellText(row, 'td.col-lemma, td[data-col="WordSource"], td[data-col="lemma"]');
+        var inflected = readCellText(row, 'td.col-inflected, td[data-col="WordSourceInflectedForm"], td[data-col="inflected"]');
+        var raw = (mode === 'inflection' && inflected) ? inflected : (lemma || inflected);
+        return sanitizeSpokenText(raw);
+    }
+
+    function readDomText(id) {
+        var el = document.getElementById(id);
+        return el ? (el.textContent || el.innerText || '').trim() : '';
+    }
+
+    function resolveSourceLang(w) {
+        if (typeof w.getSessionLang === 'function') return w.getSessionLang();
+        var s = w.AppState || {};
+        var b = s.bootstrap || {};
+        return s.language || b.language || b.lang || readDomText('session-lang');
+    }
+
+    function resolveStateTargetLang(s) {
+        var direct = s.target_lang || s.target_language;
+        if (direct) return direct;
+        var b = s.bootstrap || {};
+        return b.target_language || b.target_lang || '';
+    }
+
+    function resolveTargetLang(w) {
+        if (typeof w.getSessionTargetLang === 'function') return w.getSessionTargetLang();
+        return resolveStateTargetLang(w.AppState || {}) || readDomText('session-target-lang');
+    }
+
+    function resolveRmbAudio(w, row, mode) {
+        if (mode === 'word_translation') {
+            return { text: resolveRowTranslationText(row), lang: resolveTargetLang(w) };
+        }
+        return { text: resolveRowSourceText(row, mode), lang: resolveSourceLang(w) };
+    }
+
     function legacyMatrixWords(state) {
         if (!state || !Array.isArray(state.data_rows)) return null;
         var headers = state.headers || [];
@@ -115,16 +200,12 @@
                         e.preventDefault();
                         return;
                     }
-                    var uiCfg = (w.AppState && w.AppState.bootstrap && w.AppState.bootstrap.ui_config) || w.__CONFIG__ || {};
-                    if (uiCfg.audio_rmb_play) {
+                    var rmbCfg = resolveRmbConfig(w);
+                    if (rmbCfg.enabled) {
                         e.preventDefault();
-                        var lemCell = row.querySelector('.col-lemma');
-                        var transCell = row.querySelector('.col-translation');
-                        var isTrans = (uiCfg.audio_rmb_source === 'word_translation');
-                        var text = isTrans ? (transCell ? (transCell.textContent || '').trim() : '') : (lemCell ? (lemCell.textContent || '').trim() : '');
-                        var lang = isTrans ? ((typeof w.getSessionTargetLang === 'function') ? w.getSessionTargetLang() : (w.AppState && (w.AppState.target_lang || w.AppState.target_language || (w.AppState.bootstrap && (w.AppState.bootstrap.target_language || w.AppState.bootstrap.target_lang)))) || '') : ((typeof w.getSessionLang === 'function') ? w.getSessionLang() : (w.AppState && (w.AppState.language || (w.AppState.bootstrap && w.AppState.bootstrap.language))) || '');
-                        if (text && typeof w.playAudio === 'function') {
-                            w.playAudio(text, lang);
+                        var audio = resolveRmbAudio(w, row, rmbCfg.source);
+                        if (audio.text && audio.lang && typeof w.playAudio === 'function') {
+                            w.playAudio(audio.text, audio.lang);
                         }
                     }
                 }

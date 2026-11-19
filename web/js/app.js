@@ -5677,9 +5677,76 @@
         }
         window.playAudio = playAudio;
 
+        function isPendingTranslationCell(cell) {
+            if (!cell) return true;
+            if (cell.getAttribute('data-pending') === 'true') return true;
+            if (cell.classList && cell.classList.contains('skeleton-loader')) return true;
+            return Boolean(cell.querySelector && cell.querySelector('.skeleton-loader, [data-pending="true"]'));
+        }
+
+        function isUnfinishedTranslationText(cell, raw) {
+            if (!raw || raw === '[FAILED]' || raw.indexOf('[Error') === 0) return true;
+            if (raw.slice(-3) !== '...') return false;
+            return !(cell.hasAttribute('data-provenance') || (cell.querySelector && cell.querySelector('[data-provenance]')));
+        }
+
+        function isTranslationColumnCell(td) {
+            var col = td.getAttribute('data-col');
+            if (col === '{trans_col_name}' || col === 'WordDestination' || col === 'word_translation') return true;
+            return Boolean(td.classList && td.classList.contains('col-translation'));
+        }
+
+        function findRowTranslationCell(tr) {
+            if (!tr) return null;
+            var tds = tr.getElementsByTagName('td');
+            for (var i = 0; i < tds.length; i++) {
+                if (isTranslationColumnCell(tds[i])) return tds[i];
+            }
+            return null;
+        }
+
+        function getTableRowTranslationToPlay(tr) {
+            var cell = findRowTranslationCell(tr);
+            if (isPendingTranslationCell(cell)) return "";
+            var raw = (cell.textContent || cell.innerText || "").trim();
+            if (isUnfinishedTranslationText(cell, raw)) return "";
+            return sanitizeSpokenText(raw);
+        }
+
+        function bootstrapUiConfig() {
+            var boot = window.AppState && window.AppState.bootstrap;
+            return (boot && boot.ui_config) || {};
+        }
+
+        function effectiveAudioRmbSource() {
+            var cfg = window.__CONFIG__ || {};
+            var raw = cfg.audio_rmb_source || bootstrapUiConfig().audio_rmb_source || audioRmbSource;
+            return String(raw || 'word_translation').trim().toLowerCase();
+        }
+
+        function isAudioRmbEnabled() {
+            if (window.__CONFIG__ && window.__CONFIG__.audio_rmb_play !== undefined) {
+                return Boolean(window.__CONFIG__.audio_rmb_play);
+            }
+            var boot = window.AppState && window.AppState.bootstrap;
+            if (boot && boot.ui_config && boot.ui_config.audio_rmb_play !== undefined) {
+                return Boolean(boot.ui_config.audio_rmb_play);
+            }
+            return audioRmbPlay;
+        }
+
+        function resolveTableRowRmbAudio(row) {
+            var mode = effectiveAudioRmbSource();
+            if (mode === 'word_translation') {
+                return { text: getTableRowTranslationToPlay(row), lang: getSessionTargetLang() };
+            }
+            return { text: getTableRowWordsToPlay(row, mode), lang: getSessionLang() };
+        }
+
         /** @param {HTMLElement} tr @param {string} sourceMode */
         function getTableRowWordsToPlay(tr, sourceMode) {
             if (!tr) return "";
+            if (sourceMode === 'word_translation') return getTableRowTranslationToPlay(tr);
             var tds = tr.getElementsByTagName('td');
             var lemma = "";
             var inflection = "";
@@ -6633,11 +6700,10 @@
                 updateBidirectionalHighlights();
                 notifyAHKSelection();
             } else if (e.button === 2) { // RMB
-                if (audioRmbPlay) {
-                    var sourceLang = getSessionLang();
-                    var textToPlay = getTableRowWordsToPlay(row, audioLmbSource);
-                    if (textToPlay) {
-                        playAudio(textToPlay, sourceLang);
+                if (isAudioRmbEnabled()) {
+                    var rmbAudio = resolveTableRowRmbAudio(row);
+                    if (rmbAudio.text && rmbAudio.lang) {
+                        playAudio(rmbAudio.text, rmbAudio.lang);
                     }
                 }
             }
