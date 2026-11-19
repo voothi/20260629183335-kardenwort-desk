@@ -2693,6 +2693,8 @@
         var tokenDragStartIdx = -1;
         var tokenDragLastIdx = -1;
          var initialSelectedMap = null;
+         var initialSelectedLemmas = null;
+         var initialActiveTokenSelections = null;
          var mousedownTargetSpan = null;
         var isRmbDragFlipping = false;
         var rmbFlipMode = true;
@@ -5242,9 +5244,59 @@
         }
         window.isLemmaStillNeededByOtherActiveTokens = isLemmaStillNeededByOtherActiveTokens;
 
+        function cloneActiveTokens(list) {
+            return JSON.parse(JSON.stringify(list || []));
+        }
+
+        function activeTokensSignature(list) {
+            return JSON.stringify((list || []).map(function(item) {
+                return [
+                    Number(item.visual_idx),
+                    item.sentence_idx == null ? null : Number(item.sentence_idx),
+                    item.token_order == null ? '' : String(item.token_order),
+                    item.atomic_id == null ? null : item.atomic_id,
+                    String(item.lemma || '')
+                ];
+            }));
+        }
+
         function saveActiveTokenFocus() {
             if (stateClient) stateClient.save();
         }
+
+        function restoreSelectedLemmasSnapshot(snapshot) {
+            if (!window.AppState || !window.AppState.selectedLemmas || !snapshot) return;
+            var current = window.AppState.selectedLemmas;
+            for (var key in current) {
+                if (current.hasOwnProperty(key) && !snapshot.hasOwnProperty(key)) {
+                    delete current[key];
+                }
+            }
+            for (var sKey in snapshot) {
+                if (snapshot.hasOwnProperty(sKey)) {
+                    current[sKey] = snapshot[sKey];
+                }
+            }
+        }
+
+        function settleActiveTokenDrag(shouldSave) {
+            if (!isTokenDragSelecting) return false;
+            var beforeSig = activeTokensSignature(initialActiveTokenSelections);
+            var afterSig = activeTokensSignature(window.AppState && window.AppState.activeTokenSelections);
+            isTokenDragSelecting = false;
+            initialSelectedLemmas = null;
+            initialActiveTokenSelections = null;
+            mousedownTargetSpan = null;
+            tokenDragStartIdx = -1;
+            tokenDragLastIdx = -1;
+            var lt = document.getElementById('lemma-table');
+            if (lt) lt.classList.remove('kw-table-dragging');
+            if (shouldSave !== false && beforeSig !== afterSig) {
+                saveActiveTokenFocus();
+            }
+            return true;
+        }
+        window.settleActiveTokenDrag = settleActiveTokenDrag;
 
         function restoreActiveTokenFocus() {
             if (!Array.isArray(window.AppState.restoredActiveTokens)) return;
@@ -5347,7 +5399,9 @@
                     });
                 }
             }
-            saveActiveTokenFocus();
+            if (!isTokenDragSelecting) {
+                saveActiveTokenFocus();
+            }
         }
 
         /** @param {HTMLElement} span */
@@ -5365,7 +5419,9 @@
             window.AppState.activeTokenSelections = window.AppState.activeTokenSelections.filter(function(item) {
                 return !vIdxsToRemove[String(item.visual_idx)];
             });
-            saveActiveTokenFocus();
+            if (!isTokenDragSelecting) {
+                saveActiveTokenFocus();
+            }
         }
 
         window.findTokenDataByVisualIdx = findTokenDataByVisualIdx;
@@ -6318,6 +6374,8 @@
                                 initialSelectedMap[key] = selectedRowIdsMap[key];
                             }
                         }
+                        initialSelectedLemmas = Object.assign({}, (window.AppState && window.AppState.selectedLemmas) || {});
+                        initialActiveTokenSelections = cloneActiveTokens(window.AppState && window.AppState.activeTokenSelections);
 
                         var relatedSpans = findRelatedTokenSpans(span);
                         var vIdxsToRemove = {};
@@ -6418,7 +6476,9 @@
                     e = (e || window.event);
                     if (isTokenDragSelecting) {
                         if (e.buttons !== undefined && (e.buttons & 1) === 0) {
-                            isTokenDragSelecting = false;
+                            settleActiveTokenDrag(true);
+                            updateRowStyles();
+                            updateBidirectionalHighlights();
                             notifyAHKSelection();
                             return;
                         }
@@ -6443,6 +6503,10 @@
                             if (initialSelectedMap.hasOwnProperty(key)) {
                                 selectedRowIdsMap[key] = initialSelectedMap[key];
                             }
+                        }
+                        restoreSelectedLemmasSnapshot(initialSelectedLemmas);
+                        if (window.AppState && initialActiveTokenSelections !== null) {
+                            window.AppState.activeTokenSelections = cloneActiveTokens(initialActiveTokenSelections);
                         }
 
                         var minIdx = Math.min(tokenDragStartIdx, currIdx);
@@ -7137,11 +7201,18 @@
                     }
                 }
 
+                var shouldSaveTokenDrag = isTokenDragSelecting &&
+                    activeTokensSignature(initialActiveTokenSelections) !== activeTokensSignature(window.AppState && window.AppState.activeTokenSelections);
                 isDragSelecting = false;
                 isTokenDragSelecting = false;
+                initialSelectedLemmas = null;
+                initialActiveTokenSelections = null;
                 isRmbDragFlipping = false;
                 updateRowStyles();
                 updateBidirectionalHighlights();
+                if (shouldSaveTokenDrag) {
+                    saveActiveTokenFocus();
+                }
                 needNotify = true;
             }
             mousedownTargetSpan = null;
@@ -7252,6 +7323,11 @@
                 if (window.clearMVPBookmarks) {
                     var bCleared = window.clearMVPBookmarks();
                     if (bCleared) {
+                        if (settleActiveTokenDrag(true)) {
+                            updateRowStyles();
+                            updateBidirectionalHighlights();
+                            notifyAHKSelection();
+                        }
                         return;
                     }
                 }
@@ -7387,6 +7463,7 @@
 
         function clearAllSelections() {
             if (!workspaceCommandsReady()) return;
+            settleActiveTokenDrag(false);
             selectedRowIdsMap = {};
             selectedOrphanWordIdxsMap = {};
             if (window.AppState) {
@@ -9883,6 +9960,10 @@
             }
             if (!getSessionLang()) return Promise.reject(new Error('Session language missing'));
             if (window.commitActiveEdit) window.commitActiveEdit();
+            if (settleActiveTokenDrag(true)) {
+                updateRowStyles();
+                updateBidirectionalHighlights();
+            }
             return preferenceCommands.flush().then(function() { return stateClient.flush(); }).then(function() { return persistPending(false); }).then(function() {
                 if (window.isDirty()) return window.flushPendingSaves();
             });
@@ -9895,6 +9976,10 @@
                 return Promise.resolve(false);
             }
             if (window.commitActiveEdit) window.commitActiveEdit();
+            if (settleActiveTokenDrag(true)) {
+                updateRowStyles();
+                updateBidirectionalHighlights();
+            }
             return preferenceCommands.flush().then(function() { return stateClient.flush(); }).then(function() {
                 return persistPending(false);
             }).then(function() {

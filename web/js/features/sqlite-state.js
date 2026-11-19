@@ -134,9 +134,27 @@
     function present(state, phase, error) {
         if (state.options.present) state.options.present(phase, error);
     }
+    function tokenSignature(item) {
+        return {
+            visual_idx: Number(item.visual_idx),
+            sentence_idx: item.sentence_idx === null || item.sentence_idx === undefined ? null : Number(item.sentence_idx),
+            token_order: item.token_order === null || item.token_order === undefined ? '' : String(item.token_order),
+            atomic_id: item.atomic_id === undefined ? null : item.atomic_id,
+            lemma: String(item.lemma || ''),
+            atomic_row_ids: Array.isArray(item.atomic_row_ids) ? item.atomic_row_ids.map(String) : [],
+            row_ids: Array.isArray(item.row_ids) ? item.row_ids.map(String) : []
+        };
+    }
+    function viewSignature(view) {
+        return JSON.stringify({
+            active_card: Number(view.active_card),
+            active_tokens: (view.active_tokens || []).map(tokenSignature)
+        });
+    }
     function dispose(state) {
         if (state.run) { clearTimeout(state.run.deadline); state.run.abort(); }
         state.run = null; state.phase = 'disposed';
+        state.pendingIntent = null; state.inFlight = false; state.inFlightSignature = null;
     }
     function start(state) {
         dispose(state);
@@ -146,12 +164,14 @@
         }
         var run = new AbortController(); state.run = run;
         state.phase = 'initializing'; state.failure = null; state.tail = Promise.resolve();
+        state.committedSignature = null; state.pendingIntent = null; state.inFlight = false; state.inFlightSignature = null;
         present(state, 'initializing');
         state.ready = readView(state, run).then(migrate.bind(null, state, run))
             .then(function(view) {
                 checkRun(state, run); state.viewRevision = view.revision;
                 var reconcile = state.options.restore(view);
                 if (reconcile) return commitView(state, state.options.capture(), run);
+                state.committedSignature = view.revision > 0 ? viewSignature(state.options.capture()) : null;
             }).then(function() {
                 checkRun(state, run); state.phase = 'ready'; present(state, 'ready');
             }).catch(function(error) {
@@ -164,30 +184,75 @@
         return state.ready;
     }
     function commitView(state, intent, run) {
+        var signature = viewSignature(intent);
         return state.options.send('/api/v1/client-view', Object.assign(viewBody(state), intent,
             {expected_revision: state.viewRevision}), undefined, run.signal).then(requireView).then(function(view) {
-                checkRun(state, run); state.viewRevision = view.revision;
+                checkRun(state, run); state.viewRevision = view.revision; state.committedSignature = signature;
             });
     }
     function reportFailure(state, error) {
         state.phase = 'failed'; state.failure = error; state.options.failure(error);
     }
-    function save(state) {
-        if (!state.viewEnabled || state.phase === 'draft') return Promise.resolve();
-        if (state.phase === 'initializing') return state.ready;
-        if (state.phase === 'disposed') return Promise.resolve();
-        return enqueueView(state, state.options.capture());
+    function sameCommittedView(state, signature) {
+        return state.phase !== 'failed' && state.committedSignature !== null && signature === state.committedSignature;
     }
-    function enqueueView(state, intent) {
-        var run = state.run;
-        state.tail = state.tail.then(function() { return state.ready; }).then(function() {
-            if (state.run !== run) throw new Error('Workspace save belongs to an inactive document');
-            state.phase = 'pending';
-            return state.options.send('/api/v1/client-view', Object.assign(viewBody(state), intent, {expected_revision: state.viewRevision}));
-        }).then(requireView).then(function(view) {
+    function finishViewSend(state, run, error) {
+        if (state.run !== run) return;
+        state.inFlightSignature = null;
+        if (error) reportFailure(state, error);
+        if (state.pendingIntent && state.pendingIntent.run === run) {
+            return sendPendingView(state, run);
+        }
+        state.inFlight = false;
+        if (!error) state.phase = 'ready';
+    }
+    function sendPendingView(state, run) {
+        if (state.run !== run) throw new Error('Workspace save belongs to an inactive document');
+        var next = state.pendingIntent;
+        state.pendingIntent = null;
+        if (!next || next.run !== run) {
+            state.inFlight = false;
+            return;
+        }
+        if (sameCommittedView(state, next.signature)) {
+            state.inFlight = false;
+            state.phase = 'ready';
+            state.failure = null;
+            return;
+        }
+        state.phase = 'pending';
+        state.inFlightSignature = next.signature;
+        return state.options.send('/api/v1/client-view', Object.assign(viewBody(state), next.intent,
+            {expected_revision: state.viewRevision})).then(requireView).then(function(view) {
             if (state.run !== run) return;
-            state.viewRevision = view.revision; state.phase = 'ready'; state.failure = null;
-        }, function(error) { if (state.run === run) reportFailure(state, error); });
+            state.viewRevision = view.revision;
+            state.committedSignature = next.signature;
+            state.failure = null;
+            return finishViewSend(state, run, null);
+        }, function(error) {
+            return finishViewSend(state, run, error);
+        });
+    }
+    function save(state) {
+        if (!state.viewEnabled || state.phase === 'draft' || state.phase === 'disposed') return Promise.resolve();
+        if (state.phase === 'initializing') return state.ready;
+        var intent = state.options.capture();
+        var signature = viewSignature(intent);
+        if (!state.inFlight && sameCommittedView(state, signature)) return state.tail;
+        if (state.inFlight && !state.pendingIntent && signature === state.inFlightSignature) return state.tail;
+        var run = state.run;
+        state.pendingIntent = {intent: intent, signature: signature, run: run};
+        if (state.inFlight) return state.tail;
+        state.inFlight = true;
+        state.tail = state.tail.then(function() { return state.ready; }).then(function() {
+            return sendPendingView(state, run);
+        }, function(error) {
+            if (state.run === run) {
+                state.inFlight = false;
+                state.inFlightSignature = null;
+                reportFailure(state, error);
+            }
+        });
         return state.tail;
     }
     function flush(state) {
@@ -237,6 +302,7 @@
         var viewEnabled = enabled && options.ui.client_view_enabled !== false;
         var state = {options: options, enabled: enabled, viewEnabled: viewEnabled, client: viewEnabled && !options.draft ? clientSlot() : null,
             revisions: Object.assign({}, options.ui.preference_revisions || {}), values: Object.assign({}, options.ui), viewRevision: 0,
+            committedSignature: null, inFlight: false, inFlightSignature: null, pendingIntent: null,
             phase: options.draft ? 'draft' : 'initializing', failure: null, tail: Promise.resolve(), ready: null};
         return {start: start.bind(null, state), dispose: dispose.bind(null, state), save: save.bind(null, state), flush: flush.bind(null, state),
             sendPreference: sendPreference.bind(null, state), receive: receive.bind(null, state), projectPreference: projectPreference.bind(null, state)};

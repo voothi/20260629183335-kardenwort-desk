@@ -991,6 +991,10 @@
             }
             if (!targetCard) return;
 
+            if (!isImmediate && typeof w.settleActiveTokenDrag === 'function') {
+                w.settleActiveTokenDrag(false);
+            }
+
             if (typeof w.clearMVPBookmarks === 'function') {
                 w.clearMVPBookmarks();
             }
