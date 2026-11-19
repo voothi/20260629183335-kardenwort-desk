@@ -13012,6 +13012,20 @@ html, body {{
 
     effective_server_enabled = bool(server_enabled)
     effective_api_token = str(api_token or "") if effective_server_enabled else ""
+    export_only_context_cols = {
+        "sentencedestination2",
+        "sentencedestination2contextleft",
+        "sentencedestination2contextright",
+    }
+    ui_col_indices = [
+        idx for idx, col in enumerate(headers or [])
+        if str(col).strip().lower() not in export_only_context_cols
+    ]
+    ui_session_headers = [headers[idx] for idx in ui_col_indices]
+    ui_session_rows = [
+        [row[idx] if idx < len(row) else "" for idx in ui_col_indices]
+        for row in (data_rows or [])
+    ]
     session_data = {
         "zid": str(zid),
         "session_zid": str(zid),
@@ -13019,8 +13033,8 @@ html, body {{
         "target_lang": str(target_lang),
         "source_text": str(text),
         "sentence_translation": clean_sentence_trans,
-        "headers": headers,
-        "data_rows": data_rows,
+        "headers": ui_session_headers,
+        "data_rows": ui_session_rows,
         "tsv_path": str(working_tsv_path or tsv_path or ""),
         "theme": theme,
         "zoom_level": zoom_level,

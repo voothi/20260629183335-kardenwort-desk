@@ -129,8 +129,13 @@
         return result;
     }
 
+    function resolveDeltaIdentityMap(cards, fallbackIdentities) {
+        if (cards && cards.length) return occurrenceRowIds(cards);
+        return fallbackIdentities || {};
+    }
+
     function normalizeOccurrenceRowDeltas(rows, cards, fallbackIdentities) {
-        var identities = (cards && cards.length) ? occurrenceRowIds(cards) : (fallbackIdentities || {});
+        var identities = resolveDeltaIdentityMap(cards, fallbackIdentities);
         var result = {};
         Object.keys(rows).forEach(function(id) {
             var delta = rows[id];
