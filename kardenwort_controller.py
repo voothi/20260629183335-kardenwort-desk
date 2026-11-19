@@ -3419,9 +3419,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         self._send_cors_headers()
         self.end_headers()
 
-    def _send_json(self, status_code: int, data_obj: dict):
+    def _send_json(self, status_code: int, data_obj: dict, *, credential_bearing: bool = False):
         body = json.dumps({"status": "success", "data": data_obj}, ensure_ascii=False).encode('utf-8')
-        self._send_bytes(status_code, body, 'application/json; charset=utf-8')
+        self._send_bytes(status_code, body, 'application/json; charset=utf-8', credential_bearing=credential_bearing)
 
     def _send_error_json(self, status_code: int, error_code, message: str, details=None, zid=None):
         payload = {
@@ -3435,10 +3435,26 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         self._send_bytes(status_code, body, 'application/json; charset=utf-8')
 
-    def _send_bytes(self, status_code, body, content_type):
+    def _send_credential_cors_headers(self):
+        origin = self._single_header('Origin')
+        host_val = self._single_header('Host')
+        if isinstance(origin, str) and isinstance(host_val, str):
+            host_l = host_val.lower()
+            if origin == 'null' or origin.lower() in (f'http://{host_l}', f'https://{host_l}'):
+                self.send_header('Access-Control-Allow-Origin', origin)
+                self.send_header('Vary', 'Origin')
+        self.send_header('Access-Control-Allow-Headers', 'X-API-Token, X-ZID, Content-Type, Authorization')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+
+    def _send_bytes(self, status_code, body, content_type, *, credential_bearing: bool = False):
         try:
             self.send_response(status_code)
-            self._send_cors_headers()
+            if credential_bearing:
+                self._send_credential_cors_headers()
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Referrer-Policy', 'no-referrer')
+            else:
+                self._send_cors_headers()
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(body)))
             if content_type.startswith('audio/'):
@@ -3448,6 +3464,21 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
             self.close_connection = True
             logger.debug('Peer disconnected during response to %s', self.path)
+
+    def _send_credential_html(self, html_text: str):
+        body = html_text.encode('utf-8')
+        try:
+            self.send_response(200)
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Security-Policy', "frame-ancestors 'none'")
+            self.send_header('Referrer-Policy', 'no-referrer')
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            self.close_connection = True
+            logger.debug('Peer disconnected during HTML response to %s', self.path)
 
     def _audio_request(self, path):
         if not getattr(self.server, 'api_key', ''):
@@ -3506,11 +3537,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         except Exception as e:
             raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Malformed JSON payload: {e}")
 
-    def _authenticate_token(self, body_data=None, query_params=None):
-        api_key = getattr(self.server, 'api_key', '')
-        if not api_key:
-            return
-
+    def _extract_provided_token(self, body_data=None, query_params=None):
         provided_token = self.headers.get('X-API-Token') or self.headers.get('X-API-Key')
         if not provided_token:
             auth_header = self.headers.get('Authorization', '')
@@ -3519,11 +3546,76 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if not provided_token and body_data and isinstance(body_data, dict):
             provided_token = body_data.get('token')
         if not provided_token and query_params and isinstance(query_params, dict):
-            token_list = query_params.get('token', [])
-            if not token_list:
-                token_list = query_params.get('api_token', [])
+            token_list = query_params.get('token', []) or query_params.get('api_token', [])
             if token_list:
                 provided_token = token_list[0]
+        return provided_token
+
+    def _single_header(self, name: str):
+        values = self.headers.get_all(name)
+        if not values:
+            return None
+        if len(values) != 1:
+            return False
+        return values[0].strip()
+
+    def _allowed_controller_hosts(self) -> set:
+        port = getattr(self.server, 'server_port', None) or (
+            self.server.server_address[1] if hasattr(self.server, 'server_address') else 18335
+        )
+        hosts = {f'127.0.0.1:{port}', f'localhost:{port}', f'[::1]:{port}'}
+        bound = self.server.server_address[0] if hasattr(self.server, 'server_address') else ''
+        if bound and bound not in ('0.0.0.0', '::', ''):
+            hosts.add(f'{bound.lower()}:{port}')
+        return hosts
+
+    def _is_valid_browser_document_navigation(self, method: str, host_val: str) -> bool:
+        if method != 'GET':
+            return False
+        mode = self._single_header('Sec-Fetch-Mode')
+        dest = self._single_header('Sec-Fetch-Dest')
+        site = self._single_header('Sec-Fetch-Site')
+        if mode != 'navigate' or dest != 'document' or site not in ('none', 'same-origin'):
+            return False
+        origin = self._single_header('Origin')
+        if origin is False:
+            return False
+        if origin is not None:
+            return origin.lower() in (f'http://{host_val}', f'https://{host_val}')
+        return True
+
+    def _require_credential_admission(self, method: str, body_data=None, query_params=None, *, allow_browser_nav: bool) -> str:
+        host_raw = self._single_header('Host')
+        if not isinstance(host_raw, str) or host_raw.lower() not in self._allowed_controller_hosts():
+            raise StructuredError(ErrorCode.UNAUTHORIZED, "Invalid or ambiguous controller Host header")
+        host_val = host_raw.lower()
+
+        api_key = str(getattr(self.server, 'api_key', '') or '').strip()
+        if not api_key:
+            if not allow_browser_nav:
+                raise StructuredError(ErrorCode.TOKEN_NOT_CONFIGURED, "Controller authentication token is not configured")
+            if not self._is_valid_browser_document_navigation(method, host_val):
+                raise StructuredError(ErrorCode.UNAUTHORIZED, "Document request requires own-origin browser navigation")
+            return ""
+
+        provided_token = self._extract_provided_token(body_data=body_data, query_params=query_params)
+        if provided_token:
+            import hmac
+            if not hmac.compare_digest(str(provided_token).strip(), api_key):
+                raise StructuredError(ErrorCode.UNAUTHORIZED, "Invalid or missing API authentication token")
+            return api_key
+
+        if allow_browser_nav and self._is_valid_browser_document_navigation(method, host_val):
+            return api_key
+
+        raise StructuredError(ErrorCode.UNAUTHORIZED, "Invalid or missing API authentication token")
+
+    def _authenticate_token(self, body_data=None, query_params=None):
+        api_key = getattr(self.server, 'api_key', '')
+        if not api_key:
+            return
+
+        provided_token = self._extract_provided_token(body_data=body_data, query_params=query_params)
 
         import hmac
         if not provided_token or not hmac.compare_digest(str(provided_token).strip(), str(api_key).strip()):
@@ -4372,6 +4464,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
 
             body = self._read_json_body() if method == 'POST' else {}
+            server_api_key = self._require_credential_admission(
+                method, body_data=body, query_params=qs, allow_browser_nav=False
+            )
 
             session_zid = body.get('session_zid') or body.get('zid') or qs.get('session_zid', [None])[0] or qs.get('zid', [None])[0]
             language = body.get('language') or body.get('lang') or qs.get('language', [None])[0] or qs.get('lang', [None])[0]
@@ -4441,6 +4536,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         trace_id=f"{session_zid}:render:init",
                         spawn_children=False,
                         return_children=True,
+                        api_token=server_api_key,
+                        server_enabled=True,
                     )
                     if isinstance(render_out, tuple):
                         html_result, child_args = render_out
@@ -4501,6 +4598,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                             trace_id=f"{active_zid}:render:init",
                             spawn_children=False,
                             return_children=True,
+                            api_token=server_api_key,
+                            server_enabled=True,
                         )
                         if isinstance(render_out, tuple):
                             html_result, child_args = render_out
@@ -4562,6 +4661,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     trace_id=f"{active_zid}:render:init",
                     spawn_children=False,
                     return_children=True,
+                    api_token=server_api_key,
+                    server_enabled=True,
                 )
                 if isinstance(render_out, tuple):
                     html_result, child_args = render_out
@@ -4571,14 +4672,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             else:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'text' or 'session_zid'")
 
-            server_api_key = getattr(self.server, 'api_key', '')
-            if server_api_key and html_result:
-                tok_injection = f'<script>window.API_TOKEN = "{server_api_key}";</script>'
-                if '</head>' in html_result:
-                    html_result = html_result.replace('</head>', f'{tok_injection}</head>', 1)
-                else:
-                    html_result = tok_injection + html_result
-
             b64_html = encode(html_result)
             self._send_json(200, {
                 "ok": True,
@@ -4586,7 +4679,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 "html_b64": b64_html,
                 "html": html_result,
                 "children": child_args or [],
-            })
+            }, credential_bearing=True)
             return
 
         # Verification page endpoint
@@ -4623,6 +4716,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
 
+            admitted_token = self._require_credential_admission(
+                method, query_params=qs, allow_browser_nav=True
+            )
             session_zid = qs.get('session_zid', [None])[0] or qs.get('zid', [None])[0]
             project_id = qs.get('project_id', [None])[0] or qs.get('project', [None])[0]
             text = qs.get('text', [None])[0]
@@ -4671,7 +4767,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     goldendict.setdefault('heading_lemmas', '__default__')
                     goldendict.setdefault('run_intellifiller', False)
                     goldendict['server_enabled'] = True
-                    goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
+                    goldendict['server_api_key'] = admitted_token
 
                     html = render_lookup_html(
                         text=source_text,
@@ -4686,7 +4782,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         data_rows=data_rows,
                         sentence_translation=sentence_translation,
                         session_zid=synth_zid,
-                        api_token=getattr(self.server, 'api_key', ''),
+                        api_token=admitted_token,
                         server_enabled=True,
                         fingerprint=fingerprint,
                     )
@@ -4720,14 +4816,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         resolved_paths=self.server.resolved_paths,
                         theme=req_theme,
                         tsv_path=tsv_path,
+                        api_token=admitted_token,
+                        server_enabled=True,
                     )
-                body = html.encode('utf-8')
-                self.send_response(200)
-                self._send_cors_headers()
-                self.send_header('Content-Type', 'text/html; charset=utf-8')
-                self.send_header('Content-Length', str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_credential_html(html)
                 return
 
             if session_zid:
@@ -4750,14 +4842,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                             theme=req_theme,
                             seq_num=int(seq_num) if seq_num else None,
                             mismatch_info=draft.get("mismatch_info"),
+                            api_token=admitted_token,
+                            server_enabled=True,
                         )
-                        body = html.encode('utf-8')
-                        self.send_response(200)
-                        self._send_cors_headers()
-                        self.send_header('Content-Type', 'text/html; charset=utf-8')
-                        self.send_header('Content-Length', str(len(body)))
-                        self.end_headers()
-                        self.wfile.write(body)
+                        self._send_credential_html(html)
                         return
                     raise StructuredError(ErrorCode.NOT_FOUND, f"Session '{session_zid}' not found: {e}")
 
@@ -4866,7 +4954,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     goldendict.setdefault('heading_lemmas', '__default__')
                     goldendict.setdefault('run_intellifiller', False)
                     goldendict['server_enabled'] = True
-                    goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
+                    goldendict['server_api_key'] = admitted_token
 
                     html = render_lookup_html(
                         text=source_text,
@@ -4881,7 +4969,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         data_rows=data_rows,
                         sentence_translation=sentence_translation,
                         session_zid=session_zid,
-                        api_token=getattr(self.server, 'api_key', ''),
+                        api_token=admitted_token,
                         server_enabled=True,
                         fingerprint=fingerprint,
                     )
@@ -4928,21 +5016,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         theme=req_theme,
                         tsv_path=tsv_path,
                         seq_num=resolved_seq_num,
+                        api_token=admitted_token,
+                        server_enabled=True,
                     )
-                    server_api_key = getattr(self.server, 'api_key', '')
-                    if server_api_key and html:
-                        tok_injection = f'<script>window.API_TOKEN = "{server_api_key}";</script>'
-                        if '</head>' in html:
-                            html = html.replace('</head>', f'{tok_injection}</head>', 1)
-                        else:
-                            html = tok_injection + html
-                body = html.encode('utf-8')
-                self.send_response(200)
-                self._send_cors_headers()
-                self.send_header('Content-Type', 'text/html; charset=utf-8')
-                self.send_header('Content-Length', str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_credential_html(html)
                 return
 
             if text and language:
@@ -4967,13 +5044,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     goldendict=self.server.goldendict,
                     bypass_lang_check=bypass_lang_check,
                 )
-                body = res["html"].encode('utf-8')
-                self.send_response(200)
-                self._send_cors_headers()
-                self.send_header('Content-Type', 'text/html; charset=utf-8')
-                self.send_header('Content-Length', str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_credential_html(res["html"])
                 return
 
 
@@ -5252,6 +5323,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 tsv_path_arg = Path(raw_tsv) if raw_tsv else None
 
             # Execute run_render_flow
+            api_token = getattr(self.server, 'api_key', '')
             render_out = render_flow_fn(
                 text=draft.get("text", ""),
                 language=chosen_source_lang,
@@ -5265,6 +5337,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 seq_num=int(draft["seq_num"]) if draft.get("seq_num") else None,
                 spawn_children=False,
                 return_children=True,
+                api_token=api_token,
+                server_enabled=True,
             )
             if isinstance(render_out, tuple):
                 html_result, child_args = render_out

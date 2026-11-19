@@ -10263,7 +10263,7 @@ def format_provider_skeleton_label(provider_name: str) -> str:
     return f"{provider_name.capitalize()}..."
 
 
-def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level=None, theme=None, tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None):
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level=None, theme=None, tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None, api_token="", server_enabled=False):
     from kardenwort_state_runtime import preference_operation
     with preference_operation(config, resolved_paths,
                               refresh=resolved_paths.get('storage_backend') == 'sqlite') as config:
@@ -10277,7 +10277,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 return ""
             _ACTIVE_ZIDS.add(zid)
         try:
-            return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num, trace_id=trace_id, spawn_children=spawn_children, return_children=return_children, mismatch_info=mismatch_info)
+            return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num, trace_id=trace_id, spawn_children=spawn_children, return_children=return_children, mismatch_info=mismatch_info, api_token=api_token, server_enabled=server_enabled)
         finally:
             with _ACTIVE_ZIDS_LOCK:
                 _ACTIVE_ZIDS.discard(zid)
@@ -10327,7 +10327,7 @@ def tag_server_compound_tokens(source_tokens: List[Dict[str, Any]]) -> None:
         i += 1
 
 
-def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None):
+def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None, api_token="", server_enabled=False):
     is_mismatch = bool(mismatch_info and mismatch_info.get("is_mismatch"))
     if wordfill_cfg is None and config is not None:
         wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
@@ -10989,6 +10989,8 @@ html, body {{
     elif cached_session_bundle and cached_session_bundle.get("session"):
         cached_zid = cached_session_bundle["session"].get("zid")
         working_tsv_path = str(cached_zid) if is_sqlite else results_dir / f"{cached_zid}-{slug}.{language}.tsv"
+        if is_sqlite and cached_zid:
+            zid = str(cached_zid)
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
     else:
@@ -13008,6 +13010,8 @@ html, body {{
             if st != "[FAILED]" and not st.startswith("[Error"):
                 clean_sentence_trans = st
 
+    effective_server_enabled = bool(server_enabled)
+    effective_api_token = str(api_token or "") if effective_server_enabled else ""
     session_data = {
         "zid": str(zid),
         "session_zid": str(zid),
@@ -13020,8 +13024,8 @@ html, body {{
         "tsv_path": str(working_tsv_path or tsv_path or ""),
         "theme": theme,
         "zoom_level": zoom_level,
-        "server_enabled": False,
-        "api_token": "",
+        "server_enabled": effective_server_enabled,
+        "api_token": effective_api_token,
         "server_url": "",
         "fingerprint": "",
         "pos_display_order": POS_DISPLAY_ORDER,
@@ -13030,6 +13034,7 @@ html, body {{
     eff_prov = sentence_provenance if (has_real_text and not is_mismatch and sentence_provenance) else ""
     bootstrap_payload = {
         "ui_config": ui_cfg,
+        "session_data": session_data,
         "active_sentence_idx": active_c["sentence_idx"] if smc.delivery_mode == "container" and len(sentence_cards) > 1 and not is_mismatch else 0,
         "theme_colors": resolve_theme_colors(config, theme),
         "sentence_cards": sentence_cards,

@@ -164,6 +164,11 @@ def test_fresh_project_render_bootstraps_authenticated_workspace(browser, tmp_pa
 
         doc_response = page.goto(f"{server_url}/session/render?project_id={project_id}", wait_until="domcontentloaded")
         assert doc_response is not None and doc_response.status == 200
+        doc_headers = {k.lower(): v for k, v in doc_response.headers.items()}
+        assert doc_headers.get("cache-control") == "no-store"
+        assert doc_headers.get("content-security-policy") == "frame-ancestors 'none'"
+        assert doc_headers.get("referrer-policy") == "no-referrer"
+        assert "access-control-allow-origin" not in doc_headers
         raw_html = doc_response.text()
 
         assert "<script>window.API_TOKEN" not in raw_html, "Raw script token injection must not be emitted"
@@ -567,3 +572,35 @@ def test_unauthenticated_programmatic_and_hostile_origin_renders_never_disclose_
     finally:
         with controller._DRAFT_SESSIONS_LOCK:
             controller._DRAFT_SESSIONS.pop(DRAFT_ZID, None)
+
+
+@pytest.mark.parametrize("blank_key", ["", "   "])
+def test_blank_configured_key_does_not_become_usable_credential(browser, tmp_path, running_controller, blank_key):
+    """Genuine missing configuration must reject /api/v1/render with TOKEN_NOT_CONFIGURED and leave bootstrap empty."""
+    server_url, server, adapter = running_controller
+    project_id = _seed_owned_project(server, adapter, tmp_path)
+    server.api_key = blank_key
+    server.config.set("server", "api_key", blank_key)
+
+    status, _, raw_body = _http_request(
+        f"{server_url}/api/v1/render",
+        method="POST",
+        headers={},
+        body={"session_zid": SESSION_ZID_1, "language": "de"},
+    )
+    assert status == 403
+    err = json.loads(raw_body)
+    assert err.get("error_code") == "TOKEN_NOT_CONFIGURED"
+
+    context = browser.new_context()
+    try:
+        page = context.new_page()
+        page.set_default_timeout(8000)
+        doc_response = page.goto(f"{server_url}/session/render?project_id={project_id}", wait_until="domcontentloaded")
+        assert doc_response is not None and doc_response.status == 200
+        session_island = _extract_json_island(doc_response.text(), "session-data")
+        assert session_island.get("api_token", "") == ""
+        assert page.evaluate("() => window.getApiToken()") == ""
+    finally:
+        context.close()
+

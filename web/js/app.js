@@ -394,7 +394,7 @@
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-API-Token': API_TOKEN
+                'X-API-Token': getApiToken()
             },
             body: JSON.stringify(payload)
         })
@@ -516,7 +516,7 @@
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-API-Token': API_TOKEN
+                'X-API-Token': getApiToken()
             },
             body: JSON.stringify(payload)
         })
@@ -542,7 +542,7 @@
     function initSSE(sessionZid) {
         if (isServerDisabled()) return;
         if (!window.SSEBridge) throw new Error('Required SSE bridge is unavailable');
-        window.SSEBridge.connect(sessionZid, SERVER_URL, API_TOKEN);
+        window.SSEBridge.connect(sessionZid, SERVER_URL, getApiToken());
     }
     window.initSSE = initSSE;
 
