@@ -1378,6 +1378,14 @@
             el.classList.add(name);
         }
     }
+    /** @param {Element|null|undefined} el */
+    function isPrimaryActiveWordSpan(el) {
+        return !!(el && el.classList && (
+            el.classList.contains('highlight-orange-active') ||
+            el.classList.contains('highlight-purple-active') ||
+            el.classList.contains('active-subtoken')
+        ));
+    }
     window.addClass = addClass;
     window.removeClass = removeClass;
     window.addEvent = addEvent;
@@ -2216,7 +2224,7 @@
                 var allWords = (document.querySelectorAll('#source-container span.word'));
                 for (var w = 0; w < allWords.length; w++) {
                     var otherSpan = allWords[w];
-                    if (otherSpan === this) continue;
+                    if (otherSpan === this || isPrimaryActiveWordSpan(otherSpan)) continue;
                     var otherText = (otherSpan.getAttribute('data-word') || otherSpan.textContent || '').trim().toLowerCase();
                     var otherLemma = '';
                     if (typeof window.findTokenData === 'function') {

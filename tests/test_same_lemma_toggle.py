@@ -1980,3 +1980,99 @@ def test_hover_preserves_bound_partner_primary_roles_and_focus(page, tmp_path, s
 
     assert page.evaluate('getSelectedRowsArray()') == membership
     assert page.evaluate('AppState.activeTokenSelections') == focus
+
+
+@pytest.mark.parametrize('theme', ['dark', 'light', 'white'])
+def test_hover_repeated_transitions_and_lemma_toggles_preserve_theme_colors_and_geometry(page, tmp_path, theme):
+    page.set_viewport_size({'width': 1280, 'height': 900})
+    html, _ = _row_highlight_document(tmp_path, 'Haus bleibt Haus und Haus.', [('Haus', 'Haus', 'noun', 1)], theme=theme)
+    _open_row_highlight_document(page, html)
+    page.locator('#lemma-table tbody tr').first.click()
+    page.wait_for_timeout(250)
+
+    haus = _source_words(page, ['haus'])
+    primary_bg = haus.nth(0).evaluate('el => window.getComputedStyle(el).backgroundColor')
+    geometry_query = """() => Array.from(document.querySelectorAll(
+        '#source-container span.word, .kw-action-toolbar, #kw-btn-same-lemma, #kw-btn-filter-selected'
+    )).map(el => {
+        const r = el.getBoundingClientRect();
+        return [r.x, r.y, r.width, r.height, el.getClientRects().length];
+    })"""
+    baseline_geometry = page.evaluate(geometry_query)
+
+    def assert_geometry_invariant():
+        current = page.evaluate(geometry_query)
+        assert len(current) == len(baseline_geometry)
+        for left, right in zip(baseline_geometry, current):
+            assert all(abs(a - b) < 0.01 for a, b in zip(left[:4], right[:4]))
+            assert left[4] == right[4]
+
+    _assert_source_roles(page, ['haus'], ['primary', 'baseline', 'baseline'])
+    assert_geometry_invariant()
+
+    page.locator('#kw-btn-same-lemma').click()
+    page.wait_for_timeout(250)
+    _assert_source_roles(page, ['haus'], ['primary', 'peer', 'peer'])
+    peer_bg = haus.nth(1).evaluate('el => window.getComputedStyle(el).backgroundColor')
+    assert primary_bg != peer_bg
+    assert_geometry_invariant()
+
+    for _ in range(2):
+        for target in (haus.nth(1), haus.nth(2), haus.nth(0)):
+            target.hover()
+            page.wait_for_timeout(250)
+            _assert_source_roles(page, ['haus'], ['primary', 'peer', 'peer'])
+            assert haus.nth(0).evaluate('el => window.getComputedStyle(el).backgroundColor') == primary_bg
+            assert_geometry_invariant()
+        page.mouse.move(0, 0)
+        page.wait_for_timeout(250)
+        _assert_source_roles(page, ['haus'], ['primary', 'peer', 'peer'])
+        assert haus.nth(0).evaluate('el => window.getComputedStyle(el).backgroundColor') == primary_bg
+        assert_geometry_invariant()
+
+    for expected_peer in ('baseline', 'peer', 'baseline'):
+        page.locator('#kw-btn-same-lemma').click()
+        page.wait_for_timeout(250)
+        _assert_source_roles(page, ['haus'], ['primary', expected_peer, expected_peer])
+        assert haus.nth(0).evaluate('el => window.getComputedStyle(el).backgroundColor') == primary_bg
+        assert_geometry_invariant()
+
+
+def test_hover_after_real_sqlite_cleared_focus_reload_does_not_resurrect_focus(page, tmp_path, preference_world):
+    from kardenwort_state_runtime import preference_store
+    _, server, config_path = preference_world
+    store = preference_store(server.config, server.resolved_paths)
+    store.set('auto_save_on_close', False)
+    initial_config = config_path.read_bytes()
+    html, stored = _row_highlight_document(tmp_path, 'Haus bleibt Haus.', [('Haus', 'Haus', 'noun', 1)])
+    adapter = serve_document(page, preference_world, html, stored)
+    zid = '20261117225056'
+    page.wait_for_selector('#lemma-table tbody tr')
+
+    with page.expect_response('**/api/v1/config') as response:
+        page.locator('#kw-btn-same-lemma').click()
+    assert response.value.ok
+    page.locator('#lemma-table tbody tr').first.click()
+    page.evaluate('flushPendingSaves()')
+    page.evaluate('saveClientView()')
+    with adapter.db.get_connection(read_only=True) as connection:
+        assert json.loads(connection.execute('SELECT active_tokens FROM client_view_state WHERE session_zid=?', (zid,)).fetchone()[0]) == []
+    page.reload()
+    wait_state(page)
+
+    assert page.evaluate('AppState.highlightSameLemma') is True
+    assert page.evaluate('getSelectedRowsArray()') == [0]
+    assert page.evaluate('AppState.activeTokenSelections') == []
+    _assert_source_roles(page, ['haus'], ['baseline', 'baseline'])
+
+    haus = _source_words(page, ['haus'])
+    haus.nth(1).hover()
+    page.wait_for_timeout(250)
+    page.mouse.move(0, 0)
+    page.wait_for_timeout(250)
+
+    assert page.evaluate('getSelectedRowsArray()') == [0]
+    assert page.evaluate('AppState.activeTokenSelections') == []
+    _assert_source_roles(page, ['haus'], ['baseline', 'baseline'])
+    assert [word['selected'] for word in adapter.db.get_words_by_session(zid)] == [1]
+    assert config_path.read_bytes() == initial_config
