@@ -562,6 +562,10 @@ def test_playwright_action_toolbar_shortcuts_modal_and_audio(page, test_server):
         calls.append(("export", route.request.post_data)),
         route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok", "exported_count": 1}))
     ))
+    page.route("**/api/v1/render", lambda route: (
+        calls.append(("render", route.request.post_data)),
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "status": "ok"}))
+    ))
     page.route("**/api/v1/audio/synthesize", lambda route: (
         calls.append(("audio", route.request.post_data)),
         route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok"}))
@@ -633,7 +637,9 @@ def test_playwright_action_toolbar_shortcuts_modal_and_audio(page, test_server):
     assert modal.is_visible()
     assert "ES" in page.locator("#kw-lang-modal-body").inner_text()
     # Click No dismisses modal
-    page.locator("#kw-btn-lang-no").click()
+    with page.expect_response(lambda response: '/api/v1/render' in response.url):
+        page.locator("#kw-btn-lang-no").click()
+    page.wait_for_function("() => document.getElementById('kw-lang-modal').style.display === 'none'")
     assert not modal.is_visible()
 
     # 6. Global Shortcuts: F5 triggers update, Ctrl+A selects all, Ctrl+Shift+A deselects (Task 7.4, R14)

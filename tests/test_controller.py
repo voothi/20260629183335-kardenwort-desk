@@ -1754,11 +1754,14 @@ def test_controller_session_reword_multi_sentence_container_no_shift(running_con
         monkeypatch.setattr(kardenwort_desk, "run_headless_intellifiller", mock_headless)
 
     try:
-        # Reword Sentence 1 words: Row 0 (Transporter) and Row 1 (Automobil)
+        # Under global language frequency ordering (96d2c0f), Sentence 2's common words
+        # ("der", "die") sort to rows 0..1 ahead of Sentence 1's rarer words
+        # ("Transporter", "Automobil") at rows 2..3. Rewording rows [2, 3] must target
+        # Transporter and Automobil without shifting onto der/die.
         reword_url = f"{server_url}/session/reword"
         reword_payload = json.dumps({
             "session_zid": sess_zid,
-            "row_ids": [0, 1],
+            "row_ids": [2, 3],
             "language": "de",
         }).encode("utf-8")
         req_reword = urllib.request.Request(
@@ -1772,17 +1775,16 @@ def test_controller_session_reword_multi_sentence_container_no_shift(running_con
             data = res_data.get("data", res_data)
             rows = data.get("rows", {})
 
-            # Row 0 must be Transporter and reworded_Transporter (NOT der or shifted)
+            by_lemma = {r["lemma"]: r for r in rows.values()}
+            assert by_lemma["Transporter"]["trans"] == "reworded_Transporter"
+            assert by_lemma["Automobil"]["trans"] == "reworded_Automobil"
+            assert by_lemma["der"]["trans"] == "the"
+            assert by_lemma["die"]["trans"] == "the"
+            # Global frequency ordering places top-frequency Sentence 2 rows first.
             row0 = rows.get("0") or rows.get(0)
-            assert row0 is not None
-            assert row0["lemma"] == "Transporter"
-            assert row0["trans"] == "reworded_Transporter"
-
-            # Row 1 must be Automobil and reworded_Automobil (NOT die or shifted)
             row1 = rows.get("1") or rows.get(1)
-            assert row1 is not None
-            assert row1["lemma"] == "Automobil"
-            assert row1["trans"] == "reworded_Automobil"
+            assert row0 is not None and row1 is not None
+            assert {row0["lemma"], row1["lemma"]} == {"der", "die"}
     finally:
         try:
             storage_adapter.delete_session(sess_zid)

@@ -1877,6 +1877,15 @@ def test_row_legacy_overview_preserves_primary_id_highlighting(page, tmp_path):
     _assert_source_roles(page, ['am', 'beim'], ['primary', 'primary'])
 
 
+def _wait_visual_settle(page):
+    page.evaluate("""() => new Promise(resolve => {
+        const animations = document.getAnimations ? document.getAnimations() : [];
+        Promise.allSettled(animations.map(anim => anim.finished)).then(() => {
+            requestAnimationFrame(() => requestAnimationFrame(resolve));
+        });
+    })""")
+
+
 @pytest.mark.parametrize('selection_scope', ['row', 'token'])
 def test_hover_preserves_primary_highlight_and_persistent_peers(page, tmp_path, selection_scope):
     html, _ = _row_highlight_document(tmp_path, 'Haus Haus.', [('Haus', 'Haus', 'noun', 1)])
@@ -1886,7 +1895,7 @@ def test_hover_preserves_primary_highlight_and_persistent_peers(page, tmp_path, 
     else:
         _source_words(page, ['haus']).first.click()
     page.locator('#kw-btn-same-lemma').click()
-    page.wait_for_timeout(250)
+    _wait_visual_settle(page)
 
     haus = _source_words(page, ['haus'])
     primary_bg = haus.nth(0).evaluate('el => window.getComputedStyle(el).backgroundColor')
@@ -1895,12 +1904,12 @@ def test_hover_preserves_primary_highlight_and_persistent_peers(page, tmp_path, 
     _assert_source_roles(page, ['haus'], ['primary', 'peer'])
 
     haus.nth(1).hover()
-    page.wait_for_timeout(250)
+    _wait_visual_settle(page)
     _assert_source_roles(page, ['haus'], ['primary', 'peer'])
     assert haus.nth(0).evaluate('el => window.getComputedStyle(el).backgroundColor') == primary_bg
 
     page.mouse.move(0, 0)
-    page.wait_for_timeout(250)
+    _wait_visual_settle(page)
     _assert_source_roles(page, ['haus'], ['primary', 'peer'])
     assert haus.nth(0).evaluate('el => window.getComputedStyle(el).backgroundColor') == primary_bg
     assert page.evaluate('getSelectedRowsArray()') == membership
@@ -1944,7 +1953,7 @@ def test_hover_preserves_bound_partner_primary_roles_and_focus(page, tmp_path, s
     else:
         _source_words(page, [words[0]]).first.click()
     page.locator('#kw-btn-same-lemma').click()
-    page.wait_for_timeout(250)
+    _wait_visual_settle(page)
 
     spans = _source_words(page, words)
     primary_bgs = [
@@ -1957,7 +1966,7 @@ def test_hover_preserves_bound_partner_primary_roles_and_focus(page, tmp_path, s
 
     for target in (spans.nth(0), spans.nth(1), spans.nth(2), _source_words(page, [unrelated]).first):
         target.hover()
-        page.wait_for_timeout(250)
+        _wait_visual_settle(page)
         primary_classes = [
             spans.nth(idx).evaluate("""el => ['highlight-orange-active', 'highlight-purple-active', 'lemma-peer-highlight'].filter(c => el.classList.contains(c))""")
             for idx in primary_indices
@@ -1969,13 +1978,13 @@ def test_hover_preserves_bound_partner_primary_roles_and_focus(page, tmp_path, s
         ] == primary_bgs
 
     page.mouse.move(0, 0)
-    page.wait_for_timeout(250)
+    _wait_visual_settle(page)
     _assert_source_roles(page, words, expected_roles, primary_cls)
 
     toggled_off = ['baseline' if role == 'peer' else role for role in expected_roles]
     for roles_after_toggle in (toggled_off, expected_roles, toggled_off):
         page.locator('#kw-btn-same-lemma').click()
-        page.wait_for_timeout(250)
+        _wait_visual_settle(page)
         _assert_source_roles(page, words, roles_after_toggle, primary_cls)
 
     assert page.evaluate('getSelectedRowsArray()') == membership
@@ -1988,7 +1997,7 @@ def test_hover_repeated_transitions_and_lemma_toggles_preserve_theme_colors_and_
     html, _ = _row_highlight_document(tmp_path, 'Haus bleibt Haus und Haus.', [('Haus', 'Haus', 'noun', 1)], theme=theme)
     _open_row_highlight_document(page, html)
     page.locator('#lemma-table tbody tr').first.click()
-    page.wait_for_timeout(250)
+    _wait_visual_settle(page)
 
     haus = _source_words(page, ['haus'])
     primary_bg = haus.nth(0).evaluate('el => window.getComputedStyle(el).backgroundColor')
@@ -2011,7 +2020,7 @@ def test_hover_repeated_transitions_and_lemma_toggles_preserve_theme_colors_and_
     assert_geometry_invariant()
 
     page.locator('#kw-btn-same-lemma').click()
-    page.wait_for_timeout(250)
+    _wait_visual_settle(page)
     _assert_source_roles(page, ['haus'], ['primary', 'peer', 'peer'])
     peer_bg = haus.nth(1).evaluate('el => window.getComputedStyle(el).backgroundColor')
     assert primary_bg != peer_bg
@@ -2020,19 +2029,19 @@ def test_hover_repeated_transitions_and_lemma_toggles_preserve_theme_colors_and_
     for _ in range(2):
         for target in (haus.nth(1), haus.nth(2), haus.nth(0)):
             target.hover()
-            page.wait_for_timeout(250)
+            _wait_visual_settle(page)
             _assert_source_roles(page, ['haus'], ['primary', 'peer', 'peer'])
             assert haus.nth(0).evaluate('el => window.getComputedStyle(el).backgroundColor') == primary_bg
             assert_geometry_invariant()
         page.mouse.move(0, 0)
-        page.wait_for_timeout(250)
+        _wait_visual_settle(page)
         _assert_source_roles(page, ['haus'], ['primary', 'peer', 'peer'])
         assert haus.nth(0).evaluate('el => window.getComputedStyle(el).backgroundColor') == primary_bg
         assert_geometry_invariant()
 
     for expected_peer in ('baseline', 'peer', 'baseline'):
         page.locator('#kw-btn-same-lemma').click()
-        page.wait_for_timeout(250)
+        _wait_visual_settle(page)
         _assert_source_roles(page, ['haus'], ['primary', expected_peer, expected_peer])
         assert haus.nth(0).evaluate('el => window.getComputedStyle(el).backgroundColor') == primary_bg
         assert_geometry_invariant()
@@ -2067,9 +2076,9 @@ def test_hover_after_real_sqlite_cleared_focus_reload_does_not_resurrect_focus(p
 
     haus = _source_words(page, ['haus'])
     haus.nth(1).hover()
-    page.wait_for_timeout(250)
+    _wait_visual_settle(page)
     page.mouse.move(0, 0)
-    page.wait_for_timeout(250)
+    _wait_visual_settle(page)
 
     assert page.evaluate('getSelectedRowsArray()') == [0]
     assert page.evaluate('AppState.activeTokenSelections') == []
