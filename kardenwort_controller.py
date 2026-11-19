@@ -253,6 +253,51 @@ ERROR_STATUS_MATRIX = {
 
 _DRAFT_SESSIONS: Dict[str, dict] = {}
 _DRAFT_SESSIONS_LOCK = threading.Lock()
+_RENDERED_SESSION_ALIASES: Dict[str, str] = {}
+_RENDERED_SESSION_ALIASES_LOCK = threading.Lock()
+_MAX_RENDERED_SESSION_ALIASES = 256
+
+
+def _resolve_rendered_session_zid(html_result: Any, fallback_zid: str) -> str:
+    if not isinstance(html_result, str) or not html_result:
+        return fallback_zid
+    for island_id in ("kardenwort-bootstrap", "session-data"):
+        match = re.search(
+            rf'<script[^>]*\bid="{island_id}"[^>]*>(.*?)</script>',
+            html_result,
+            re.S,
+        )
+        if not match:
+            continue
+        try:
+            payload = json.loads(match.group(1))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            resolved = str(payload.get("session_zid") or payload.get("zid") or "").strip()
+            if resolved:
+                return resolved
+    return fallback_zid
+
+
+def _remember_session_alias(requested_zid: Optional[str], resolved_zid: Optional[str]) -> None:
+    req = str(requested_zid or "").strip()
+    res = str(resolved_zid or "").strip()
+    if not req or not res or req == res:
+        return
+    with _RENDERED_SESSION_ALIASES_LOCK:
+        _RENDERED_SESSION_ALIASES[req] = res
+        while len(_RENDERED_SESSION_ALIASES) > _MAX_RENDERED_SESSION_ALIASES:
+            oldest = next(iter(_RENDERED_SESSION_ALIASES))
+            del _RENDERED_SESSION_ALIASES[oldest]
+
+
+def _lookup_session_alias(requested_zid: Optional[str]) -> Optional[str]:
+    req = str(requested_zid or "").strip()
+    if not req:
+        return None
+    with _RENDERED_SESSION_ALIASES_LOCK:
+        return _RENDERED_SESSION_ALIASES.get(req)
 
 
 # ---------------------------------------------------------------------------
@@ -4672,10 +4717,13 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             else:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'text' or 'session_zid'")
 
+            resolved_zid = _resolve_rendered_session_zid(html_result, active_zid)
+            _remember_session_alias(active_zid, resolved_zid)
             b64_html = encode(html_result)
             self._send_json(200, {
                 "ok": True,
-                "zid": active_zid,
+                "zid": resolved_zid,
+                "session_zid": resolved_zid,
                 "html_b64": b64_html,
                 "html": html_result,
                 "children": child_args or [],
@@ -4827,6 +4875,21 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 try:
                     restored = adapter.restore_session(session_zid)
                 except Exception as e:
+                    aliased_zid = _lookup_session_alias(session_zid)
+                    if aliased_zid and aliased_zid != session_zid:
+                        split_url = urllib.parse.urlsplit(self.path)
+                        params = urllib.parse.parse_qsl(split_url.query, keep_blank_values=True)
+                        rewritten = [
+                            (k, aliased_zid if k in ('session_zid', 'zid') else v)
+                            for k, v in params
+                        ]
+                        location = urllib.parse.urlunsplit(('', '', split_url.path, urllib.parse.urlencode(rewritten), ''))
+                        self.send_response(302)
+                        self._send_cors_headers()
+                        self.send_header('Location', location)
+                        self.send_header('Content-Length', '0')
+                        self.end_headers()
+                        return
                     with _DRAFT_SESSIONS_LOCK:
                         draft = _DRAFT_SESSIONS.get(session_zid)
                     if draft:
@@ -5345,6 +5408,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             else:
                 html_result = render_out
                 child_args = getattr(render_out, 'children', [])
+
+            resolved_session_zid = _resolve_rendered_session_zid(html_result, session_zid)
+            _remember_session_alias(session_zid, resolved_session_zid)
+            session_zid = resolved_session_zid
 
             # Construct URLs for browser tabs
             port = getattr(self.server, 'server_port', None) or (self.server.server_address[1] if hasattr(self.server, 'server_address') else 18335)
