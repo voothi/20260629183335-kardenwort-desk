@@ -5998,6 +5998,16 @@
                     }
                 }
 
+                if (directMatchRows.length > 1 && spanText) {
+                    var exactCaseRows = directMatchRows.filter(function(r) {
+                        var exactParts = String(r.inflected || "").split(',').map(function(f) { return f.trim(); });
+                        return r.lemma === spanText || r.inflected === spanText || exactParts.indexOf(spanText) !== -1;
+                    });
+                    if (exactCaseRows.length > 0 && exactCaseRows.length < directMatchRows.length) {
+                        directMatchRows = exactCaseRows;
+                    }
+                }
+
                 if (directMatchRows.length > 0) {
                     for (var d = 0; d < directMatchRows.length; d++) {
                         var rowObj = directMatchRows[d];

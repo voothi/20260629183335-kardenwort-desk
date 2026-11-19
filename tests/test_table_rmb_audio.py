@@ -433,3 +433,62 @@ def test_generated_document_deprecated_native_ahk_bridge_boundary(page, tmp_path
     assert len(ahk_play) == 1
     assert ahk_play[0]["arg"].endswith("en\nhouse")
     assert _captured_requests(page) == []
+
+
+def test_case_distinct_same_sentence_tokens_select_and_play_only_clicked_lemma(page, tmp_path):
+    """Clicking 'Coding' vs 'coding' in the same sentence selects and speaks only that occurrence's lemma."""
+    import re
+    config, paths = _isolated_tsv_config(tmp_path, lmb_source="lemma", rmb_source="word_translation", rmb_play=True)
+    config.set("settings", "default_language", "en")
+    config.set("settings", "default_target_language", "ru")
+    config.set("audio", "lmb_play", "true")
+    tsv = tmp_path / "20261119182539-coding.en.tsv"
+    sentence = "AI Coding Daily evaluates a custom coding benchmark."
+    tsv.write_text(
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tWordSourcePOS\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        f"coding\tcod\tcoding\tтреска\tv.\t1\t{sentence}\t.\t0\n"
+        f"Coding\tCoding\tCoding\tКодирование\tn.\t1\t{sentence}\t.\t0\n",
+        encoding="utf-8",
+    )
+    html = kardenwort_desk.run_render_flow(
+        text=sentence,
+        language="en",
+        zid="20261119182539",
+        text_mode="single",
+        config=config,
+        resolved_paths=paths,
+        theme="dark",
+        tsv_path=str(tsv),
+        wordfill_cfg={"enabled": False},
+        spawn_children=False,
+    )
+    device_head = f"<script>({DEVICE})();\nwindow.EventSource = class {{ close() {{}} }};</script>"
+    errors = []
+    page.on("pageerror", lambda err: errors.append(str(err)))
+    page.set_content(html.replace("<head>", "<head>" + device_head, 1))
+    page.wait_for_selector("#source-container span.word")
+
+    # Click capitalized 'Coding' -> selects ONLY the Coding row and speaks ONLY 'Coding'.
+    coding_upper = page.locator("#source-container span.word", has_text=re.compile(r"^Coding$"))
+    coding_lower = page.locator("#source-container span.word", has_text=re.compile(r"^coding$"))
+    coding_upper.click()
+
+    selected_lemmas_upper = page.evaluate(
+        "() => Array.from(document.querySelectorAll('#lemma-table tbody tr.selected td.col-lemma')).map(td => td.textContent.trim())"
+    )
+    assert selected_lemmas_upper == ["Coding"]
+    page.wait_for_function("window.requests && window.requests.some(r => String(r.url).includes('/audio/synthesize'))")
+    audio_reqs_upper = [r["body"] for r in _captured_requests(page) if r["url"].endswith("/api/v1/audio/synthesize")]
+    assert [(b["text"], b["language"]) for b in audio_reqs_upper] == [("Coding", "en")]
+
+    # Deselect Coding, then click lowercase 'coding' -> selects ONLY 'cod' and speaks ONLY 'cod'.
+    coding_upper.click()
+    coding_lower.click()
+    selected_lemmas_lower = page.evaluate(
+        "() => Array.from(document.querySelectorAll('#lemma-table tbody tr.selected td.col-lemma')).map(td => td.textContent.trim())"
+    )
+    assert selected_lemmas_lower == ["cod"]
+    page.wait_for_function("window.requests && window.requests.filter(r => String(r.url).includes('/audio/synthesize')).length >= 2")
+    audio_reqs_lower = [r["body"] for r in _captured_requests(page) if r["url"].endswith("/api/v1/audio/synthesize")]
+    assert [(b["text"], b["language"]) for b in audio_reqs_lower] == [("Coding", "en"), ("cod", "en")]
+    assert errors == []

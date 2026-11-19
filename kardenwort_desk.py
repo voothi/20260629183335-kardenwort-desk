@@ -5685,6 +5685,52 @@ def _overview_row_is_selected(
     return "0"
 
 
+def _clean_exact_surface(item: str, apo_set: Set[str]) -> str:
+    return "".join(ch for ch in item if ch.isalnum() or ch in apo_set)
+
+
+def _row_exact_surface_forms(forms: List[str], quotation_val: str, clean_lemma: str, apo_set: Set[str]) -> Set[str]:
+    items = list(forms)
+    q = (quotation_val or "").strip()
+    if q:
+        items.append(q)
+    if not items and clean_lemma:
+        items.append(clean_lemma)
+    return {cleaned for item in items if (cleaned := _clean_exact_surface(item, apo_set))}
+
+
+def _is_atomic_case_candidate(r_idx: int, single_word_rows: Set[int], compound_rows: Set[int]) -> bool:
+    return r_idx in single_word_rows and r_idx not in compound_rows
+
+
+def _exact_case_row_matches(
+    atomic: List[int],
+    exact_clean: str,
+    row_exact_surface_forms: Dict[int, Set[str]],
+) -> Set[int]:
+    if not exact_clean:
+        return set()
+    return {r for r in atomic if exact_clean in row_exact_surface_forms.get(r, ())}
+
+
+def _narrow_mapped_rows_by_case(
+    mapped_rows: List[int],
+    tok_text: str,
+    apo_set: Set[str],
+    single_word_rows: Set[int],
+    compound_rows: Set[int],
+    row_exact_surface_forms: Dict[int, Set[str]],
+) -> List[int]:
+    atomic = [r for r in mapped_rows if _is_atomic_case_candidate(r, single_word_rows, compound_rows)]
+    if len(atomic) <= 1:
+        return mapped_rows
+    exact_atomic = _exact_case_row_matches(atomic, _clean_exact_surface(tok_text, apo_set), row_exact_surface_forms)
+    if not (0 < len(exact_atomic) < len(atomic)):
+        return mapped_rows
+    dropped = set(atomic) - exact_atomic
+    return [r for r in mapped_rows if r not in dropped]
+
+
 def sort_session_data_rows(
     data_rows: List[List[str]],
     headers: List[str],
@@ -11553,6 +11599,7 @@ html, body {{
     token_to_rows = {}
     row_candidates = {}
     row_direct_candidates = {}
+    row_exact_surface_forms = {}
     compound_rows = set()
     row_primary_lemmas = {}
     for row_id, row in enumerate(data_rows):
@@ -11561,6 +11608,7 @@ html, body {{
             row[col_lemma] = re.sub(r'^\d{14}-', '', row[col_lemma])
             data_rows[row_id] = row
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
+        quotation_val = row[col_quotation] if col_quotation != -1 and len(row) > col_quotation else ""
         inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
 
         candidates = []
@@ -11575,6 +11623,7 @@ html, body {{
         clean_lemma = lemma_val.strip() if lemma_val else ""
         clean_lemma_lower = tok.utf8_to_lower("".join(ch for ch in clean_lemma if ch.isalnum() or ch in apo_set)) if clean_lemma else ""
         row_primary_lemmas[row_id] = clean_lemma
+        row_exact_surface_forms[row_id] = _row_exact_surface_forms(forms, quotation_val, clean_lemma, apo_set)
 
         direct_cands = set()
         if clean_lemma_lower:
@@ -11819,7 +11868,9 @@ html, body {{
                         filtered_cand_rows.append(r_idx)
                 else:
                     filtered_cand_rows.append(r_idx)
-            mapped_rows = filtered_cand_rows
+            mapped_rows = _narrow_mapped_rows_by_case(
+                filtered_cand_rows, tok_text, apo_set, single_word_rows, compound_rows, row_exact_surface_forms
+            )
 
             token["filtered_mapped_rows"] = mapped_rows
 
