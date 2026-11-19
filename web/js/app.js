@@ -5685,7 +5685,7 @@
         }
 
         function isUnfinishedTranslationText(cell, raw) {
-            if (!raw || raw === '[FAILED]' || raw.indexOf('[Error') === 0) return true;
+            if (!raw || raw.indexOf('[FAILED]') === 0 || raw.indexOf('[Error') === 0) return true;
             if (raw.slice(-3) !== '...') return false;
             return !(cell.hasAttribute('data-provenance') || (cell.querySelector && cell.querySelector('[data-provenance]')));
         }
@@ -5724,13 +5724,19 @@
             return String(raw || 'word_translation').trim().toLowerCase();
         }
 
+        function toAudioBool(val) {
+            if (typeof val !== 'string') return Boolean(val);
+            var norm = val.trim().toLowerCase();
+            return norm !== '' && norm !== 'false' && norm !== '0';
+        }
+
         function isAudioRmbEnabled() {
             if (window.__CONFIG__ && window.__CONFIG__.audio_rmb_play !== undefined) {
-                return Boolean(window.__CONFIG__.audio_rmb_play);
+                return toAudioBool(window.__CONFIG__.audio_rmb_play);
             }
-            var boot = window.AppState && window.AppState.bootstrap;
-            if (boot && boot.ui_config && boot.ui_config.audio_rmb_play !== undefined) {
-                return Boolean(boot.ui_config.audio_rmb_play);
+            var uiCfg = bootstrapUiConfig();
+            if (uiCfg.audio_rmb_play !== undefined) {
+                return toAudioBool(uiCfg.audio_rmb_play);
             }
             return audioRmbPlay;
         }
@@ -7002,7 +7008,7 @@
                             }
                         }
                     }
-                } else if (isRmbDragFlipping && rmbFlipMode && audioRmbPlay && tokenDragStartIdx !== -1) {
+                } else if (isRmbDragFlipping && rmbFlipMode && isAudioRmbEnabled() && tokenDragStartIdx !== -1) {
                     var minIdx = (tokenDragLastIdx !== -1) ? Math.min(tokenDragStartIdx, tokenDragLastIdx) : tokenDragStartIdx;
                     var maxIdx = (tokenDragLastIdx !== -1) ? Math.max(tokenDragStartIdx, tokenDragLastIdx) : tokenDragStartIdx;
                     var targetLang = getSessionTargetLang();

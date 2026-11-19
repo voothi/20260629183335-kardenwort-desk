@@ -13,12 +13,18 @@
         return (b && b.ui_config) || {};
     }
 
+    function toBoolFlag(val) {
+        if (typeof val !== 'string') return Boolean(val);
+        var norm = val.trim().toLowerCase();
+        return norm !== '' && norm !== 'false' && norm !== '0';
+    }
+
     function resolveRmbConfig(w) {
         var bootCfg = bootUiConfig(w);
         var winCfg = w.__CONFIG__ || {};
         var enabled = (winCfg.audio_rmb_play !== undefined) ? winCfg.audio_rmb_play : bootCfg.audio_rmb_play;
         var rawSource = winCfg.audio_rmb_source || bootCfg.audio_rmb_source || 'word_translation';
-        return { enabled: Boolean(enabled), source: String(rawSource).trim().toLowerCase() };
+        return { enabled: toBoolFlag(enabled), source: String(rawSource).trim().toLowerCase() };
     }
 
     function isPendingCell(cell) {
@@ -29,7 +35,7 @@
     }
 
     function isUnfinishedTranslation(cell, raw) {
-        if (!raw || raw === '[FAILED]' || raw.indexOf('[Error') === 0) return true;
+        if (!raw || raw.indexOf('[FAILED]') === 0 || raw.indexOf('[Error') === 0) return true;
         if (raw.slice(-3) !== '...') return false;
         return !(cell.hasAttribute('data-provenance') || (cell.querySelector && cell.querySelector('[data-provenance]')));
     }

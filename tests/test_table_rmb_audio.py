@@ -197,6 +197,7 @@ def test_generated_document_table_rmb_custom_trans_column(page, tmp_path):
     [
         "",
         "[FAILED]",
+        "[FAILED] Retry",
         "[Error: timeout]",
         '<span class="skeleton-loader kw-skeleton-cell" title="Google...">Google...</span>',
         '<span class="skeleton-loader" data-pending="true">Translating...</span>',
@@ -268,10 +269,12 @@ def test_generated_document_single_dispatch_ownership_with_mounted_lemma_table(p
     [
         ({"audio_rmb_play": True}, "house", ("house", "en")),
         ({"audio_rmb_play": False, "audio_rmb_source": "word_translation"}, "house", None),
+        ({"audio_rmb_play": "false", "audio_rmb_source": "word_translation"}, "house", None),
         ({"audio_rmb_play": True, "audio_rmb_source": "inflection"}, "house", ("Häuser", "de")),
         ({"audio_rmb_play": True, "audio_rmb_source": "lemma"}, "house", ("Haus", "de")),
         ({"audio_rmb_play": True}, '<span class="skeleton-loader" data-pending="true">Translating...</span>', None),
         ({"audio_rmb_play": True}, "[FAILED]", None),
+        ({"audio_rmb_play": True}, "[FAILED] Retry", None),
         ({"audio_rmb_play": True}, "Translating...", None),
         ({"audio_rmb_play": True}, "20261118183557 house 42", ("house", "en")),
         ({"audio_rmb_play": True}, "20261118183557 42", None),

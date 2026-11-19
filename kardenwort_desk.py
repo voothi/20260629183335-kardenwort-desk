@@ -14336,6 +14336,10 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     ):
         p_script = web_dir / "js" / script_rel
         s_code = read_required_asset(p_script)
+        if script_rel == "app.js":
+            s_code = s_code.replace("{lemma_col_name}", role_fields.get("lemma", "WordSource"))
+            s_code = s_code.replace("{inflected_col_name}", role_fields.get("inflected", "WordSourceInflectedForm"))
+            s_code = s_code.replace("{trans_col_name}", role_fields.get("word_translation", "WordDestination"))
         tag_to_replace = f'<script src="/js/{script_rel}"></script>'
         if tag_to_replace in base_html:
             base_html = base_html.replace(tag_to_replace, f'<script>\n{s_code}\n</script>')
