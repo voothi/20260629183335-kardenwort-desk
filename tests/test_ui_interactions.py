@@ -6484,17 +6484,26 @@ def test_table_selection_dual_occurrence_highlighting_standalone_and_compound_su
 
     box_before = span_following.bounding_box()
 
-    # Selecting table row 0 for general lemma 'window' activates all occurrences
+    # Selecting table row 0 with Lemma OFF activates strictly the primary occurrence (standalone)
+    # per canonical same-lemma-highlight-toggle spec, leaving repeated compound sub-tokens baseline.
     row0 = page.locator("tr[data-row-id='0']")
     row0.click()
 
     assert "highlight-orange-active" in (span_standalone.get_attribute("class") or "")
-    assert "highlight-orange-active" in (span_kebab.get_attribute("class") or "")
-    assert "highlight-orange-active" in (span_path.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (span_kebab.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (span_path.get_attribute("class") or "")
+
+    # Enabling Lemma highlighting projects muted peer highlights onto compound sub-tokens
+    # while preserving primary active highlight on the standalone occurrence.
+    page.locator("#kw-btn-same-lemma").click()
+    assert "highlight-orange-active" in (span_standalone.get_attribute("class") or "")
+    assert "lemma-peer-highlight" in (span_kebab.get_attribute("class") or "")
+    assert "lemma-peer-highlight" in (span_path.get_attribute("class") or "")
 
     # Delimiters and non-matching sub-tokens remain unhighlighted
     span_per = page.locator("span[data-word-idx='9']")
     assert "highlight-orange-active" not in (span_per.get_attribute("class") or "")
+    assert "lemma-peer-highlight" not in (span_per.get_attribute("class") or "")
 
     # Layout displacement on subsequent tokens remains zero (box-shadow zero-geometry)
     box_after = span_following.bounding_box()
@@ -6504,7 +6513,16 @@ def test_table_selection_dual_occurrence_highlighting_standalone_and_compound_su
     row0.click()
     assert "highlight-orange-active" not in (span_standalone.get_attribute("class") or "")
     assert "highlight-orange-active" not in (span_kebab.get_attribute("class") or "")
+    assert "lemma-peer-highlight" not in (span_kebab.get_attribute("class") or "")
     assert "highlight-orange-active" not in (span_path.get_attribute("class") or "")
+    assert "lemma-peer-highlight" not in (span_path.get_attribute("class") or "")
+
+    # Clicking a compound sub-token directly activates solid highlight on that sub-token
+    span_kebab.click()
+    assert "highlight-orange-active" in (span_kebab.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (span_per.get_attribute("class") or "")
+    span_kebab.click()
+    assert "highlight-orange-active" not in (span_kebab.get_attribute("class") or "")
 
 
 def test_rendered_page_and_js_fallback_compound_joiners_contract():

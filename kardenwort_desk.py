@@ -4889,6 +4889,25 @@ class SqliteStorageAdapter(StorageAdapter):
     def vacuum(self, zid: Optional[str] = None) -> bool:
         return self.db.vacuum(zid=zid)
 
+    @staticmethod
+    def _has_duplicate_export_lemmas(
+        data_rows: List[List[str]],
+        headers: List[str],
+        role_fields: Dict[str, str],
+    ) -> bool:
+        lemma_col_name = role_fields.get("lemma", "WordSource")
+        if lemma_col_name not in headers:
+            return False
+        lemma_col = headers.index(lemma_col_name)
+        seen_lemmas = set()
+        for row in data_rows:
+            lem = str(row[lemma_col]).strip().lower() if len(row) > lemma_col else ""
+            if lem in seen_lemmas:
+                return True
+            if lem:
+                seen_lemmas.add(lem)
+        return False
+
     def _export_order_is_unambiguous(
         self,
         data_rows: List[List[str]],
@@ -4897,28 +4916,12 @@ class SqliteStorageAdapter(StorageAdapter):
         language: str,
     ) -> bool:
         """True only when display sorting and deduplication cannot diverge from storage order."""
-        if not data_rows:
-            return True
-        lemma_col_name = role_fields.get("lemma", "WordSource")
-        lemma_col = headers.index(lemma_col_name) if lemma_col_name in headers else -1
-        if lemma_col != -1:
-            seen_lemmas = set()
-            for row in data_rows:
-                lem = str(row[lemma_col]).strip().lower() if len(row) > lemma_col else ""
-                if lem:
-                    if lem in seen_lemmas:
-                        return False
-                    seen_lemmas.add(lem)
-        freq_sorted = sort_rows_by_frequency(
+        if not data_rows or self._has_duplicate_export_lemmas(data_rows, headers, role_fields):
+            return False if data_rows else True
+        sorted_rows = sort_session_data_rows(
             data_rows, headers, language, self.config, self.resolved_paths, role_fields=role_fields
         )
-        if freq_sorted != data_rows:
-            return False
-        container_sorted = sort_session_data_rows(
-            data_rows, headers, language, self.config, self.resolved_paths,
-            role_fields=role_fields, delivery_mode="container",
-        )
-        return container_sorted == data_rows
+        return sorted_rows == data_rows
 
     def export_favorites(
         self,
@@ -5618,6 +5621,68 @@ def sort_rows_by_frequency(
     except Exception as sort_err:
         logger.warning(f"Failed to sort rows by frequency: {sort_err}")
         return data_rows
+
+
+def _parse_int_order(value: Any) -> Optional[int]:
+    text = str(value).strip()
+    return int(text) if text.lstrip("-").isdigit() else None
+
+
+def _row_token_order(overview_data_rows: List[List[str]], mid: int, col_token_order: int) -> Optional[int]:
+    if not (0 <= mid < len(overview_data_rows)):
+        return None
+    row = overview_data_rows[mid]
+    raw = row[col_token_order] if 0 <= col_token_order < len(row) else mid
+    return _parse_int_order(raw)
+
+
+def _overview_row_token_orders(
+    overview_data_rows: List[List[str]],
+    matched_ids: List[int],
+    ov_token_order: str,
+    col_token_order: int,
+) -> Set[int]:
+    orders = {val for mid in matched_ids if (val := _row_token_order(overview_data_rows, mid, col_token_order)) is not None}
+    if not orders:
+        fallback = _parse_int_order(ov_token_order)
+        if fallback is not None:
+            orders.add(fallback)
+    return orders
+
+
+def _overview_row_has_highlighted(
+    overview_data_rows: List[List[str]],
+    matched_ids: List[int],
+    col_highlighted: int,
+) -> bool:
+    if col_highlighted == -1:
+        return False
+    for mid in matched_ids:
+        if 0 <= mid < len(overview_data_rows):
+            row = overview_data_rows[mid]
+            if len(row) > col_highlighted and str(row[col_highlighted]).strip().lower() in ("1", "true"):
+                return True
+    return False
+
+
+def _overview_row_is_selected(
+    overview_data_rows: List[List[str]],
+    matched_ids: List[int],
+    ov_token_order: str,
+    col_token_order: int,
+    col_highlighted: int,
+    saved_overview_selections: Set[int],
+    is_container: bool,
+) -> str:
+    has_highlighted = _overview_row_has_highlighted(overview_data_rows, matched_ids, col_highlighted)
+    if not is_container:
+        return "1" if has_highlighted else "0"
+    matched_orders = _overview_row_token_orders(
+        overview_data_rows, matched_ids, ov_token_order, col_token_order
+    )
+    if matched_orders & saved_overview_selections and (col_highlighted == -1 or has_highlighted):
+        return "1"
+    return "0"
 
 
 def sort_session_data_rows(
@@ -12380,27 +12445,15 @@ html, body {{
             ov_k = (ov_lem_clean, ov_eff_pos) if col_pos_dedup != -1 else ov_lem_clean
             matched_ids = lemma_pos_to_row_ids.get(ov_k) or lemma_pos_to_row_ids.get(ov_lem_clean) or [ov_id]
 
-            ov_is_sel = "0"
-            if is_container:
-                try:
-                    ov_ord_int = int(ov_token_order)
-                except (ValueError, TypeError):
-                    ov_ord_int = None
-                if ov_ord_int is not None and ov_ord_int in saved_overview_selections:
-                    if col_highlighted == -1 or any(
-                        0 <= mid < len(overview_data_rows)
-                        and len(overview_data_rows[mid]) > col_highlighted
-                        and str(overview_data_rows[mid][col_highlighted]).strip().lower() in ["1", "true"]
-                        for mid in matched_ids
-                    ):
-                        ov_is_sel = "1"
-            elif col_highlighted != -1 and any(
-                0 <= mid < len(overview_data_rows)
-                and len(overview_data_rows[mid]) > col_highlighted
-                and str(overview_data_rows[mid][col_highlighted]).strip().lower() in ["1", "true"]
-                for mid in matched_ids
-            ):
-                ov_is_sel = "1"
+            ov_is_sel = _overview_row_is_selected(
+                overview_data_rows,
+                matched_ids,
+                ov_token_order,
+                col_token_order,
+                col_highlighted,
+                saved_overview_selections,
+                is_container,
+            )
 
             # Translation deduplication and rollup across atomic occurrences for merged rows
             if col_word_dest != -1 and matched_ids and len(matched_ids) > 1:

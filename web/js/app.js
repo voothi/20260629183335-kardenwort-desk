@@ -3187,7 +3187,9 @@
                 var updated = false;
                 var rowData = window.AppState.rows[rowId];
                 if (!rowData) return false;
-                var tr = resolveProjectionRow(projectionRows || indexProjectionRows(), rowId, rowData);
+                var proj = projectionRows || indexProjectionRows();
+                var appRowsIndex = proj._appRowsIndex || (proj._appRowsIndex = buildAppRowsCoordIndex());
+                var tr = resolveProjectionRow(proj, rowId, rowData);
                 if (!tr) return false;
                 if (rowData.occurrence_data) {
                     tr.setAttribute('data-occ', JSON.stringify(rowData.occurrence_data));
@@ -3266,7 +3268,7 @@
                         }
                     }
                     var hasTransProp = rowData.hasOwnProperty('trans') || rowData.hasOwnProperty('WordDestination') || rowData.hasOwnProperty('word_translation');
-                    var rowProv = rowData.provenance || rowData._provenance || rowData.transProvenance || findRowProvenanceFallback(rowData);
+                    var rowProv = rowData.provenance || rowData._provenance || rowData.transProvenance || findRowProvenanceFallback(rowData, appRowsIndex);
                     /** @param {string} effectiveVal */
                     function applyCellProvenance(effectiveVal) {
                         if (!transTd) return;
@@ -3569,7 +3571,7 @@
                                 }
                             }
                             if (!effProv) {
-                                effProv = findRowProvenanceFallback(rowData);
+                                effProv = findRowProvenanceFallback(rowData, appRowsIndex);
                             }
                             var genTip = formatGenderTooltip(rawGender, rowLemma, effProv);
                             if (genTip) {
@@ -3609,34 +3611,62 @@
             }
         } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
 
-        function findRowProvenanceFallback(rowData) {
+        function buildAppRowsCoordIndex() {
+            var idx = { byCoord: {}, byProvCoord: {}, byProvNoSentTok: {}, byProvTok: {} };
+            if (!window.AppState || !window.AppState.rows) return idx;
+            for (var rk in window.AppState.rows) {
+                var cand = window.AppState.rows[rk];
+                if (!cand || cand.token_order === undefined || cand.token_order === null) continue;
+                var tKey = String(cand.token_order);
+                var hasSent = cand.sentence_idx !== undefined && cand.sentence_idx !== null && Number(cand.sentence_idx) > 0;
+                var cKey = hasSent ? (String(cand.sentence_idx) + ':' + tKey) : null;
+                if (cKey && !Object.prototype.hasOwnProperty.call(idx.byCoord, cKey)) {
+                    idx.byCoord[cKey] = cand;
+                }
+                if (cand.provenance) {
+                    if (cKey) {
+                        if (!Object.prototype.hasOwnProperty.call(idx.byProvCoord, cKey)) {
+                            idx.byProvCoord[cKey] = cand.provenance;
+                        }
+                    } else if (!Object.prototype.hasOwnProperty.call(idx.byProvNoSentTok, tKey)) {
+                        idx.byProvNoSentTok[tKey] = cand.provenance;
+                    }
+                    if (!Object.prototype.hasOwnProperty.call(idx.byProvTok, tKey)) {
+                        idx.byProvTok[tKey] = cand.provenance;
+                    }
+                }
+            }
+            return idx;
+        }
+
+        function findRowProvenanceFallback(rowData, appRowsIndex) {
             if (!rowData || rowData.token_order === undefined || rowData.token_order === null || !window.AppState || !window.AppState.rows) {
                 return undefined;
             }
+            var idx = appRowsIndex || buildAppRowsCoordIndex();
+            var tKey = String(rowData.token_order);
             var targetSent = (rowData.sentence_idx !== undefined && rowData.sentence_idx !== null && Number(rowData.sentence_idx) > 0)
                 ? String(rowData.sentence_idx) : null;
-            for (var rk in window.AppState.rows) {
-                var candidate = window.AppState.rows[rk];
-                if (!candidate || !candidate.provenance) continue;
-                if (String(candidate.token_order) !== String(rowData.token_order)) continue;
-                if (targetSent && candidate.sentence_idx !== undefined && candidate.sentence_idx !== null && Number(candidate.sentence_idx) > 0 && String(candidate.sentence_idx) !== targetSent) {
-                    continue;
+            if (targetSent) {
+                var cKey = targetSent + ':' + tKey;
+                if (Object.prototype.hasOwnProperty.call(idx.byProvCoord, cKey)) {
+                    return idx.byProvCoord[cKey];
                 }
-                return candidate.provenance;
+                if (Object.prototype.hasOwnProperty.call(idx.byProvNoSentTok, tKey)) {
+                    return idx.byProvNoSentTok[tKey];
+                }
+                return undefined;
             }
-            return undefined;
+            return Object.prototype.hasOwnProperty.call(idx.byProvTok, tKey) ? idx.byProvTok[tKey] : undefined;
         }
 
-        function resolveCardAppRow(word, rIdStr, tOrdStr) {
+        function resolveCardAppRow(word, rIdStr, tOrdStr, appRowsIndex) {
             if (!window.AppState || !window.AppState.rows) return null;
             var wSent = (word && Number(word.sentence_idx) > 0) ? String(word.sentence_idx) : null;
             if (wSent && tOrdStr) {
-                for (var rk in window.AppState.rows) {
-                    var cand = window.AppState.rows[rk];
-                    if (cand && String(cand.sentence_idx) === wSent && String(cand.token_order) === tOrdStr) {
-                        return cand;
-                    }
-                }
+                var idx = appRowsIndex || buildAppRowsCoordIndex();
+                var byCoord = idx.byCoord[wSent + ':' + tOrdStr];
+                if (byCoord) return byCoord;
             }
             var byId = rIdStr ? window.AppState.rows[rIdStr] : null;
             if (byId) {
@@ -3753,6 +3783,7 @@
         function normalizeCardSkeletons(mode) {
             var cards = getCardModels();
             if (cards && cards.length > 0) {
+                var appRowsIndex = buildAppRowsCoordIndex();
                 for (var c = 0; c < cards.length; c++) {
                     var card = cards[c];
                     if (card.words && card.words.length > 0) {
@@ -3764,7 +3795,7 @@
                                 word.row_html = null;
                                 var rIdStr = String(word.row_id !== undefined && word.row_id !== null ? word.row_id : '');
                                 var tOrdStr = String(word.token_order !== undefined && word.token_order !== null ? word.token_order : rIdStr);
-                                var appRow = resolveCardAppRow(word, rIdStr, tOrdStr);
+                                var appRow = resolveCardAppRow(word, rIdStr, tOrdStr, appRowsIndex);
                                 var resolvedTrans = appRow ? (appRow.trans !== undefined && appRow.trans !== "" ? appRow.trans : (appRow.WordDestination !== undefined && appRow.WordDestination !== "" ? appRow.WordDestination : (appRow.word_translation || ''))) : '';
                                 if (appRow && resolvedTrans && resolvedTrans.indexOf('skeleton-loader') === -1 && resolvedTrans !== '[FAILED]') {
                                     word.translation = resolvedTrans;

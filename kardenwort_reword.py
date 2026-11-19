@@ -431,7 +431,12 @@ def export_manifest_indices(keys, selected_rows, rendered_manifest, sentence_fie
 def resolve_export_selection(rows, headers, targets=None, selected_rows=None, token_orders=None,
                              visual_indices=None, visual_manifest=None, rendered_manifest=None,
                              sentence_field='SentenceSourceIndex', allow_unmapped_indices=False):
-    """Resolve explicit export selectors to immutable DB row indices, or None for implicit mode."""
+    """Resolve explicit export selectors to immutable DB row indices, or None for implicit mode.
+
+    An explicit empty list (e.g. ``selected_rows=[]``) resolves to ``()`` rather than ``None``
+    so callers never silently fall back to persisted ``DeskSelected`` rows when explicitly
+    passing zero selections. Pass ``selected_rows=None`` for implicit persisted selection mode.
+    """
     keys = row_keys(rows, headers, sentence_field)
     requested = export_explicit_targets(keys, targets, visual_indices, visual_manifest)
     if requested is not None:

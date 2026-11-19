@@ -3611,44 +3611,74 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         finally:
             dispatcher.unregister(zid, q)
 
-    def _session_rendered_manifest(self, session_zid: str):
+    def _snapshot_session_manifest(self, session_zid: str, language: Optional[str] = None):
         arbiter = getattr(self.server, 'arbiter', None)
         if not arbiter:
             return None
         with arbiter._lock:
             sess = arbiter.sessions.get(session_zid)
-            if sess and sess.get("headers") and sess.get("data_rows") is not None:
-                return list(sess["headers"]), [list(r) for r in sess["data_rows"]]
-        return None
+            if not sess or not sess.get("headers") or sess.get("data_rows") is None:
+                return None
+            return (
+                list(sess["headers"]),
+                list(map(list, sess["data_rows"])),
+                sess.get("language") or language,
+                sess.get("role_fields"),
+            )
+
+    def _session_rendered_manifest(self, session_zid: str, language: Optional[str] = None):
+        snap = self._snapshot_session_manifest(session_zid, language)
+        if not snap:
+            return None
+        headers, rows, sess_lang, role_fields = snap
+        cfg = operation_configuration(self.server.config)
+        display_rows = sort_session_data_rows(
+            rows, headers, sess_lang, cfg, self.server.resolved_paths, role_fields=role_fields
+        )
+        return headers, display_rows
+
+    def _parse_export_request(self, body: Dict[str, Any], require_selected_field: bool) -> Dict[str, Any]:
+        session_zid = body.get('session_zid')
+        if not session_zid:
+            raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
+        if require_selected_field:
+            if 'selected_row_ids' not in body:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required payload field: 'selected_row_ids'")
+            req_zid = generate_server_zid(self.server)
+            trace_id = None
+        else:
+            req_zid = body.get('zid') or session_zid
+            trace_id = f"{session_zid}:export:selection"
+        selected_rows = body.get('selected_row_ids')
+        if selected_rows is None:
+            selected_rows = body.get('row_ids')
+        return {
+            "session_zid": session_zid,
+            "selected_row_ids": selected_rows,
+            "req_zid": req_zid,
+            "trace_id": trace_id,
+            "language": body.get('language'),
+        }
 
     def _handle_export_request(self, method: str, path: str, *, require_selected_field: bool):
         if method != 'POST':
             raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
         body = self._read_json_body()
         self._authenticate_token(body)
-
-        session_zid = body.get('session_zid')
-        if not session_zid:
-            raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
-        if require_selected_field and 'selected_row_ids' not in body:
-            raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required payload field: 'selected_row_ids'")
-
-        selected_rows = body['selected_row_ids'] if body.get('selected_row_ids') is not None else body.get('row_ids')
-        req_zid = generate_server_zid(self.server) if require_selected_field else (body.get('zid') or session_zid)
-        trace_id = None if require_selected_field else f"{session_zid}:export:selection"
+        params = self._parse_export_request(body, require_selected_field)
         res = core_export(
-            tsv_path_or_session=session_zid,
-            selected_row_ids=selected_rows,
+            tsv_path_or_session=params["session_zid"],
+            selected_row_ids=params["selected_row_ids"],
             config=operation_configuration(self.server.config),
             resolved_paths=self.server.resolved_paths,
             fingerprint=body.get('fingerprint'),
-            zid=req_zid,
-            language=body.get('language'),
-            trace_id=trace_id,
+            zid=params["req_zid"],
+            language=params["language"],
+            trace_id=params["trace_id"],
             target_coordinates=body.get('target_coordinates'),
             token_orders=body.get('token_orders'),
             visual_indices=body.get('visual_indices'),
-            rendered_manifest=self._session_rendered_manifest(session_zid),
+            rendered_manifest=self._session_rendered_manifest(params["session_zid"], params["language"]),
         )
         self._send_json(200, res)
 

@@ -717,3 +717,59 @@ def test_edit_selection_and_refresh_stability_with_repeated_token_order(
     assert cards_after[0]["words"][2]["translation"] == "зебра_edited"
     assert cards_after[0]["words"][2]["selected"] == "1"
     assert cards_after[0]["words"][0]["selected"] == "0"
+
+
+def test_merged_overview_row_preserves_selection_when_non_first_constituent_is_selected(
+    tmp_path, running_controller
+):
+    """Deduplicated Overview row must render selected when any constituent occurrence is in overview_selections."""
+    _, server, adapter = running_controller
+    _configure_owned_world(server, tmp_path, lang="de", freq_lines=("Alpha", "Baum", "Zebra"))
+
+    rows = [
+        ["Zebra", "Zebra", "Zebra", "зебра", "1", "Zebra Baum.", "Зебра дерево.", "0", "0"],
+        ["Baum", "Baum", "Baum", "дерево-1", "1", "Zebra Baum.", "Зебра дерево.", "0", "1"],
+        ["Alpha", "Alpha", "Alpha", "альфа", "2", "Alpha Baum.", "Альфа дерево.", "0", "2"],
+        ["Baum", "Baum", "Baum", "дерево-2", "2", "Alpha Baum.", "Альфа дерево.", "1", "3"],
+    ]
+    sentences = [
+        {"session_zid": ZID, "sentence_index": 1, "sentence_source": "Zebra Baum.", "sentence_destination": "Зебра дерево."},
+        {"session_zid": ZID, "sentence_index": 2, "sentence_source": "Alpha Baum.", "sentence_destination": "Альфа дерево."},
+    ]
+    adapter.save_session(
+        session_zid=ZID,
+        slug="merged-ov-sel",
+        source_language="de",
+        target_language="ru",
+        text_mode="multi",
+        source_raw_text="Zebra Baum.\nAlpha Baum.",
+        headers=HEADERS,
+        data_rows=rows,
+        sentences=sentences,
+    )
+    # Persist only the second constituent occurrence (token_order=3) in overview_selections while token_order=1 stays unselected.
+    with adapter.db.get_connection(zid=ZID) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO overview_selections (session_zid, token_order, selected) VALUES (?, ?, 1)",
+            (ZID, 3),
+        )
+        conn.commit()
+    assert adapter.get_overview_selections(ZID) == {3}
+
+    html = desk.run_render_flow(
+        text="Zebra Baum.\nAlpha Baum.",
+        language="de",
+        zid=ZID,
+        text_mode="multi",
+        config=server.config,
+        resolved_paths=server.resolved_paths,
+        tsv_path=ZID,
+        spawn_children=False,
+    )
+    cards = _extract_island(html, "sentence-cards")
+    assert [w["lemma"] for w in cards[0]["words"]] == ["Alpha", "Baum", "Zebra"]
+    baum_ov = cards[0]["words"][1]
+    assert baum_ov["selected"] == "1"
+    assert str(baum_ov["row_id"]) in cards[0]["selected_ids"]
+    assert cards[0]["words"][0]["selected"] == "0"
+    assert cards[0]["words"][2]["selected"] == "0"

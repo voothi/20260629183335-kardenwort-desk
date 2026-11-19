@@ -1705,16 +1705,23 @@ def test_cross_tab_selection_isolation_preserves_clean_overview_tab(page, tmp_pa
     assert cards_match is not None
     cards = json.loads(cards_match.group(1))
 
+    # Under global frequency sorting: 'the' -> row 0, 'on' (sent 2) -> row 1, 'first' (sent 1) -> row 2, 'second' -> row 3.
+    overview_by_lemma = {w["lemma"].lower(): str(w["row_id"]) for w in cards[0]["words"]}
+    the_row_id = overview_by_lemma["the"]
+    on_row_id = overview_by_lemma["on"]
+    first_row_id = overview_by_lemma["first"]
+    assert (the_row_id, on_row_id, first_row_id) == ("0", "1", "2")
+
     # Tab 1 (Overview, sentence_idx=0) MUST have empty selected_ids
     assert cards[0]["selected_ids"] == [], f"Tab 1 must not inherit child sentence selections, got {cards[0]['selected_ids']}"
-    assert cards[1]["selected_ids"] == ["0"]  # 'the' selected in Tab 2
-    assert cards[2]["selected_ids"] == ["2"]  # 'on' selected in Tab 3
+    assert cards[1]["selected_ids"] == [the_row_id]  # 'the' selected in Tab 2
+    assert cards[2]["selected_ids"] == [on_row_id]  # 'on' selected in Tab 3
 
     page.set_content(html)
     page.wait_for_selector("#kw-workspace-tab-bar")
 
     # On Tab 2: 'the' is selected
-    tab2_the = page.locator('#lemma-table tbody tr[data-row-id="0"]')
+    tab2_the = page.locator(f'#lemma-table tbody tr[data-row-id="{the_row_id}"]')
     assert tab2_the.get_attribute("data-selected") == "1"
 
     # Switch to Tab 1 (Overview)
@@ -1723,16 +1730,16 @@ def test_cross_tab_selection_isolation_preserves_clean_overview_tab(page, tmp_pa
     page.wait_for_selector('#lemma-table tbody tr')
 
     # Tab 1 consolidates selections from other tabs: 'the' and 'on' are selected
-    tab1_the = page.locator('#lemma-table tbody tr[data-row-id="0"]')
+    tab1_the = page.locator(f'#lemma-table tbody tr[data-row-id="{the_row_id}"]')
     assert tab1_the.get_attribute("data-selected") == "1"
     assert "selected" in (tab1_the.get_attribute("class") or "")
 
-    tab1_on = page.locator('#lemma-table tbody tr[data-row-id="2"]')
+    tab1_on = page.locator(f'#lemma-table tbody tr[data-row-id="{on_row_id}"]')
     assert tab1_on.get_attribute("data-selected") == "1"
     assert "selected" in (tab1_on.get_attribute("class") or "")
 
     # Unselected words on Tab 1 remain unselected
-    tab1_first = page.locator('#lemma-table tbody tr[data-row-id="1"]')
+    tab1_first = page.locator(f'#lemma-table tbody tr[data-row-id="{first_row_id}"]')
     assert tab1_first.get_attribute("data-selected") == "0"
     assert "selected" not in (tab1_first.get_attribute("class") or "")
 
@@ -1740,7 +1747,7 @@ def test_cross_tab_selection_isolation_preserves_clean_overview_tab(page, tmp_pa
     tab3 = page.locator('.kw-tab-chip[data-tab-seq="3"]')
     tab3.click()
     page.wait_for_selector('#lemma-table tbody tr')
-    tab3_on = page.locator('#lemma-table tbody tr[data-row-id="2"]')
+    tab3_on = page.locator(f'#lemma-table tbody tr[data-row-id="{on_row_id}"]')
     assert tab3_on.get_attribute("data-selected") == "1"
 
 

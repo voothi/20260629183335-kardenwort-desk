@@ -192,16 +192,24 @@ def test_bidirectional_shared_selection(page, tmp_path):
     assert cards_match is not None
     cards = json.loads(cards_match.group(1))
 
+    # Under global frequency sorting across the container, 'first' (token 0) is row_id '0'
+    # and 'second' (token 2, sentence 2) ranks above 'here' (token 1, sentence 1) at row_id '1'.
+    overview_by_token = {str(w["token_order"]): str(w["row_id"]) for w in cards[0]["words"]}
+    first_row_id = overview_by_token["0"]
+    second_row_id = overview_by_token["2"]
+    assert first_row_id == "0"
+    assert second_row_id == "1"
+
     # The accepted shared-membership contract projects both selections in overview.
-    assert "0" in cards[0]["selected_ids"]
-    assert "2" in cards[0]["selected_ids"]
+    assert first_row_id in cards[0]["selected_ids"]
+    assert second_row_id in cards[0]["selected_ids"]
 
     # Sentence 1 retains its own coordinates and shares the selected lemma.
-    assert cards[1]["selected_ids"] == ["0"]
+    assert cards[1]["selected_ids"] == [first_row_id]
 
     # Tab 3 (Sentence 2, sentence_idx=2) has token 2 selected, but NOT token 0
-    assert "2" in cards[2]["selected_ids"]
-    assert "0" not in cards[2]["selected_ids"]
+    assert second_row_id in cards[2]["selected_ids"]
+    assert first_row_id not in cards[2]["selected_ids"]
 
     # Database membership includes both selected lemmas.
     words = adapter.db.get_words_by_session(unique_zid)

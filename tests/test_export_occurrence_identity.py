@@ -469,6 +469,31 @@ def test_legacy_visual_only_client_resolves_through_active_controller_manifest(t
     assert words_after["Zebra"]["selected"] == 0
 
 
+def test_legacy_visual_only_client_after_unsorted_progressive_session_update(tmp_path, running_controller):
+    """Legacy visual-only export resolves display row 0 (Alpha) even when arbiter.sessions holds unsorted storage rows."""
+    url, server, adapter = running_controller
+    fav_dir = _configure_frequency_sqlite_world(server, tmp_path, selection_mode="selected")
+    _seed_zebra_alpha(adapter)
+
+    restored = adapter.restore_session(ZID)
+    # Mirror progressive translated_text / translated / retranslate updates which write storage-order rows.
+    assert restored["data_rows"][0][restored["headers"].index("WordSource")] == "Zebra"
+    server.arbiter.sessions[ZID] = {
+        "session_zid": ZID,
+        "language": "de",
+        "headers": restored["headers"],
+        "data_rows": [list(r) for r in restored["data_rows"]],
+    }
+
+    status, response = post(url, "/session/export", {"session_zid": ZID, "language": "de", "selected_row_ids": [0]})
+    assert status == 200, response
+    tsv_rows = _read_exported_tsv(fav_dir)
+    assert [r["WordSource"] for r in tsv_rows] == ["Alpha"]
+    words_after = {w["lemma"]: w for w in adapter.db.get_words_by_session(ZID)}
+    assert words_after["Alpha"]["selected"] == 1
+    assert words_after["Zebra"]["selected"] == 0
+
+
 def test_implicit_selection_and_project_deck_preserved(tmp_path, running_controller):
     """Implicit persisted selection (selected_row_ids=None) and project hierarchical Deck remain intact."""
     url, server, adapter = running_controller
