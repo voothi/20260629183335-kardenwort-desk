@@ -262,7 +262,7 @@ def test_controller_session_create_and_status(running_controller):
 
     # Query lookup / session status
     url = f"{server_url}/lookup?text=apple&language=en&bypass-lang-check=true"
-    req = urllib.request.Request(url)
+    req = urllib.request.Request(url, headers={"X-API-Token": server.api_key})
     with urllib.request.urlopen(req, timeout=5.0) as resp:
         assert resp.status == 200
         html = resp.read().decode('utf-8')
@@ -304,7 +304,7 @@ def test_latency_benchmark_sse_vs_file_polling(tmp_path):
 
 
 def test_controller_render_fast_path_endpoint(running_controller):
-    server_url, _ = running_controller
+    server_url, server = running_controller
     url = f"{server_url}/api/v1/render"
     payload = json.dumps({
         "text": "Hello world from controller render fast-path test.",
@@ -313,7 +313,7 @@ def test_controller_render_fast_path_endpoint(running_controller):
         "theme": "dark",
         "bypass_lang_check": True,
     }).encode('utf-8')
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json", "X-API-Token": server.api_key})
     with urllib.request.urlopen(req, timeout=10.0) as resp:
         assert resp.status == 200
         res = json.loads(resp.read().decode('utf-8'))
@@ -346,7 +346,7 @@ def test_controller_render_multi_sentence_returns_children_and_suppresses_spawn(
         "theme": "dark",
         "bypass_lang_check": True,
     }).encode('utf-8')
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json", "X-API-Token": server.api_key})
     with urllib.request.urlopen(req, timeout=60.0) as resp:
         assert resp.status == 200
         res = json.loads(resp.read().decode('utf-8'))
@@ -364,7 +364,7 @@ def test_controller_render_multi_sentence_returns_children_and_suppresses_spawn(
 
 
 def test_controller_render_language_mismatch_returns_422(running_controller):
-    server_url, _ = running_controller
+    server_url, server = running_controller
     url = f"{server_url}/api/v1/render"
     payload = json.dumps({
         "text": "Das ist ein schönes deutsches Haus für den Sprachtest.",
@@ -373,7 +373,7 @@ def test_controller_render_language_mismatch_returns_422(running_controller):
         "theme": "dark",
         "bypass_lang_check": False,
     }).encode('utf-8')
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json", "X-API-Token": server.api_key})
     with pytest.raises(urllib.error.HTTPError) as exc_info:
         urllib.request.urlopen(req, timeout=10.0)
     assert exc_info.value.code == 422
@@ -386,7 +386,7 @@ def test_controller_render_language_mismatch_returns_422(running_controller):
 
 
 def test_controller_render_language_mismatch_with_bypass(running_controller):
-    server_url, _ = running_controller
+    server_url, server = running_controller
     url = f"{server_url}/api/v1/render"
     payload = json.dumps({
         "text": "Das ist ein schönes deutsches Haus für den Sprachtest.",
@@ -395,7 +395,7 @@ def test_controller_render_language_mismatch_with_bypass(running_controller):
         "theme": "dark",
         "bypass_lang_check": True,
     }).encode('utf-8')
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json", "X-API-Token": server.api_key})
     with urllib.request.urlopen(req, timeout=10.0) as resp:
         assert resp.status == 200
         res = json.loads(resp.read().decode('utf-8'))
