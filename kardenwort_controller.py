@@ -3481,9 +3481,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             logger.debug('Peer disconnected during HTML response to %s', self.path)
 
     def _audio_request(self, path):
-        if not getattr(self.server, 'api_key', ''):
-            raise StructuredError(ErrorCode.TOKEN_NOT_CONFIGURED, 'Audio requires configured authentication')
-        self._authenticate_token()
+        self._authenticate_token(require_configured=True)
         body = self._read_json_body()
         try:
             result = execute_audio(body, self.server.resolved_paths, self.server.config,
@@ -3499,7 +3497,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
     def _state_request(self, path, method):
         body = self._read_json_body() if method == 'POST' else {}
         if method != 'GET':
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
         try:
             if not getattr(self.server, 'ui_cfg', None):
                 self.server.ui_cfg = resolve_ui_config(self.server.config)
@@ -3610,15 +3608,17 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
         raise StructuredError(ErrorCode.UNAUTHORIZED, "Invalid or missing API authentication token")
 
-    def _authenticate_token(self, body_data=None, query_params=None):
-        api_key = getattr(self.server, 'api_key', '')
+    def _authenticate_token(self, body_data=None, query_params=None, *, require_configured: bool = False):
+        api_key = str(getattr(self.server, 'api_key', '') or '').strip()
         if not api_key:
+            if require_configured:
+                raise StructuredError(ErrorCode.TOKEN_NOT_CONFIGURED, "Controller authentication token is not configured")
             return
 
         provided_token = self._extract_provided_token(body_data=body_data, query_params=query_params)
 
         import hmac
-        if not provided_token or not hmac.compare_digest(str(provided_token).strip(), str(api_key).strip()):
+        if not provided_token or not hmac.compare_digest(str(provided_token).strip(), api_key):
             raise StructuredError(ErrorCode.UNAUTHORIZED, "Invalid or missing API authentication token")
 
     def _serve_static_file(self, file_path: Path):
@@ -3756,7 +3756,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if method != 'POST':
             raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
         body = self._read_json_body()
-        self._authenticate_token(body)
+        self._authenticate_token(body, require_configured=True)
         params = self._parse_export_request(body, require_selected_field)
         res = core_export(
             tsv_path_or_session=params["session_zid"],
@@ -3855,7 +3855,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
 
             text = body.get('text', '')
             language = body.get('language', '')
@@ -3881,7 +3881,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, 'Selection query requires POST')
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             if not isinstance(body, dict):
                 raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Selection query requires an object')
             session_zid = body.get('session_zid')
@@ -3907,7 +3907,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, 'Stage ingress requires POST')
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             session_zid = body.get('session_zid')
             event = body.get('event')
             if not session_zid or not isinstance(event, dict):
@@ -3922,7 +3922,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
 
             session_zid = body.get('session_zid')
             deltas = body.get('deltas', [])
@@ -3943,7 +3943,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
 
             session_zid = body.get('session_zid')
             if not session_zid:
@@ -3962,7 +3962,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
 
             session_zid = body.get('session_zid')
             selected_rows = body.get('row_ids') or body.get('selected_rows') or []
@@ -3990,7 +3990,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
 
             session_zid = body.get('session_zid') or body.get('zid')
             if not session_zid:
@@ -4022,7 +4022,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
 
             from kardenwort_desk import progressive_storage_owner
             if 'storage_owner' in body and body['storage_owner'] != progressive_storage_owner(operation_configuration(self.server.config), self.server.resolved_paths):
@@ -5236,7 +5236,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
 
             for req_field in ('session_zid', 'language', 'row_id', 'status', 'fingerprint'):
                 if req_field not in body:
@@ -5269,7 +5269,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             session_zid = body.get('session_zid') or body.get('zid')
             action = body.get('action')
             if not session_zid:
@@ -5558,7 +5558,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 return
             elif method == 'POST':
                 body = self._read_json_body()
-                self._authenticate_token(body)
+                self._authenticate_token(body, require_configured=True)
                 title = body.get('title')
                 if not title:
                     raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'title' in project payload")
@@ -5580,7 +5580,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             project_id = body.get('project_id')
             if project_id is None:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
@@ -5595,7 +5595,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             project_id = body.get('project_id')
             if project_id is None:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
@@ -5609,7 +5609,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             project_id = body.get('project_id')
             session_zid = body.get('session_zid')
             if project_id is None:
@@ -5626,7 +5626,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             project_id = body.get('project_id')
             if project_id is None:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
@@ -5664,7 +5664,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             project_id = body.get('project_id')
             session_zid = body.get('session_zid')
             if project_id is None:
@@ -5681,7 +5681,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             project_id = body.get('project_id')
             session_zids = body.get('session_zids', [])
             if project_id is None:
@@ -5698,7 +5698,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             project_id = body.get('project_id')
             if project_id is None:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
@@ -5719,7 +5719,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             if method == 'POST':
                 body = self._read_json_body()
-                self._authenticate_token(body)
+                self._authenticate_token(body, require_configured=True)
                 project_id = body.get('project_id')
                 lang = body.get('language')
             else:
@@ -5780,7 +5780,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             session_zid = body.get('session_zid') or body.get('zid')
             if not session_zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
@@ -5794,7 +5794,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             mode = body.get('mode', 'explicit')
             session_zids = body.get('session_zids') or body.get('zids') or []
             filter_params = body.get('filter') or {}
@@ -5880,14 +5880,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             if 'application/json' in content_type:
                 body = self._read_json_body()
-                self._authenticate_token(body)
+                self._authenticate_token(body, require_configured=True)
                 tsv_content = body.get('tsv_content') or body.get('content') or body.get('tsv')
                 filename = body.get('filename') or filename
                 session_zid = body.get('session_zid') or body.get('zid') or session_zid
                 lang = body.get('language') or lang
                 slug = body.get('slug') or slug
             else:
-                self._authenticate_token(query_params=qs)
+                self._authenticate_token(query_params=qs, require_configured=True)
                 content_len = int(self.headers.get('Content-Length', 0))
                 tsv_bytes = self.rfile.read(content_len)
                 tsv_content = tsv_bytes.decode('utf-8', errors='replace')
@@ -5949,7 +5949,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             from kardenwort_db import KardenwortDB
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
 
@@ -5970,7 +5970,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             older_than_days = body.get('older_than_days')
             if older_than_days is not None:
                 try:
@@ -5994,7 +5994,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             req_zid = generate_server_zid(self.server)
             from kardenwort_db import KardenwortDB
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
@@ -6030,7 +6030,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
             req_zid = generate_server_zid(self.server)
 
             # The threaded HTTP server already owns this worker and its disposal.
@@ -6076,8 +6076,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            if getattr(self.server, 'api_key', ''):
-                self._authenticate_token(body)
+            self._authenticate_token(body, require_configured=True)
 
             req_zid = generate_server_zid(self.server)
             self._send_json(200, {"zid": req_zid, "message": "Shutting down controller and sidecars."})
