@@ -134,15 +134,18 @@
     function present(state, phase, error) {
         if (state.options.present) state.options.present(phase, error);
     }
+    function normalizeIds(ids) {
+        return Array.isArray(ids) ? ids.map(String) : [];
+    }
     function tokenSignature(item) {
         return {
             visual_idx: Number(item.visual_idx),
-            sentence_idx: item.sentence_idx === null || item.sentence_idx === undefined ? null : Number(item.sentence_idx),
-            token_order: item.token_order === null || item.token_order === undefined ? '' : String(item.token_order),
-            atomic_id: item.atomic_id === undefined ? null : item.atomic_id,
+            sentence_idx: item.sentence_idx == null ? null : Number(item.sentence_idx),
+            token_order: item.token_order == null ? '' : String(item.token_order),
+            atomic_id: item.atomic_id == null ? null : item.atomic_id,
             lemma: String(item.lemma || ''),
-            atomic_row_ids: Array.isArray(item.atomic_row_ids) ? item.atomic_row_ids.map(String) : [],
-            row_ids: Array.isArray(item.row_ids) ? item.row_ids.map(String) : []
+            atomic_row_ids: normalizeIds(item.atomic_row_ids),
+            row_ids: normalizeIds(item.row_ids)
         };
     }
     function viewSignature(view) {
@@ -156,6 +159,13 @@
         state.run = null; state.phase = 'disposed';
         state.pendingIntent = null; state.inFlight = false; state.inFlightSignature = null;
     }
+    function applyRestoredView(state, run, view) {
+        checkRun(state, run);
+        state.viewRevision = view.revision;
+        var reconcile = state.options.restore(view);
+        if (reconcile) return commitView(state, state.options.capture(), run);
+        state.committedSignature = view.revision > 0 ? viewSignature(state.options.capture()) : null;
+    }
     function start(state) {
         dispose(state);
         if (!state.viewEnabled || state.options.draft) {
@@ -167,12 +177,8 @@
         state.committedSignature = null; state.pendingIntent = null; state.inFlight = false; state.inFlightSignature = null;
         present(state, 'initializing');
         state.ready = readView(state, run).then(migrate.bind(null, state, run))
-            .then(function(view) {
-                checkRun(state, run); state.viewRevision = view.revision;
-                var reconcile = state.options.restore(view);
-                if (reconcile) return commitView(state, state.options.capture(), run);
-                state.committedSignature = view.revision > 0 ? viewSignature(state.options.capture()) : null;
-            }).then(function() {
+            .then(applyRestoredView.bind(null, state, run))
+            .then(function() {
                 checkRun(state, run); state.phase = 'ready'; present(state, 'ready');
             }).catch(function(error) {
                 if (state.run === run) {
@@ -195,6 +201,10 @@
     }
     function sameCommittedView(state, signature) {
         return state.phase !== 'failed' && state.committedSignature !== null && signature === state.committedSignature;
+    }
+    function isRedundantView(state, signature) {
+        if (!state.inFlight) return sameCommittedView(state, signature);
+        return !state.pendingIntent && signature === state.inFlightSignature;
     }
     function finishViewSend(state, run, error) {
         if (state.run !== run) return;
@@ -233,13 +243,7 @@
             return finishViewSend(state, run, error);
         });
     }
-    function save(state) {
-        if (!state.viewEnabled || state.phase === 'draft' || state.phase === 'disposed') return Promise.resolve();
-        if (state.phase === 'initializing') return state.ready;
-        var intent = state.options.capture();
-        var signature = viewSignature(intent);
-        if (!state.inFlight && sameCommittedView(state, signature)) return state.tail;
-        if (state.inFlight && !state.pendingIntent && signature === state.inFlightSignature) return state.tail;
+    function enqueueView(state, intent, signature) {
         var run = state.run;
         state.pendingIntent = {intent: intent, signature: signature, run: run};
         if (state.inFlight) return state.tail;
@@ -254,6 +258,14 @@
             }
         });
         return state.tail;
+    }
+    function save(state) {
+        if (!state.viewEnabled || state.phase === 'draft' || state.phase === 'disposed') return Promise.resolve();
+        if (state.phase === 'initializing') return state.ready;
+        var intent = state.options.capture();
+        var signature = viewSignature(intent);
+        if (isRedundantView(state, signature)) return state.tail;
+        return enqueueView(state, intent, signature);
     }
     function flush(state) {
         return Promise.resolve(state.ready).then(function() { return state.tail; }).then(function() {
