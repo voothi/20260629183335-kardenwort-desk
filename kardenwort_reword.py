@@ -394,3 +394,53 @@ def project_rows(rows, headers, fields, occurrences, sentence_field='SentenceSou
                        if value})
         result.append([values[name] for name in headers])
     return result
+
+
+def manifest_occurrence_targets(manifest_rows, manifest_headers, selected_rows,
+                                sentence_field='SentenceSourceIndex'):
+    """Convert visual row indices into immutable (sentence_idx, token_order) descriptors."""
+    keys = row_keys(manifest_rows, manifest_headers, sentence_field)
+    indices = list_indices(selected_rows, len(manifest_rows))
+    return tuple(dict(sentence_idx=keys[index][0], token_order=keys[index][1]) for index in indices)
+
+
+def export_explicit_targets(keys, targets=None, visual_indices=None, visual_manifest=None):
+    """Resolve explicit occurrence or visual target descriptors against restored session keys."""
+    target_list = descriptors(targets)
+    visuals = request_visuals(target_list, visual_indices)
+    requested = occurrence_indices(target_list, keys)
+    if visuals:
+        requested, _ = resolve_visual_selection(keys, requested, None, visuals, visual_manifest)
+    return requested
+
+
+def export_manifest_indices(keys, selected_rows, rendered_manifest, sentence_field,
+                            allow_unmapped_indices):
+    """Resolve visual selected_rows via an authoritative rendered manifest or unmapped check."""
+    if rendered_manifest is not None:
+        m_headers, m_rows = rendered_manifest
+        m_targets = manifest_occurrence_targets(m_rows, m_headers, selected_rows, sentence_field)
+        return occurrence_indices(list(m_targets), keys)
+    indices = list_indices(selected_rows, len(keys))
+    if indices and not allow_unmapped_indices:
+        raise InvalidRewordTarget(
+            'Explicit export selection requires occurrence coordinates or an authoritative manifest')
+    return indices
+
+
+def resolve_export_selection(rows, headers, targets=None, selected_rows=None, token_orders=None,
+                             visual_indices=None, visual_manifest=None, rendered_manifest=None,
+                             sentence_field='SentenceSourceIndex', allow_unmapped_indices=False):
+    """Resolve explicit export selectors to immutable DB row indices, or None for implicit mode."""
+    keys = row_keys(rows, headers, sentence_field)
+    requested = export_explicit_targets(keys, targets, visual_indices, visual_manifest)
+    if requested is not None:
+        return requested
+    if selected_rows is not None:
+        return export_manifest_indices(
+            keys, selected_rows, rendered_manifest, sentence_field, allow_unmapped_indices)
+    if token_orders is not None:
+        return token_indices(keys, token_orders, None)
+    if targets is not None or visual_indices is not None:
+        return ()
+    return None

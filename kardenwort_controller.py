@@ -3611,6 +3611,47 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         finally:
             dispatcher.unregister(zid, q)
 
+    def _session_rendered_manifest(self, session_zid: str):
+        arbiter = getattr(self.server, 'arbiter', None)
+        if not arbiter:
+            return None
+        with arbiter._lock:
+            sess = arbiter.sessions.get(session_zid)
+            if sess and sess.get("headers") and sess.get("data_rows") is not None:
+                return list(sess["headers"]), [list(r) for r in sess["data_rows"]]
+        return None
+
+    def _handle_export_request(self, method: str, path: str, *, require_selected_field: bool):
+        if method != 'POST':
+            raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+        body = self._read_json_body()
+        self._authenticate_token(body)
+
+        session_zid = body.get('session_zid')
+        if not session_zid:
+            raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
+        if require_selected_field and 'selected_row_ids' not in body:
+            raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required payload field: 'selected_row_ids'")
+
+        selected_rows = body['selected_row_ids'] if body.get('selected_row_ids') is not None else body.get('row_ids')
+        req_zid = generate_server_zid(self.server) if require_selected_field else (body.get('zid') or session_zid)
+        trace_id = None if require_selected_field else f"{session_zid}:export:selection"
+        res = core_export(
+            tsv_path_or_session=session_zid,
+            selected_row_ids=selected_rows,
+            config=operation_configuration(self.server.config),
+            resolved_paths=self.server.resolved_paths,
+            fingerprint=body.get('fingerprint'),
+            zid=req_zid,
+            language=body.get('language'),
+            trace_id=trace_id,
+            target_coordinates=body.get('target_coordinates'),
+            token_orders=body.get('token_orders'),
+            visual_indices=body.get('visual_indices'),
+            rendered_manifest=self._session_rendered_manifest(session_zid),
+        )
+        self._send_json(200, res)
+
     @request_preferences(request_preference_scope)
     def _dispatch_route(self, method: str):
         self._validate_request_origin()
@@ -3852,26 +3893,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == '/session/export':
-            if method != 'POST':
-                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
-            body = self._read_json_body()
-            self._authenticate_token(body)
-
-            session_zid = body.get('session_zid')
-            selected_rows = body.get('selected_row_ids') or body.get('row_ids') or []
-            if not session_zid:
-                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
-
-            res = core_export(
-                tsv_path_or_session=session_zid,
-                selected_row_ids=selected_rows,
-                config=operation_configuration(self.server.config),
-                resolved_paths=self.server.resolved_paths,
-                language=body.get('language'),
-                zid=body.get('zid') or session_zid,
-                trace_id=f"{session_zid}:export:selection",
-            )
-            self._send_json(200, res)
+            self._handle_export_request(method, path, require_selected_field=False)
             return
 
         if path == '/session/progressive/enqueue':
@@ -4786,15 +4808,16 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                             data_rows=data_rows,
                             sentences=restored.get("sentences"),
                         )
+                        restored = adapter.restore_session(session_zid)
                     except Exception as save_err:
                         logger.warning(f"Could not persist hydrated session to storage: {save_err}")
+
+                fingerprint = compute_content_fingerprint(restored.get("data_rows", []))
 
                 if data_rows and headers:
                     data_rows = sort_rows_by_frequency(
                         data_rows, headers, sess_lang, operation_configuration(self.server.config), self.server.resolved_paths, role_fields=role_fields
                     )
-
-                fingerprint = compute_content_fingerprint(data_rows)
 
                 req_theme = qs.get('theme', [None])[0]
                 view_mode = qs.get('view', [None])[0]
@@ -5035,12 +5058,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 mapping = load_anki_mapping(mapping_path) if mapping_path and mapping_path.exists() else None
                 role_fields = get_role_fields(mapping, headers) if mapping else {}
 
+                fingerprint = compute_content_fingerprint(restored.get("data_rows", []))
+
                 if data_rows and headers:
                     data_rows = sort_rows_by_frequency(
                         data_rows, headers, sess_lang, operation_configuration(self.server.config), self.server.resolved_paths, role_fields=role_fields
                     )
-
-                fingerprint = compute_content_fingerprint(data_rows)
 
                 goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
                 goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
@@ -5137,26 +5160,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path in ('/api/v1/export', '/session/export'):
-            if method != 'POST':
-                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
-            body = self._read_json_body()
-            self._authenticate_token(body)
-
-            for req_field in ('session_zid', 'selected_row_ids'):
-                if req_field not in body:
-                    raise StructuredError(ErrorCode.MISSING_FIELD, f"Missing required payload field: '{req_field}'")
-
-            req_zid = generate_server_zid(self.server)
-            res = core_export(
-                tsv_path_or_session=body["session_zid"],
-                selected_row_ids=body["selected_row_ids"],
-                config=operation_configuration(self.server.config),
-                resolved_paths=self.server.resolved_paths,
-                fingerprint=body.get("fingerprint"),
-                zid=req_zid,
-                language=body.get("language"),
-            )
-            self._send_json(200, res)
+            self._handle_export_request(method, path, require_selected_field=True)
             return
 
         # Atomic Language Confirmation & Session Tab Spawning

@@ -427,19 +427,71 @@
         });
     };
 
+    function addExportTarget(list, seen, sentenceIdx, tokenOrder) {
+        if (!/^[0-9]+$/.test(String(sentenceIdx)) || Number(sentenceIdx) < 1) return;
+        if (!/^[0-9]+$/.test(String(tokenOrder))) return;
+        var sNum = Number(sentenceIdx), tNum = Number(tokenOrder);
+        var key = sNum + ':' + tNum;
+        if (seen[key]) return;
+        seen[key] = true;
+        list.push({ sentence_idx: sNum, token_order: tNum });
+    }
+
+    function rowOccurrenceTargets(tr, fallbackEl) {
+        if (tr && tr.hasAttribute('data-occurrence-targets')) {
+            return getLookupRowTargets(tr);
+        }
+        var el = tr || fallbackEl;
+        if (!el) return [];
+        var out = [], seen = {};
+        addExportTarget(out, seen, el.getAttribute('data-sentence-idx'), el.getAttribute('data-token-order'));
+        return out;
+    }
+
+    function collectCheckedExportTargets() {
+        var targets = [], seen = {};
+        Array.prototype.forEach.call(document.querySelectorAll('.kw-tag-checkbox:checked'), function (cb) {
+            var tr = cb.closest ? cb.closest('tr') : (cb.parentElement ? cb.parentElement.parentElement : null);
+            rowOccurrenceTargets(tr, cb).forEach(function (t) {
+                addExportTarget(targets, seen, t.sentence_idx, t.token_order);
+            });
+        });
+        if (!targets.length) {
+            Array.prototype.forEach.call(
+                document.querySelectorAll('#lemma-table tbody tr.kw-row-selected, #lemma-table tbody tr.selected, #lemma-table tbody tr[data-selected="1"]'),
+                function (tr) {
+                    rowOccurrenceTargets(tr, null).forEach(function (t) {
+                        addExportTarget(targets, seen, t.sentence_idx, t.token_order);
+                    });
+                }
+            );
+        }
+        return targets;
+    }
+
     window.kwExportSelected = function () {
         if (!workspaceCommandsReady()) return;
         var selectedIds = getSelectedRowIds();
+        var exportTargets;
+        try {
+            exportTargets = collectCheckedExportTargets();
+        } catch (err) {
+            setStatusMessage('Export failed: ' + (err && err.message ? err.message : String(err)), true);
+            return;
+        }
         var btn = (document.getElementById('kw-export-btn'));
         if (btn) btn.disabled = true;
         setStatusMessage('Exporting...', false);
 
         var payload = {
-            session_zid: getSessionZid() || SESSION_ZID,
-            language: getSessionLang() || LANGUAGE,
+            session_zid: (typeof window.getSessionZid === 'function' ? window.getSessionZid() : '') || SESSION_ZID,
+            language: (typeof window.getSessionLang === 'function' ? window.getSessionLang() : '') || LANGUAGE,
             selected_row_ids: selectedIds,
             fingerprint: FINGERPRINT
         };
+        if (exportTargets.length > 0) {
+            payload.target_coordinates = exportTargets;
+        }
 
         fetch(resolveBackendUrl('/api/v1/export'), {
             method: 'POST',
@@ -9057,6 +9109,7 @@
             if (l) return l;
             return "";
         }
+        window.getSessionZid = getSessionZid;
         window.getSessionLang = getSessionLang;
 
         function getSessionTargetLang() {
@@ -10173,6 +10226,72 @@
             if (!Object.prototype.hasOwnProperty.call(outcomes, payload.delivery_state)) throw new Error('Export outcome was not acknowledged');
             return {message: exportCardCount(payload) + ' ' + outcomes[payload.delivery_state], kind: 'success'};
         }
+        function activeExportCardRowIds(activeCard) {
+            if (!activeCard || !(activeCard.sentence_idx > 0) || !activeCard.words) return null;
+            var cardRowIds = {};
+            activeCard.words.forEach(function(wObj) {
+                cardRowIds[String(wObj.row_id)] = true;
+                (wObj.all_row_ids || []).forEach(function(id) { cardRowIds[String(id)] = true; });
+            });
+            return cardRowIds;
+        }
+        function trMatchesCard(tr, cardRowIds) {
+            if (!cardRowIds) return true;
+            return getRowGroupIds(tr).some(function(id) { return cardRowIds.hasOwnProperty(String(id)); });
+        }
+        function appendTrTargets(tr, targets, seen) {
+            rowOccurrenceTargets(tr, null).forEach(function(t) {
+                addExportTarget(targets, seen, t.sentence_idx, t.token_order);
+            });
+        }
+        function tokenItemRowIds(item) {
+            if (item.atomic_row_ids && item.atomic_row_ids.length) return item.atomic_row_ids;
+            return item.row_ids || [];
+        }
+        function appendTokenRowTargets(item, trList, targets, seen) {
+            var rowIdSet = {};
+            tokenItemRowIds(item).forEach(function(id) { rowIdSet[String(id)] = true; });
+            Array.prototype.forEach.call(trList || [], function(tr) {
+                if (getRowGroupIds(tr).some(function(id) { return rowIdSet[String(id)]; })) appendTrTargets(tr, targets, seen);
+            });
+        }
+        function appendTokenItemTargets(item, activeSent, trList, targets, seen) {
+            if (activeSent > 0 && Number(item.sentence_idx) > 0 && Number(item.sentence_idx) !== activeSent) return;
+            if (Number(item.sentence_idx) > 0 && /^[0-9]+$/.test(String(item.token_order))) {
+                addExportTarget(targets, seen, item.sentence_idx, item.token_order);
+                return;
+            }
+            appendTokenRowTargets(item, trList, targets, seen);
+        }
+        function collectTokenExportTargets(activeCard, trList) {
+            var targets = [], seen = {};
+            var activeSent = (activeCard && activeCard.sentence_idx > 0) ? Number(activeCard.sentence_idx) : 0;
+            (window.AppState.activeTokenSelections || []).forEach(function(item) {
+                appendTokenItemTargets(item, activeSent, trList, targets, seen);
+            });
+            return targets;
+        }
+        function isExportRowSelected(tr) {
+            if (!tr || tr.getAttribute('data-deleted') === 'true') return false;
+            var trId = String(tr.getAttribute('data-row-id'));
+            if (tr.classList.contains('selected') || tr.classList.contains('kw-row-selected')) return true;
+            if (tr.getAttribute('data-selected') === '1') return true;
+            return typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(trId);
+        }
+        function collectFallbackRowTargets(selectedRows, cardRowIds, targets, seen) {
+            (selectedRows || []).forEach(function(rId) {
+                var tr = document.querySelector('#lemma-table tbody tr[data-row-id="' + rId + '"]');
+                if (tr && tr.getAttribute('data-deleted') !== 'true' && trMatchesCard(tr, cardRowIds)) appendTrTargets(tr, targets, seen);
+            });
+        }
+        function collectRowExportTargets(activeCard, trList, selectedRows) {
+            var targets = [], seen = {}, cardRowIds = activeExportCardRowIds(activeCard);
+            Array.prototype.forEach.call(trList || [], function(tr) {
+                if (isExportRowSelected(tr) && trMatchesCard(tr, cardRowIds)) appendTrTargets(tr, targets, seen);
+            });
+            if (!targets.length) collectFallbackRowTargets(selectedRows, cardRowIds, targets, seen);
+            return targets;
+        }
         window.onSendToAnkiClick = function() {
             if (isServerDisabled()) {
                 window.showToast("Action unavailable: server interaction is disabled", "warning");
@@ -10181,6 +10300,7 @@
             if (window.commitActiveEdit) window.commitActiveEdit();
             var rows = [];
             var tokenOrders = [];
+            var targetCoordinates = [];
 
             var tableSelectedRows = [];
             if (typeof tableRows !== 'undefined' && tableRows) {
@@ -10232,7 +10352,8 @@
                 }
             }
 
-            if (hasActiveTokens && activeTokenRows.length > 0 && activeHasMatchingSelection) {
+            var isTokenScopedExport = Boolean(hasActiveTokens && activeTokenRows.length > 0 && activeHasMatchingSelection);
+            if (isTokenScopedExport) {
                 // 1. Token-scoped (targeted) selection
                 for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
                     var item = window.AppState.activeTokenSelections[a];
@@ -10266,10 +10387,12 @@
             }
 
             // Card-scoped filtering in container mode
-            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
-                var activeCard = window.WorkspaceTabs.getActiveCard();
-                var activeSentIdx = (activeCard && activeCard.sentence_idx !== undefined) ? activeCard.sentence_idx : 0;
-                if (activeSentIdx > 0 && activeCard && activeCard.words) {
+            var activeCard = (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function')
+                ? window.WorkspaceTabs.getActiveCard()
+                : null;
+            if (activeCard) {
+                var activeSentIdx = (activeCard.sentence_idx !== undefined) ? activeCard.sentence_idx : 0;
+                if (activeSentIdx > 0 && activeCard.words) {
                     var cardRowIds = {};
                     var cardTokenOrders = {};
                     for (var w = 0; w < activeCard.words.length; w++) {
@@ -10289,7 +10412,17 @@
                 }
             }
 
-            if (!rows.length && !tokenOrders.length) {
+            try {
+                var trSource = (typeof tableRows !== 'undefined' && tableRows) ? tableRows : document.querySelectorAll('#lemma-table tbody tr[data-row-id]');
+                targetCoordinates = isTokenScopedExport
+                    ? collectTokenExportTargets(activeCard, trSource)
+                    : collectRowExportTargets(activeCard, trSource, rows);
+            } catch (err) {
+                window.showToast("Export unavailable: " + (err && err.message ? err.message : String(err)), "error");
+                return;
+            }
+
+            if (!rows.length && !tokenOrders.length && !targetCoordinates.length) {
                 window.showToast("Please select rows to export.", "warning");
                 return;
             }
@@ -10321,6 +10454,9 @@
                 token_orders: tokenOrders,
                 language: getSessionLang()
             };
+            if (targetCoordinates.length > 0) {
+                bodyPayload.target_coordinates = targetCoordinates;
+            }
             if (tok) bodyPayload.token = tok;
 
             fetch(resolveBackendUrl('/session/export'), {

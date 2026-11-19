@@ -4889,6 +4889,37 @@ class SqliteStorageAdapter(StorageAdapter):
     def vacuum(self, zid: Optional[str] = None) -> bool:
         return self.db.vacuum(zid=zid)
 
+    def _export_order_is_unambiguous(
+        self,
+        data_rows: List[List[str]],
+        headers: List[str],
+        role_fields: Dict[str, str],
+        language: str,
+    ) -> bool:
+        """True only when display sorting and deduplication cannot diverge from storage order."""
+        if not data_rows:
+            return True
+        lemma_col_name = role_fields.get("lemma", "WordSource")
+        lemma_col = headers.index(lemma_col_name) if lemma_col_name in headers else -1
+        if lemma_col != -1:
+            seen_lemmas = set()
+            for row in data_rows:
+                lem = str(row[lemma_col]).strip().lower() if len(row) > lemma_col else ""
+                if lem:
+                    if lem in seen_lemmas:
+                        return False
+                    seen_lemmas.add(lem)
+        freq_sorted = sort_rows_by_frequency(
+            data_rows, headers, language, self.config, self.resolved_paths, role_fields=role_fields
+        )
+        if freq_sorted != data_rows:
+            return False
+        container_sorted = sort_session_data_rows(
+            data_rows, headers, language, self.config, self.resolved_paths,
+            role_fields=role_fields, delivery_mode="container",
+        )
+        return container_sorted == data_rows
+
     def export_favorites(
         self,
         session_zid: str,
@@ -4898,17 +4929,76 @@ class SqliteStorageAdapter(StorageAdapter):
         language: Optional[str] = None,
         zid: Optional[str] = None,
         trace_id: Optional[str] = None,
+        target_coordinates: Optional[List[Any]] = None,
+        token_orders: Optional[List[Any]] = None,
+        visual_indices: Optional[List[Any]] = None,
+        rendered_manifest: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         Dynamically exports selected rows from SQLite storage directly to standard favorites TSV.
         Guarantees 100% column format and ordering equivalence with anki-mapping.ini.
         """
         zid = zid or session_zid or generate_unique_zid()
+        if target_coordinates is not None:
+            try:
+                reword.validate_session_targets(session_zid, target_coordinates)
+            except ValueError as exc:
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
+
         restored = self.restore_session(session_zid)
         headers = restored["headers"]
         data_rows = restored["data_rows"]
         db_words = restored.get("words", [])
         session = restored.get("session", {})
+
+        resolved_explicit = None
+        if (
+            target_coordinates is not None
+            or selected_row_ids is not None
+            or token_orders is not None
+            or visual_indices is not None
+        ):
+            try:
+                manifest_headers, manifest_rows = reword.restored_manifest_rows(restored)
+                role_fields = self._role_fields(manifest_headers)
+                sentence_field = role_fields.get("sentence_index", "SentenceSourceIndex")
+                visuals = reword.request_visuals(
+                    reword.descriptors(target_coordinates), visual_indices
+                )
+                manifest = (
+                    reword_source_manifest(
+                        manifest_rows, manifest_headers, role_fields,
+                        restored.get("source_text", ""), self.config,
+                    )
+                    if visuals
+                    else None
+                )
+                eff_lang = session.get("source_language") or language or (
+                    self.config.get(SEC_SETTINGS, "default_language", fallback="en")
+                    if self.config and hasattr(self.config, "get")
+                    else "en"
+                )
+                allow_unmapped = (
+                    rendered_manifest is None
+                    and target_coordinates is None
+                    and visual_indices is None
+                    and token_orders is None
+                    and self._export_order_is_unambiguous(data_rows, headers, role_fields, eff_lang)
+                )
+                resolved_explicit = reword.resolve_export_selection(
+                    manifest_rows,
+                    manifest_headers,
+                    targets=target_coordinates,
+                    selected_rows=selected_row_ids,
+                    token_orders=token_orders,
+                    visual_indices=visual_indices,
+                    visual_manifest=manifest,
+                    rendered_manifest=rendered_manifest,
+                    sentence_field=sentence_field,
+                    allow_unmapped_indices=allow_unmapped,
+                )
+            except ValueError as exc:
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
 
         selected_col_idx = headers.index("DeskSelected") if "DeskSelected" in headers else -1
 
@@ -4919,8 +5009,9 @@ class SqliteStorageAdapter(StorageAdapter):
         if export_selection_mode == "all":
             actual_export_rows = list(range(len(data_rows)))
         elif export_selection_mode == "unselected":
-            if selected_row_ids is not None:
-                actual_export_rows = [i for i in range(len(data_rows)) if i not in selected_row_ids]
+            if resolved_explicit is not None:
+                excluded = set(resolved_explicit)
+                actual_export_rows = [i for i in range(len(data_rows)) if i not in excluded]
             else:
                 actual_export_rows = [
                     i for i, row in enumerate(data_rows)
@@ -4928,8 +5019,8 @@ class SqliteStorageAdapter(StorageAdapter):
                 ]
         else:
             # "selected"
-            if selected_row_ids is not None and len(selected_row_ids) > 0:
-                actual_export_rows = selected_row_ids
+            if resolved_explicit is not None:
+                actual_export_rows = list(resolved_explicit)
             else:
                 actual_export_rows = [
                     i for i, row in enumerate(data_rows)
@@ -14938,7 +15029,20 @@ def cmd_render(args):
         print_structured_error("DESK_FAILED", f"Render failed: {str(e)}")
         sys.exit(1)
 
-def core_export(tsv_path_or_session, selected_row_ids, config, resolved_paths, fingerprint=None, zid=None, language=None, trace_id=None):
+def core_export(
+    tsv_path_or_session,
+    selected_row_ids,
+    config,
+    resolved_paths,
+    fingerprint=None,
+    zid=None,
+    language=None,
+    trace_id=None,
+    target_coordinates=None,
+    token_orders=None,
+    visual_indices=None,
+    rendered_manifest=None,
+):
     if zid is None:
         zid = generate_unique_zid()
 
@@ -15007,6 +15111,10 @@ def core_export(tsv_path_or_session, selected_row_ids, config, resolved_paths, f
                     language=language,
                     zid=zid,
                     trace_id=trace_id,
+                    target_coordinates=target_coordinates,
+                    token_orders=token_orders,
+                    visual_indices=visual_indices,
+                    rendered_manifest=rendered_manifest,
                 )
                 if isinstance(res, dict):
                     res["zid"] = zid
