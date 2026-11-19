@@ -1877,4 +1877,106 @@ def test_row_legacy_overview_preserves_primary_id_highlighting(page, tmp_path):
     _assert_source_roles(page, ['am', 'beim'], ['primary', 'primary'])
 
 
+@pytest.mark.parametrize('selection_scope', ['row', 'token'])
+def test_hover_preserves_primary_highlight_and_persistent_peers(page, tmp_path, selection_scope):
+    html, _ = _row_highlight_document(tmp_path, 'Haus Haus.', [('Haus', 'Haus', 'noun', 1)])
+    _open_row_highlight_document(page, html)
+    if selection_scope == 'row':
+        page.locator('#lemma-table tbody tr').first.click()
+    else:
+        _source_words(page, ['haus']).first.click()
+    page.locator('#kw-btn-same-lemma').click()
+    page.wait_for_timeout(250)
 
+    haus = _source_words(page, ['haus'])
+    primary_bg = haus.nth(0).evaluate('el => window.getComputedStyle(el).backgroundColor')
+    membership = page.evaluate('getSelectedRowsArray()')
+    focus = page.evaluate('AppState.activeTokenSelections')
+    _assert_source_roles(page, ['haus'], ['primary', 'peer'])
+
+    haus.nth(1).hover()
+    page.wait_for_timeout(250)
+    _assert_source_roles(page, ['haus'], ['primary', 'peer'])
+    assert haus.nth(0).evaluate('el => window.getComputedStyle(el).backgroundColor') == primary_bg
+
+    page.mouse.move(0, 0)
+    page.wait_for_timeout(250)
+    _assert_source_roles(page, ['haus'], ['primary', 'peer'])
+    assert haus.nth(0).evaluate('el => window.getComputedStyle(el).backgroundColor') == primary_bg
+    assert page.evaluate('getSelectedRowsArray()') == membership
+    assert page.evaluate('AppState.activeTokenSelections') == focus
+
+
+@pytest.mark.parametrize('selection_scope,case', [
+    ('row', 'separable'),
+    ('token', 'separable'),
+    ('row', 'compound'),
+    ('token', 'compound'),
+])
+def test_hover_preserves_bound_partner_primary_roles_and_focus(page, tmp_path, selection_scope, case):
+    if case == 'separable':
+        text = 'Er fängt heute an.\nEr fängt morgen an.'
+        rows = [('fängt + an', 'anfangen', 'verb', 1), ('fängt + an', 'anfangen', 'verb', 2), ('heute', 'heute', 'adv', 1)]
+        row_label = 'anfangen'
+        words = ['fängt', 'an']
+        primary_cls = 'highlight-purple-active'
+        unrelated = 'heute'
+        expected_roles = ['primary', 'primary', 'peer', 'peer']
+        primary_indices = (0, 1)
+    else:
+        text = 'E-Mail bleibt E-Mail und Haus.'
+        rows = [('E-Mail', 'E-Mail', 'noun', 1), ('Haus', 'Haus', 'noun', 1)]
+        row_label = 'E-Mail'
+        words = ['e', 'mail']
+        primary_cls = 'highlight-orange-active'
+        unrelated = 'haus'
+        if selection_scope == 'row':
+            expected_roles = ['primary', 'primary', 'peer', 'peer']
+            primary_indices = (0, 1)
+        else:
+            expected_roles = ['primary', 'baseline', 'peer', 'baseline']
+            primary_indices = (0,)
+
+    html, _ = _row_highlight_document(tmp_path, text, rows)
+    _open_row_highlight_document(page, html)
+    if selection_scope == 'row':
+        page.locator('#lemma-table tbody tr', has_text=row_label).first.click()
+    else:
+        _source_words(page, [words[0]]).first.click()
+    page.locator('#kw-btn-same-lemma').click()
+    page.wait_for_timeout(250)
+
+    spans = _source_words(page, words)
+    primary_bgs = [
+        spans.nth(idx).evaluate('el => window.getComputedStyle(el).backgroundColor')
+        for idx in primary_indices
+    ]
+    membership = page.evaluate('getSelectedRowsArray()')
+    focus = page.evaluate('AppState.activeTokenSelections')
+    _assert_source_roles(page, words, expected_roles, primary_cls)
+
+    for target in (spans.nth(0), spans.nth(1), spans.nth(2), _source_words(page, [unrelated]).first):
+        target.hover()
+        page.wait_for_timeout(250)
+        primary_classes = [
+            spans.nth(idx).evaluate("""el => ['highlight-orange-active', 'highlight-purple-active', 'lemma-peer-highlight'].filter(c => el.classList.contains(c))""")
+            for idx in primary_indices
+        ]
+        assert primary_classes == [[primary_cls] for _ in primary_indices]
+        assert [
+            spans.nth(idx).evaluate('el => window.getComputedStyle(el).backgroundColor')
+            for idx in primary_indices
+        ] == primary_bgs
+
+    page.mouse.move(0, 0)
+    page.wait_for_timeout(250)
+    _assert_source_roles(page, words, expected_roles, primary_cls)
+
+    toggled_off = ['baseline' if role == 'peer' else role for role in expected_roles]
+    for roles_after_toggle in (toggled_off, expected_roles, toggled_off):
+        page.locator('#kw-btn-same-lemma').click()
+        page.wait_for_timeout(250)
+        _assert_source_roles(page, words, roles_after_toggle, primary_cls)
+
+    assert page.evaluate('getSelectedRowsArray()') == membership
+    assert page.evaluate('AppState.activeTokenSelections') == focus
