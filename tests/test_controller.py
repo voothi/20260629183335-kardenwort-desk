@@ -1433,7 +1433,7 @@ def test_get_session_zid_serves_directly_from_sqlite_without_translation(running
     monkeypatch.setattr(kardenwort_desk, 'translate_source_text', fail_if_called)
     monkeypatch.setattr(kardenwort_desk, 'translate_lemmas_fast_path', fail_if_called)
 
-    req = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}")
+    req = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}", headers={"X-API-Token": server.api_key})
     t0 = time.perf_counter()
     with urllib.request.urlopen(req, timeout=5.0) as resp:
         duration = time.perf_counter() - t0
@@ -1492,7 +1492,7 @@ def test_get_session_zid_incremental_wordfill_hydration(running_controller, monk
     monkeypatch.setattr(kardenwort_controller, 'find_wordfill_match', mock_find_wordfill_match)
     monkeypatch.setattr(kardenwort_desk, 'find_wordfill_match', mock_find_wordfill_match)
 
-    req = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}")
+    req = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}", headers={"X-API-Token": server.api_key})
     with urllib.request.urlopen(req, timeout=5.0) as resp:
         assert resp.status == 200
         content = resp.read().decode('utf-8')
@@ -1554,7 +1554,7 @@ def test_controller_session_restore_container_mode_initial_active_tab_2(running_
     server.config.set("sentences_mode", "enabled", "true")
 
     # 1. Unset seq_num defaults to seq_num = 2 (Sentence 1 active)
-    req1 = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}")
+    req1 = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}", headers={"X-API-Token": server.api_key})
     with urllib.request.urlopen(req1, timeout=5.0) as resp1:
         assert resp1.status == 200
         content1 = resp1.read().decode('utf-8')
@@ -1562,7 +1562,7 @@ def test_controller_session_restore_container_mode_initial_active_tab_2(running_
         assert '<button type="button" class="kw-tab-chip" data-tab-seq="1" data-sentence-idx="0"' in content1
 
     # 2. Explicit seq_num=1 in container mode defaults to seq_num = 2
-    req2 = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}&seq_num=1")
+    req2 = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}&seq_num=1", headers={"X-API-Token": server.api_key})
     with urllib.request.urlopen(req2, timeout=5.0) as resp2:
         assert resp2.status == 200
         content2 = resp2.read().decode('utf-8')
@@ -1603,7 +1603,7 @@ def test_controller_session_restore_untranslated_lemmas_skeleton_loader(running_
         server.config.add_section("triggers")
     server.config.set("triggers", "run_lemma_base_translation", "auto")
 
-    req = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}")
+    req = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}", headers={"X-API-Token": server.api_key})
     with urllib.request.urlopen(req, timeout=5.0) as resp:
         assert resp.status == 200
         content = resp.read().decode('utf-8')
@@ -1641,7 +1641,7 @@ def test_controller_single_sentence_container_mode_does_not_force_seq_num_2(runn
         ],
     )
 
-    req = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}")
+    req = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}", headers={"X-API-Token": server.api_key})
     with urllib.request.urlopen(req, timeout=5.0) as resp:
         assert resp.status == 200
         content = resp.read().decode('utf-8')
