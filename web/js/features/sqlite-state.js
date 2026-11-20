@@ -37,57 +37,139 @@
     function hasLegacyStorageOrigin() {
         return !(location.protocol === 'about:' && window.origin === 'null');
     }
+    function readStorageItem(name, key) {
+        try {
+            return window[name].getItem(key);
+        } catch (error) {
+            throw new Error('Browser storage is inaccessible (inaccessible_storage)');
+        }
+    }
+    function removeStorageItem(name, key) {
+        try {
+            window[name].removeItem(key);
+        } catch (error) {
+            throw new Error('Browser storage is inaccessible (inaccessible_storage)');
+        }
+    }
     function clearLegacy(zid) {
         if (!hasLegacyStorageOrigin()) return;
-        preferenceKeys.forEach(function(key) { localStorage.removeItem('kw_'+key); });
-        legacyKeys(zid).forEach(function(key) { sessionStorage.removeItem(key); });
+        preferenceKeys.forEach(function(key) { removeStorageItem('localStorage', 'kw_'+key); });
+        legacyKeys(zid).forEach(function(key) { removeStorageItem('sessionStorage', key); });
     }
-    function readLegacy(zid) {
-        if (!hasLegacyStorageOrigin()) return {preferences: {}, view: null};
-        var values = {}, keys = legacyKeys(zid);
+    function isLegacyInt(value, min) {
+        if (typeof value !== 'number' && typeof value !== 'string') return false;
+        var text = String(value);
+        var number = Number(text);
+        return Number.isInteger(number) && number >= min && String(number) === text;
+    }
+    function isValidLegacyOccurrence(item) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+        return isLegacyInt(item.sentence_idx, 1) && isLegacyInt(item.token_order, 0);
+    }
+    function parseLegacyCard(raw, key, problems) {
+        if (raw === null) return 1;
+        if (!isLegacyInt(raw, 1)) {
+            problems.push({key: key, category: 'invalid_active_card'});
+            return null;
+        }
+        return Number(raw);
+    }
+    function parseLegacyTokens(raw, key, problems) {
+        if (raw === null) return [];
+        var parsed;
+        try {
+            parsed = JSON.parse(raw);
+        } catch (error) {
+            problems.push({key: key, category: 'malformed_json'});
+            return null;
+        }
+        if (!Array.isArray(parsed) || parsed.length > 10000 || !parsed.every(isValidLegacyOccurrence)) {
+            problems.push({key: key, category: 'invalid_active_tokens'});
+            return null;
+        }
+        return parsed;
+    }
+    function readLegacyPreferences(problems) {
+        var values = {};
         preferenceKeys.forEach(function(key) {
-            var raw = localStorage.getItem('kw_'+key);
-            if (raw !== null) {
+            var storageKey = 'kw_'+key;
+            var raw = readStorageItem('localStorage', storageKey);
+            if (raw === null) return;
+            try {
                 values[key] = legacyBoolean(raw);
+            } catch (error) {
+                problems.push({key: storageKey, category: 'invalid_boolean'});
             }
         });
-        var tokens = sessionStorage.getItem(keys[0]), card = sessionStorage.getItem(keys[1]);
-        var view = tokens !== null || card !== null;
-        return {preferences: values, view: view ? {active_card: Number(card || 1), active_tokens: JSON.parse(tokens || '[]')} : null};
+        return values;
+    }
+    function readLegacyView(zid, problems) {
+        var keys = legacyKeys(zid);
+        var tokensRaw = readStorageItem('sessionStorage', keys[0]);
+        var cardRaw = readStorageItem('sessionStorage', keys[1]);
+        if (tokensRaw === null && cardRaw === null) return null;
+        var activeCard = parseLegacyCard(cardRaw, keys[1], problems);
+        var activeTokens = parseLegacyTokens(tokensRaw, keys[0], problems);
+        if (activeCard === null || activeTokens === null) return null;
+        return {active_card: activeCard, active_tokens: activeTokens};
+    }
+    function readLegacy(zid) {
+        if (!hasLegacyStorageOrigin()) return {preferences: {}, view: null, problems: []};
+        var problems = [];
+        var preferences = readLegacyPreferences(problems);
+        var view = readLegacyView(zid, problems);
+        return {preferences: preferences, view: view, problems: problems};
     }
     function legacyBoolean(raw) {
         if (raw !== 'true' && raw !== 'false') throw new Error('Invalid saved browser preference');
         return raw === 'true';
     }
+    function hasImportProblems(body) {
+        return !!(body.problems && body.problems.length);
+    }
+    function buildImportElements(body, current) {
+        var recovery = hasImportProblems(body);
+        var message = document.createElement('p'), preview = document.createElement('pre');
+        var keep = document.createElement('button');
+        message.textContent = recovery
+            ? 'Saved browser settings are malformed and cannot be imported. Choose Keep database settings to discard only those obsolete browser keys.'
+            : 'Saved browser settings were found. Choose which values to keep.';
+        preview.textContent = importPreview(body, current);
+        keep.textContent = 'Keep database settings';
+        var accept = recovery ? null : document.createElement('button');
+        if (accept) accept.textContent = 'Import browser settings';
+        return {message: message, preview: preview, accept: accept, keep: keep, recovery: recovery};
+    }
+    function setImportDisabled(ui, disabled) {
+        if (ui.accept) ui.accept.disabled = disabled;
+        ui.keep.disabled = disabled;
+    }
     function importDialog(send, body, current, signal) {
         return new Promise(function(resolve, reject) {
             var dialog = document.createElement('dialog');
-            var message = document.createElement('p'), preview = document.createElement('pre');
-            var accept = document.createElement('button'), keep = document.createElement('button');
+            var ui = buildImportElements(body, current);
             dialog.setAttribute('data-testid', 'legacy-state-import');
-            message.textContent = 'Saved browser settings were found. Choose which values to keep.';
-            preview.textContent = importPreview(body, current);
-            accept.textContent = 'Import browser settings'; keep.textContent = 'Keep database settings';
+            if (ui.recovery) dialog.setAttribute('data-import-mode', 'recovery');
             function finish(payload) {
-                accept.disabled = true; keep.disabled = true;
+                setImportDisabled(ui, true);
                 send('/api/v1/browser-state/import', payload).then(function(result) {
                     if (signal.aborted) return;
                     signal.removeEventListener('abort', cancel);
                     dialog.close(); dialog.remove(); resolve(result);
                 }, function(error) {
                     if (signal.aborted) return;
-                    message.textContent = 'Import not saved: '+error.message+'. Review and choose again.';
+                    ui.message.textContent = 'Import not saved: '+error.message+'. Review and choose again.';
                     if (error.current) {
                         body.revisions = error.current.revisions;
-                        preview.textContent = importPreview(body, error.current);
+                        ui.preview.textContent = importPreview(body, error.current);
                     }
-                    accept.disabled = false; keep.disabled = false;
+                    setImportDisabled(ui, false);
                 });
             }
-            accept.onclick = function() { finish(body); };
-            keep.onclick = function() { finish({session_zid: body.session_zid, client_id: body.client_id, preferences: {}, revisions: {}}); };
+            if (ui.accept) ui.accept.onclick = function() { finish(body); };
+            ui.keep.onclick = function() { finish({session_zid: body.session_zid, client_id: body.client_id, preferences: {}, revisions: {}}); };
             dialog.addEventListener('cancel', function(event) { event.preventDefault(); });
-            [message, preview, accept, keep].forEach(function(element) { dialog.appendChild(element); });
+            [ui.message, ui.preview, ui.accept, ui.keep].filter(Boolean).forEach(function(element) { dialog.appendChild(element); });
             function cancel() { dialog.remove(); reject(new Error('Workspace restoration cancelled')); }
             signal.addEventListener('abort', cancel, {once:true});
             document.body.appendChild(dialog); dialog.showModal();
@@ -95,7 +177,11 @@
     }
     function importPreview(body, current) {
         var values = {};
-        Object.keys(body.preferences).forEach(function(key) { values[key] = current.values[key]; });
+        var keys = hasImportProblems(body) ? preferenceKeys : Object.keys(body.preferences);
+        keys.forEach(function(key) { values[key] = current.values[key]; });
+        if (hasImportProblems(body)) {
+            return JSON.stringify({problems: body.problems, database: values}, null, 2);
+        }
         return JSON.stringify({browser: {preferences: body.preferences, view: body.view}, database: values}, null, 2);
     }
     function viewBody(state) { return {session_zid: state.options.zid, client_id: state.client}; }
@@ -118,13 +204,19 @@
             clearTimeout(run.deadline);
         });
     }
+    function buildImportBody(state, view, legacy) {
+        if (legacy.problems.length) {
+            return Object.assign(viewBody(state), {preferences: {}, view: null, revisions: {}, problems: legacy.problems});
+        }
+        if (legacy.view) legacy.view.expected_revision = view.revision;
+        return Object.assign(viewBody(state), {preferences: legacy.preferences, view: legacy.view, revisions: Object.assign({}, state.revisions)});
+    }
     function migrate(state, run, view) {
         checkRun(state, run);
         if (view.browser_imported) { clearLegacy(state.options.zid); return view; }
         var legacy = readLegacy(state.options.zid);
-        if (!Object.keys(legacy.preferences).length && !legacy.view) return view;
-        if (legacy.view) legacy.view.expected_revision = view.revision;
-        var body = Object.assign(viewBody(state), legacy, {revisions: Object.assign({}, state.revisions)});
+        if (!legacy.problems.length && !Object.keys(legacy.preferences).length && !legacy.view) return view;
+        var body = buildImportBody(state, view, legacy);
         function send(path, payload) { return state.options.send(path, payload, undefined, run.signal); }
         return importDialog(send, body, {values: state.options.ui}, run.signal).then(function(result) {
             checkRun(state, run); receive(state, result); clearLegacy(state.options.zid);
