@@ -129,3 +129,120 @@ def cache_projection(snapshot):
     if 'text_provenance' in event:
         result.update(text_provenance=event['text_provenance'], textProvenance=event['text_provenance'])
     return result
+
+
+def _sentence_index(key):
+    if isinstance(key, bool):
+        return None
+    if isinstance(key, int):
+        return key + 1
+    return int(key) + 1 if isinstance(key, str) and key.isdigit() else None
+
+
+def sentence_entries(raw):
+    if not isinstance(raw, dict):
+        return []
+    entries = []
+    for key, value in raw.items():
+        index = _sentence_index(key)
+        if index is not None and isinstance(value, str) and value:
+            entries.append((key, index, value))
+    return sorted(entries, key=lambda item: item[1])
+
+
+def padded_value(padded_dict, key):
+    if not isinstance(padded_dict, dict):
+        return None
+    candidates = (key, str(key), int(key)) if str(key).isdigit() else (key, str(key))
+    for candidate in candidates:
+        value = padded_dict.get(candidate)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def sentences_complete(db_sentences):
+    sources = [row for row in db_sentences if str(row.get('sentence_source') or '').strip()]
+    return bool(sources) and all(str(row.get('sentence_destination') or '').strip() for row in sources)
+
+
+def committed_translation_map(sentences):
+    result = {}
+    for row in sorted(sentences, key=lambda item: item.get('sentence_index', 1)):
+        index = row.get('sentence_index')
+        dest = str(row.get('sentence_destination') or '').strip()
+        if isinstance(index, int) and index > 0 and dest:
+            result[index - 1] = dest
+    return result
+
+
+def sentence_summary_rows(db_sentences):
+    rows = []
+    for row in sorted(db_sentences, key=lambda item: item.get('sentence_index', 1)):
+        rows.append({
+            'sentence_index': row.get('sentence_index', 1),
+            'sentence_source': str(row.get('sentence_source') or '').strip(),
+            'sentence_destination': str(row.get('sentence_destination') or '').strip(),
+        })
+    return rows
+
+
+def committed_entries_summary(raw, committed_indices, fallback_prov):
+    entries = [item for item in sentence_entries(raw) if item[1] in committed_indices]
+    sentences = [{'sentence_index': idx, 'sentence_source': '', 'sentence_destination': val.strip()} for _, idx, val in entries]
+    committed_map = {idx - 1: val.strip() for _, idx, val in entries}
+    return sentences, committed_map, (fallback_prov if committed_map else None)
+
+
+def sentence_stage_error(error, provider='controller', failed_sentences=(), code='ERR_SENTENCE_TRANSLATION_FAILED'):
+    envelope = getattr(error, 'envelope', None)
+    if isinstance(envelope, dict) and envelope:
+        payload = dict(envelope)
+        payload.setdefault('code', code)
+        payload.setdefault('message', str(error))
+        payload.setdefault('provider', provider)
+    else:
+        payload = dict(code=code, message=str(error), provider=provider)
+    details = dict(payload.get('details') or {})
+    if failed_sentences:
+        details['failed_sentences'] = list(failed_sentences)
+    payload['details'] = details
+    return payload
+
+
+def combine_worker_errors(primary, secondary):
+    if not primary:
+        return secondary
+    if not secondary:
+        return primary
+    combined = dict(primary)
+    details = dict(combined.get('details') or {})
+    details['subsequent_error'] = secondary
+    combined['details'] = details
+    return combined
+
+
+def translated_text_event(rows, fingerprint, translated_html, sentences, error, provider=None, provenance=None):
+    failed = error is not None
+    status = 'failed' if failed else 'success'
+    event = dict(
+        type='update',
+        stage='translated_text',
+        status=status,
+        text_translation_status=status,
+        textTranslationStatus=status,
+        text_translation_failed=failed,
+        textTranslationFailed=failed,
+        fingerprint=fingerprint,
+        rows=rows,
+        translated_text=translated_html,
+        translatedText=translated_html,
+        sentences=sentences,
+    )
+    if failed:
+        event['error'] = error
+    if provider:
+        event.update(provider=provider, active_text_provider=provider, active_provider=provider)
+    if provenance:
+        event.update(text_provenance=provenance, textProvenance=provenance)
+    return event

@@ -15,6 +15,7 @@ from kardenwort_audio_runtime import execute_audio
 from kardenwort_controller_lifetime import ControllerHTTPServer, run_cleanup, stop_owned_process
 import os
 import re
+import inspect
 import json
 import time
 import queue
@@ -194,6 +195,98 @@ def raise_progressive_finalization_errors(status_error, delivery_error):
         raise errors[0]
     if errors:
         raise BaseExceptionGroup('Progressive finalization failed', errors)
+
+
+def _sentence_writer_target(adapter):
+    inner = getattr(adapter, 'adapter', None)
+    if inner is not None and hasattr(inner, 'update_sentence_translation'):
+        return inner.update_sentence_translation
+    return adapter.update_sentence_translation
+
+
+def _supports_keyword_arg(callable_obj, name: str) -> bool:
+    try:
+        sig = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return False
+    return name in sig.parameters or any(
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in sig.parameters.values()
+    )
+
+
+def _sentence_write_kwargs(target, target_field, zid, provenance):
+    kwargs = {}
+    if target_field != 'sentence_destination' or _supports_keyword_arg(target, 'target_field'):
+        kwargs['target_field'] = target_field
+    if _supports_keyword_arg(target, 'zid'):
+        kwargs['zid'] = zid
+    if provenance is not None and _supports_keyword_arg(target, 'provenance'):
+        kwargs['provenance'] = provenance
+    return kwargs
+
+
+def _persist_sentence_field(adapter, session_zid, sentence_index, text, *, target_field, zid, provenance):
+    kwargs = _sentence_write_kwargs(_sentence_writer_target(adapter), target_field, zid, provenance)
+    if adapter.update_sentence_translation(session_zid, sentence_index, text, **kwargs) is False:
+        raise RuntimeError(f'Sentence {sentence_index} ({target_field}) was not updated in storage')
+
+
+def _sqlite_session_active(adapter, session_zid) -> bool:
+    if not hasattr(adapter, 'db'):
+        return True
+    with adapter.db.get_connection(read_only=True) as conn:
+        row = conn.execute('SELECT 1 FROM sessions WHERE zid = ? AND deleted_at IS NULL', (session_zid,)).fetchone()
+    return row is not None
+
+
+def _try_persist_sentence(adapter, session_zid, s_idx, text, target_field, req_zid, provenance, failures):
+    try:
+        _persist_sentence_field(
+            adapter, session_zid, s_idx, text, target_field=target_field, zid=req_zid, provenance=provenance
+        )
+        return True
+    except Exception as exc:
+        logger.warning(f'Sentence {s_idx} ({target_field}) persistence failed for {session_zid}: {exc}')
+        failures.append((s_idx, target_field, exc))
+        return False
+
+
+def _sentence_persistence_error(failures):
+    _, first_field, first_exc = failures[0]
+    failed_indices = sorted({idx for idx, _, _ in failures})
+    err = progressive.sentence_stage_error(
+        first_exc,
+        provider='storage',
+        failed_sentences=failed_indices,
+        code='ERR_SENTENCE_PERSISTENCE_FAILED',
+    )
+    err['details']['failed_field'] = first_field
+    err['details']['failed_writes'] = [
+        {'sentence_index': idx, 'field': field, 'message': str(exc)}
+        for idx, field, exc in failures
+    ]
+    return err
+
+
+def _persist_sentence_entry(adapter, session_zid, raw_key, s_idx, trans, padded, req_zid, provenance, committed, failures):
+    if _try_persist_sentence(adapter, session_zid, s_idx, trans, 'sentence_destination', req_zid, provenance, failures):
+        committed.add(s_idx)
+    padded_trans = progressive.padded_value(padded, raw_key)
+    if padded_trans:
+        _try_persist_sentence(adapter, session_zid, s_idx, padded_trans, 'sentence_destination2', req_zid, provenance, failures)
+
+
+def _persist_sqlite_sentences(adapter, session_zid, raw_translations, provenance, req_zid):
+    entries = progressive.sentence_entries(raw_translations)
+    if not entries:
+        return set(), None
+    if not _sqlite_session_active(adapter, session_zid):
+        raise StructuredError(ErrorCode.NOT_FOUND, f'Session {session_zid} was deleted before sentence commit')
+    padded = raw_translations.get('PADDED') if isinstance(raw_translations, dict) else None
+    committed, failures = set(), []
+    for raw_key, s_idx, trans in entries:
+        _persist_sentence_entry(adapter, session_zid, raw_key, s_idx, trans, padded, req_zid, provenance, committed, failures)
+    return committed, (_sentence_persistence_error(failures) if failures else None)
 
 
 def _session_cache_revision(session):
@@ -1522,6 +1615,150 @@ class EnrichmentQueue:
             row_provenances=event['row_provenances'], config=self.config,
             resolved_paths=self.resolved_paths, storage_adapter=adapter, **snapshot.metadata)
 
+    def _translate_and_persist_sentences(self, adapter, session_zid, is_sqlite, text, sess_lang,
+                                         sess_target, text_mode, provider, req_zid, eff_trace_id, generation):
+        try:
+            raw = translate_source_text(
+                text, sess_lang, sess_target, text_mode, self.config, self.resolved_paths,
+                provider, zid=req_zid, trace_id=eff_trace_id,
+            )
+        except Exception as text_err:
+            logger.warning(f"Sentence translation error in progressive queue for {session_zid}: {text_err}")
+            if self._is_progressive_superseded(session_zid, generation):
+                return None, set(), None, None, True
+            stage_err = progressive.sentence_stage_error(text_err, provider=provider)
+            partial = getattr(text_err, 'partial_dict', None)
+            return self._persist_partial_sentences(adapter, session_zid, is_sqlite, partial, provider, req_zid, stage_err)
+        if self._is_progressive_superseded(session_zid, generation):
+            return None, set(), None, None, True
+        prov = getattr(raw, "provenance", f"live:{provider}")
+        if is_sqlite and isinstance(raw, dict):
+            committed, persist_err = _persist_sqlite_sentences(adapter, session_zid, raw, prov, req_zid)
+            return raw, committed, prov, persist_err, False
+        return raw, set(), prov, None, False
+
+    @staticmethod
+    def _persist_partial_sentences(adapter, session_zid, is_sqlite, partial, provider, req_zid, stage_err):
+        if not isinstance(partial, dict):
+            return None, set(), None, stage_err, False
+        prov = getattr(partial, 'provenance', f"live:{provider}")
+        if not is_sqlite:
+            return partial, set(), prov, stage_err, False
+        try:
+            committed, persist_err = _persist_sqlite_sentences(adapter, session_zid, partial, prov, req_zid)
+        except Exception as exc:
+            persist_err = progressive.sentence_stage_error(exc, provider='storage', code='ERR_SENTENCE_PERSISTENCE_FAILED')
+            committed = set()
+        return partial, committed, prov, progressive.combine_worker_errors(stage_err, persist_err), False
+
+    def _read_committed_sqlite_sentences(self, adapter, session_zid, raw, committed_indices, fallback_prov):
+        if not hasattr(adapter, 'db'):
+            return progressive.committed_entries_summary(raw, committed_indices, fallback_prov)
+        db_sents = adapter.db.get_sentences_by_session(session_zid) or []
+        return (
+            progressive.sentence_summary_rows(db_sents),
+            progressive.committed_translation_map(db_sents),
+            progressive.text_provenance(db_sents, None),
+        )
+
+    def _materialize_sentence_stage(self, adapter, session_zid, is_sqlite, raw, committed_indices,
+                                    fallback_prov, text, text_mode, data_rows, col_idx, col_dest,
+                                    tsv_path, comments, headers):
+        if is_sqlite:
+            sentences, committed_map, committed_prov = self._read_committed_sqlite_sentences(
+                adapter, session_zid, raw, committed_indices, fallback_prov
+            )
+            resolve_translations(
+                text, text_mode, data_rows, col_idx, col_dest, committed_map,
+                tsv_path, comments, headers, persist=False, return_single=False,
+            )
+            html_out = format_translated_html(committed_map, text_mode=text_mode, text=text, config=self.config) if committed_map else ""
+            return sentences, committed_map, committed_prov, html_out, None
+        if raw is None:
+            return [], {}, None, "", None
+        try:
+            resolve_translations(
+                text, text_mode, data_rows, col_idx, col_dest, raw,
+                tsv_path, comments, headers, persist=True, return_single=False,
+            )
+        except Exception as exc:
+            err = progressive.sentence_stage_error(exc, provider='storage', code='ERR_SENTENCE_PERSISTENCE_FAILED')
+            return [], {}, None, "", err
+        entries = progressive.sentence_entries(raw)
+        sentences = [{"sentence_index": i, "sentence_source": "", "sentence_destination": v.strip()} for _, i, v in entries]
+        html_out = format_translated_html(raw, text_mode=text_mode, text=text, config=self.config)
+        return sentences, raw, fallback_prov, html_out, None
+
+    def _cache_sentence_stage(self, arbiter, session_zid, data_rows, new_fp, committed_map,
+                              sentences_list, committed_prov, eff_tp_name, generation):
+        with self._lock:
+            if generation is not None and self._progressive_generations.get(session_zid) != generation:
+                return False
+            with arbiter._lock:
+                sess = arbiter.sessions.get(session_zid)
+                if sess is not None:
+                    sess["data_rows"] = data_rows
+                    sess["fingerprint"] = new_fp
+                    sess["sentences"] = sentences_list
+                    sess["sentence_translation"] = committed_map or None
+                    sess["text_provenance"] = committed_prov
+                    sess["textProvenance"] = committed_prov
+                    if committed_map:
+                        sess["active_text_provider"] = eff_tp_name
+                        sess["active_provider"] = eff_tp_name
+        return True
+
+    def _emit_translated_text_stage(self, arbiter, adapter, session_zid, tsv_path, data_rows, headers,
+                                    role_fields, sess_lang, eff_trace_id, new_fp, translated_html,
+                                    sentences_list, stage_err, eff_tp_name, committed_prov):
+        sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
+        structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
+        pub_provider = eff_tp_name if stage_err is None else None
+        event = progressive.translated_text_event(
+            structured_rows, new_fp, translated_html, sentences_list, stage_err,
+            provider=pub_provider, provenance=committed_prov,
+        )
+        safe_write_update_js(
+            tsv_path, sorted_rows, headers, role_fields, stage="translated_text", status=event["status"],
+            error=stage_err, zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html,
+            text_translation_status=event["text_translation_status"],
+            text_translation_failed=event["text_translation_failed"],
+            text_provenance=committed_prov, sentences=sentences_list, provider=pub_provider,
+            config=self.config, resolved_paths=self.resolved_paths, storage_adapter=adapter,
+        )
+        arbiter.emit_event(session_zid, event)
+
+    def _run_sentence_stage(self, arbiter, adapter, session_zid, is_sqlite, text, sess_lang, sess_target,
+                            text_mode, data_rows, headers, role_fields, col_idx, col_dest, tsv_path,
+                            comments, req_zid, eff_trace_id, generation):
+        text_chain, _ = resolve_provider_chain(self.config, task_type='text') if self.config else (['google'], 'chain')
+        main_text_provider = text_chain[0] if text_chain else 'google'
+        arbiter.emit_event(session_zid, {
+            "type": "stage", "stage": "text_translation", "status": "in_progress", "provider": main_text_provider,
+        })
+        raw, committed_indices, fallback_prov, stage_err, superseded = self._translate_and_persist_sentences(
+            adapter, session_zid, is_sqlite, text, sess_lang, sess_target, text_mode,
+            main_text_provider, req_zid, eff_trace_id, generation,
+        )
+        if superseded:
+            return None, None, True
+        sentences_list, committed_map, committed_prov, translated_html, mat_err = self._materialize_sentence_stage(
+            adapter, session_zid, is_sqlite, raw, committed_indices, fallback_prov,
+            text, text_mode, data_rows, col_idx, col_dest, tsv_path, comments, headers,
+        )
+        stage_err = progressive.combine_worker_errors(stage_err, mat_err)
+        eff_tp_name = str(committed_prov)[5:].strip().lower() if committed_prov and str(committed_prov).startswith("live:") else main_text_provider
+        new_fp = compute_content_fingerprint(data_rows)
+        if not self._cache_sentence_stage(
+            arbiter, session_zid, data_rows, new_fp, committed_map, sentences_list, committed_prov, eff_tp_name, generation
+        ):
+            return None, None, True
+        self._emit_translated_text_stage(
+            arbiter, adapter, session_zid, tsv_path, data_rows, headers, role_fields, sess_lang,
+            eff_trace_id, new_fp, translated_html, sentences_list, stage_err, eff_tp_name, committed_prov,
+        )
+        return stage_err, committed_prov, False
+
     @operation_preferences
     def _execute_progressive_task(
         self,
@@ -1553,6 +1790,9 @@ class EnrichmentQueue:
         tsv_path = None
         active_text_prov = None
         sess_row_provs: Dict[Any, str] = {}
+
+        if self._is_progressive_superseded(session_zid, generation):
+            return
 
         if is_sqlite and hasattr(storage_adapter, 'db'):
             now_iso = datetime.now(timezone.utc).isoformat()
@@ -1638,148 +1878,33 @@ class EnrichmentQueue:
 
             # Stage 1: Text / Sentence Translation
             run_text = self.config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto') if self.config else 'auto'
-            sentence_translated = False
-            if col_sentence_dest != -1:
-                if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
-                    sentence_translated = True
+            db_sents = []
+            if is_sqlite and hasattr(storage_adapter, 'db'):
+                try:
+                    db_sents = storage_adapter.db.get_sentences_by_session(session_zid) or []
+                except Exception:
+                    db_sents = []
+            sentence_translated = (
+                progressive.sentences_complete(db_sents)
+                if db_sents
+                else (col_sentence_dest != -1 and any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows))
+            )
 
             active_text_prov = session_data.get("text_provenance") or session_data.get("textProvenance")
-            if not active_text_prov and is_sqlite:
-                try:
-                    db_sents = storage_adapter.db.get_sentences_by_session(session_zid)
-                    if db_sents:
-                        active_text_prov = next((s.get("text_provenance") for s in db_sents if s.get("text_provenance")), None)
-                except Exception:
-                    pass
+            if not active_text_prov and db_sents:
+                active_text_prov = progressive.text_provenance(db_sents, None)
 
             if not sentence_translated and run_text == 'auto' and text:
-                text_chain, _ = resolve_provider_chain(self.config, task_type='text') if self.config else (['google'], 'chain')
-                main_text_provider = text_chain[0] if text_chain else 'google'
-                arbiter.emit_event(session_zid, {
-                    "type": "stage",
-                    "stage": "text_translation",
-                    "status": "in_progress",
-                    "provider": main_text_provider,
-                })
-                try:
-                    sentence_translations_raw = translate_source_text(
-                        text, sess_lang, sess_target, text_mode, self.config, self.resolved_paths, main_text_provider, zid=req_zid, trace_id=eff_trace_id
-                    )
-                    active_text_prov = getattr(sentence_translations_raw, "provenance", f"live:{main_text_provider}")
-                    if is_sqlite and isinstance(sentence_translations_raw, dict):
-                        padded_dict = sentence_translations_raw.get('PADDED') or {}
-                        for s_idx_raw, trans in sentence_translations_raw.items():
-                            if s_idx_raw in ('FULL_TEXT', 'PADDED') or not (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()):
-                                continue
-                            if trans and isinstance(trans, str):
-                                s_idx = int(s_idx_raw) + 1
-                                try:
-                                    storage_adapter.update_sentence_translation(session_zid, s_idx, trans, zid=req_zid, provenance=active_text_prov)
-                                except Exception:
-                                    try:
-                                        storage_adapter.update_sentence_translation(session_zid, s_idx, trans, zid=req_zid)
-                                    except Exception:
-                                        pass
-                                if padded_dict:
-                                    padded_trans = padded_dict.get(s_idx_raw) or padded_dict.get(int(s_idx_raw) if str(s_idx_raw).isdigit() else s_idx_raw)
-                                    if padded_trans and isinstance(padded_trans, str):
-                                        try:
-                                            storage_adapter.update_sentence_translation(session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid, provenance=active_text_prov)
-                                        except Exception:
-                                            try:
-                                                storage_adapter.update_sentence_translation(session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid)
-                                            except Exception:
-                                                pass
-
-                    resolve_translations(
-                        text, text_mode, data_rows, col_sentence_idx, col_sentence_dest,
-                        sentence_translations_raw, tsv_path, session_data["comments"], headers,
-                        persist=(not is_sqlite), return_single=False
-                    )
-
-                    sentences_list = []
-                    if is_sqlite and hasattr(storage_adapter, 'backend_name') and storage_adapter.backend_name == 'sqlite' and hasattr(storage_adapter, 'db'):
-                        try:
-                            db_sents = storage_adapter.db.get_sentences_by_session(session_zid)
-                            if db_sents:
-                                for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1)):
-                                    sentences_list.append({
-                                        "sentence_index": s.get("sentence_index", 1),
-                                        "sentence_source": str(s.get("sentence_source") or "").strip(),
-                                        "sentence_destination": str(s.get("sentence_destination") or "").strip(),
-                                    })
-                        except Exception:
-                            pass
-                    if not sentences_list and isinstance(sentence_translations_raw, dict):
-                        valid_items = [
-                            (k, v) for k, v in sentence_translations_raw.items()
-                            if k not in ('FULL_TEXT', 'PADDED') and (isinstance(k, int) or str(k).isdigit())
-                        ]
-                        for s_idx_raw, trans_val in sorted(valid_items, key=lambda x: int(x[0])):
-                            s_idx = int(s_idx_raw) + 1
-                            sentences_list.append({
-                                "sentence_index": s_idx,
-                                "sentence_source": "",
-                                "sentence_destination": str(trans_val).strip() if trans_val else "",
-                            })
-
-                    new_fp = compute_content_fingerprint(data_rows)
-                    eff_tp_name = main_text_provider
-                    if active_text_prov and str(active_text_prov).startswith("live:"):
-                        eff_tp_name = str(active_text_prov)[5:].strip().lower()
-                    with arbiter._lock:
-                        if session_zid in arbiter.sessions:
-                            arbiter.sessions[session_zid]["data_rows"] = data_rows
-                            arbiter.sessions[session_zid]["fingerprint"] = new_fp
-                            arbiter.sessions[session_zid]["sentence_translation"] = sentence_translations_raw
-                            arbiter.sessions[session_zid]["sentences"] = sentences_list
-                            arbiter.sessions[session_zid]["text_provenance"] = active_text_prov
-                            arbiter.sessions[session_zid]["textProvenance"] = active_text_prov
-                            arbiter.sessions[session_zid]["active_text_provider"] = eff_tp_name
-                            arbiter.sessions[session_zid]["active_provider"] = eff_tp_name
-
-                    translated_html = format_translated_html(sentence_translations_raw, text_mode=text_mode, text=text, config=self.config)
-                    sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
-                    structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov, sentences=sentences_list, provider=eff_tp_name, config=self.config, resolved_paths=self.resolved_paths, storage_adapter=storage_adapter)
-                    arbiter.emit_event(session_zid, {
-                        "type": "update",
-                        "stage": "translated_text",
-                        "status": "success",
-                        "provider": eff_tp_name,
-                        "active_text_provider": eff_tp_name,
-                        "active_provider": eff_tp_name,
-                        "text_translation_status": "success",
-                        "textTranslationStatus": "success",
-                        "text_translation_failed": False,
-                        "textTranslationFailed": False,
-                        "fingerprint": new_fp,
-                        "rows": structured_rows,
-                        "translated_text": translated_html,
-                        "translatedText": translated_html,
-                        "text_provenance": active_text_prov,
-                        "textProvenance": active_text_prov,
-                        "sentences": sentences_list,
-                    })
-                except Exception as text_err:
-                    logger.warning(f"Sentence translation error in progressive queue for {session_zid}: {text_err}")
-                    active_text_prov = None
-                    sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
-                    structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text="", text_translation_status="failed", text_translation_failed=True, config=self.config, resolved_paths=self.resolved_paths, storage_adapter=storage_adapter)
-                    arbiter.emit_event(session_zid, {
-                        "type": "update",
-                        "stage": "translated_text",
-                        "status": "success",
-                        "text_translation_status": "failed",
-                        "textTranslationStatus": "failed",
-                        "text_translation_failed": True,
-                        "textTranslationFailed": True,
-                        "fingerprint": compute_content_fingerprint(data_rows),
-                        "rows": structured_rows,
-                        "translated_text": "",
-                        "translatedText": "",
-                    })
+                stage1_error, stage1_prov, superseded = self._run_sentence_stage(
+                    arbiter, storage_adapter, session_zid, is_sqlite, text, sess_lang, sess_target,
+                    text_mode, data_rows, headers, role_fields, col_sentence_idx, col_sentence_dest,
+                    tsv_path, session_data["comments"], req_zid, eff_trace_id, generation,
+                )
+                if superseded:
+                    return
+                active_text_prov = stage1_prov
+                if stage1_error is not None:
+                    worker_error = progressive.combine_worker_errors(worker_error, stage1_error)
 
             # Stage 2: Lemma Base Translation
             run_base = self.config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto') if self.config else 'auto'
@@ -1966,12 +2091,15 @@ class EnrichmentQueue:
 
         except Exception as e:
             logger.error(f"Error in progressive queue task for session {session_zid}: {e}\n{traceback.format_exc()}")
-            worker_error = {
-                "code": "ERR_PROGRESSIVE_TASK_FAILED",
-                "message": str(e),
-                "provider": "controller",
-                "details": {},
-            }
+            worker_error = progressive.combine_worker_errors(
+                worker_error,
+                {
+                    "code": "ERR_PROGRESSIVE_TASK_FAILED",
+                    "message": str(e),
+                    "provider": "controller",
+                    "details": {},
+                },
+            )
         finally:
             self._publish_progressive_final_state(
                 arbiter=arbiter,
