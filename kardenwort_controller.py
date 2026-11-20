@@ -38,7 +38,7 @@ from http.server import BaseHTTPRequestHandler
 from b64util import encode
 
 # Import core business logic primitives from kardenwort_desk
-from kardenwort_translation_validation import is_unfinished_translation
+from kardenwort_translation_validation import is_stored_translation_failure, is_unfinished_translation
 from kardenwort_desk import (
     load_config,
     resolve_ui_config,
@@ -1390,7 +1390,9 @@ class EnrichmentQueue:
                 del self._active_progressive_sessions[session_zid]
 
     def _collect_wordfill_row_updates(self, row, headers, role_fields, match):
-        patch = progressive.wordfill_patch(row, headers, role_fields, match)
+        patch = progressive.wordfill_patch(
+            row, headers, role_fields, match, is_failure=is_stored_translation_failure
+        )
         for field, index, value in patch:
             self._apply_wordfill_cell(row, index, value)
         return {field: value for field, _, value in patch}
@@ -1403,7 +1405,9 @@ class EnrichmentQueue:
         row[index] = value
 
     def _wordfill_row(self, row, headers, roles, lemma_column, translation_column, language, config, path):
-        if not progressive.eligible_wordfill(row, lemma_column, translation_column):
+        if not progressive.eligible_wordfill(
+            row, lemma_column, translation_column, is_unfinished=is_unfinished_translation
+        ):
             return {}
         match = find_wordfill_match(row[lemma_column].strip(), language, config, exclude_path=path)
         if not match:

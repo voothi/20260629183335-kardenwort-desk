@@ -1,8 +1,6 @@
 """Pure completion projections and wordfill field selection."""
 from dataclasses import dataclass
 
-from kardenwort_translation_validation import is_stored_translation_failure, is_unfinished_translation
-
 
 WORD_FIELDS = (
     ('word_translation', 'word_destination', ('WordDestination',)),
@@ -56,33 +54,42 @@ def current_value(row, index):
     return row[index].strip()
 
 
-def incoming_value(match, names):
+def _default_failure(value):
+    return value == '[FAILED]' or value.startswith('[Error')
+
+
+def incoming_value(match, names, is_failure=_default_failure):
     for name in names:
         value = str(match.get(name) or '').strip()
-        if value and not is_stored_translation_failure(value):
+        if value and not is_failure(value):
             return value
     return ''
 
 
-def wordfill_field(row, headers, roles, match, definition):
+def wordfill_field(row, headers, roles, match, definition, is_failure=_default_failure):
     role, field, defaults = definition
     names = (roles[role], *defaults) if roles.get(role) else defaults
     index = header_index(headers, names)
-    if current_value(row, index):
+    current = current_value(row, index)
+    if current and not is_failure(current):
         return None
-    value = incoming_value(match, names)
+    value = incoming_value(match, names, is_failure=is_failure)
     return (field, index, value) if value else None
 
 
-def wordfill_patch(row, headers, roles, match):
-    fields = (wordfill_field(row, headers, roles, match, definition) for definition in WORD_FIELDS)
+def wordfill_patch(row, headers, roles, match, is_failure=_default_failure):
+    fields = (
+        wordfill_field(row, headers, roles, match, definition, is_failure=is_failure)
+        for definition in WORD_FIELDS
+    )
     return [field for field in fields if field is not None]
 
 
-def eligible_wordfill(row, lemma_column, translation_column):
-    return bool(current_value(row, lemma_column)) and is_unfinished_translation(
-        current_value(row, translation_column)
-    )
+def eligible_wordfill(row, lemma_column, translation_column, is_unfinished=None):
+    if not current_value(row, lemma_column):
+        return False
+    translation = current_value(row, translation_column)
+    return is_unfinished(translation) if is_unfinished is not None else not translation
 
 
 def indexed_provenances(keys, provenances):

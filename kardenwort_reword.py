@@ -449,3 +449,52 @@ def resolve_export_selection(rows, headers, targets=None, selected_rows=None, to
     if targets is not None or visual_indices is not None:
         return ()
     return None
+
+
+def _is_word_char(ch):
+    return ch.isalnum() or ch == '_'
+
+
+def _ends_http(token):
+    return token.endswith('http') and (len(token) == 4 or not _is_word_char(token[-5]))
+
+
+def _starts_429(token):
+    return token.startswith('429') and (len(token) == 3 or not _is_word_char(token[3]))
+
+
+def _is_provider_http_429(parts):
+    if parts[:2] != ['error', 'calling']:
+        return False
+    return any(_ends_http(left) and _starts_429(right) for left, right in zip(parts[2:], parts[3:]))
+
+
+def is_stored_rate_limit_failure(value):
+    """Return True only for confirmed whole-field HTTP 429 rate-limit failure strings."""
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text or '\n' in text or '\r' in text:
+        return False
+    parts = text.lower().split()
+    return parts == ['http', '429', 'too', 'many', 'requests'] or _is_provider_http_429(parts)
+
+
+def is_stored_translation_failure(value):
+    """Return True for recognized stored translation failure markers and HTTP 429 failures."""
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if text == '[FAILED]' or text.startswith('[Error'):
+        return True
+    return is_stored_rate_limit_failure(text)
+
+
+def is_unfinished_translation(value):
+    """Return True when a translation field is empty, pending skeleton, or a stored failure."""
+    if value is None:
+        return True
+    text = str(value).strip()
+    if not text or 'skeleton-loader' in text:
+        return True
+    return is_stored_translation_failure(text)
