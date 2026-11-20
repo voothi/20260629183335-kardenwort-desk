@@ -3643,6 +3643,384 @@ class SqliteStorageAdapter(StorageAdapter):
                 "CREATE INDEX IF NOT EXISTS idx_overview_selections_session ON overview_selections(session_zid);"
             )
 
+    @staticmethod
+    def _cell_text(row: List[str], col_idx: Optional[int]) -> str:
+        if col_idx is None or col_idx >= len(row) or row[col_idx] is None:
+            return ""
+        return str(row[col_idx]).strip()
+
+    @staticmethod
+    def _parse_explicit_manifest_sentence_indices(
+        session_zid: str,
+        raw_cells: List[str],
+        existing_sents_by_idx: Dict[int, Dict[str, Any]],
+    ) -> List[int]:
+        resolved: List[int] = []
+        for row_idx, raw in enumerate(raw_cells):
+            if not raw.isascii() or not raw.isdigit():
+                raise StructuredError(
+                    ErrorCode.INVALID_STATE,
+                    f"Missing or invalid SentenceSourceIndex at row {row_idx} for session '{session_zid}'",
+                )
+            value = int(raw)
+            if value < 1 and value not in existing_sents_by_idx:
+                raise StructuredError(
+                    ErrorCode.INVALID_STATE,
+                    f"Invalid non-positive SentenceSourceIndex '{raw}' at row {row_idx} for session '{session_zid}'",
+                )
+            resolved.append(value)
+        return resolved
+
+    @staticmethod
+    def _distinct_manifest_sentence_sources(
+        data_rows: List[List[str]],
+        col_sent_src: Optional[int],
+        normalize_sentence_fn,
+    ) -> Set[str]:
+        if col_sent_src is None:
+            return set()
+        distinct: Set[str] = set()
+        for row in data_rows:
+            norm = normalize_sentence_fn(SqliteStorageAdapter._cell_text(row, col_sent_src))
+            if norm:
+                distinct.add(norm)
+        return distinct
+
+    @staticmethod
+    def _is_ambiguous_multi_manifest(
+        distinct_sources: Set[str],
+        explicit_sentences: Optional[List[Dict[str, Any]]],
+        text_mode: str,
+        source_raw_text: str,
+    ) -> bool:
+        if len(distinct_sources) > 1:
+            return True
+        if explicit_sentences is not None and len(explicit_sentences) > 1:
+            return True
+        if text_mode == "multi" and not distinct_sources:
+            return len(list(filter(str.strip, (source_raw_text or "").splitlines()))) > 1
+        return False
+
+    @staticmethod
+    def _single_unit_target_index(
+        explicit_sentences: Optional[List[Dict[str, Any]]],
+        existing_sents_by_idx: Dict[int, Dict[str, Any]],
+    ) -> int:
+        if explicit_sentences is not None and len(explicit_sentences) == 1:
+            return explicit_sentences[0]["sentence_index"]
+        if existing_sents_by_idx:
+            return next(iter(existing_sents_by_idx))
+        return 1
+
+    @staticmethod
+    def _resolve_single_unit_sentence_indices(
+        session_zid: str,
+        data_rows: List[List[str]],
+        col_sent_idx: Optional[int],
+        col_sent_src: Optional[int],
+        existing_sents_by_idx: Dict[int, Dict[str, Any]],
+        explicit_sentences: Optional[List[Dict[str, Any]]],
+        text_mode: str,
+        source_raw_text: str,
+        normalize_sentence_fn,
+    ) -> List[int]:
+        if not data_rows:
+            return []
+        if col_sent_idx is not None:
+            raw_cells = [SqliteStorageAdapter._cell_text(row, col_sent_idx) for row in data_rows]
+            if any(raw_cells):
+                return SqliteStorageAdapter._parse_explicit_manifest_sentence_indices(
+                    session_zid, raw_cells, existing_sents_by_idx
+                )
+        distinct_sources = SqliteStorageAdapter._distinct_manifest_sentence_sources(
+            data_rows, col_sent_src, normalize_sentence_fn
+        )
+        if SqliteStorageAdapter._is_ambiguous_multi_manifest(
+            distinct_sources, explicit_sentences, text_mode, source_raw_text
+        ):
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Ambiguous multi-sentence manifest without SentenceSourceIndex for session '{session_zid}'",
+            )
+        target_idx = SqliteStorageAdapter._single_unit_target_index(
+            explicit_sentences, existing_sents_by_idx
+        )
+        return [target_idx] * len(data_rows)
+
+    @staticmethod
+    def _strip_optional(value: Any) -> str:
+        return "" if value is None else str(value).strip()
+
+    @staticmethod
+    def _coalesce_legacy_field(session_zid: str, col: str, v0: Any, v1: Any) -> Any:
+        s_v0 = SqliteStorageAdapter._strip_optional(v0)
+        s_v1 = SqliteStorageAdapter._strip_optional(v1)
+        if s_v0 and s_v1 and s_v0 != s_v1:
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Conflicting {col} between sentence_index 0 and 1 in session '{session_zid}'",
+            )
+        return v1 if s_v1 else (v0 if s_v0 else None)
+
+    @staticmethod
+    def _coalesce_legacy_sentence_pair(
+        session_zid: str,
+        s0: Dict[str, Any],
+        s1: Dict[str, Any],
+        normalize_sentence_fn,
+    ) -> Dict[str, Any]:
+        src0 = SqliteStorageAdapter._strip_optional(s0.get("sentence_source"))
+        src1 = SqliteStorageAdapter._strip_optional(s1.get("sentence_source"))
+        if src0 and src1 and normalize_sentence_fn(src0) != normalize_sentence_fn(src1):
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Conflicting sentence_source between sentence_index 0 and 1 in session '{session_zid}'",
+            )
+        merged = {
+            "session_zid": session_zid,
+            "sentence_index": 1,
+            "sentence_source": src1 or src0,
+        }
+        for col in (
+            "sentence_destination",
+            "sentence_destination2",
+            "sentence_source_ipa",
+            "sentence_source_audio",
+            "text_provenance",
+        ):
+            merged[col] = SqliteStorageAdapter._coalesce_legacy_field(
+                session_zid, col, s0.get(col), s1.get(col)
+            )
+        return merged
+
+    @staticmethod
+    def _validate_legacy_index_bounds(
+        session_zid: str,
+        sent_indices: List[int],
+        word_indices: Set[int],
+    ) -> bool:
+        all_indices = set(sent_indices) | word_indices
+        if any(idx < 0 for idx in all_indices):
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Negative sentence_index cannot be adapted in session '{session_zid}'",
+            )
+        if 0 not in all_indices:
+            return False
+        if 0 not in sent_indices:
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Orphan zero-index words without sentence 0 in session '{session_zid}'",
+            )
+        if any(idx > 1 for idx in all_indices):
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Cannot adapt multi-sentence session '{session_zid}' containing sentence_index 0",
+            )
+        return True
+
+    @staticmethod
+    def _word_orders_for_sentence(words: List[Dict[str, Any]], sentence_idx: int) -> Set[int]:
+        return {w["token_order"] for w in words if w["sentence_index"] == sentence_idx}
+
+    @staticmethod
+    def _plan_legacy_zero_index_adaptation(
+        session_zid: str,
+        sentences: List[Dict[str, Any]],
+        words: List[Dict[str, Any]],
+        normalize_sentence_fn,
+    ) -> Optional[Tuple[str, Dict[str, Any]]]:
+        sent_by_idx = {s["sentence_index"]: s for s in sentences}
+        sent_indices = sorted(sent_by_idx)
+        word_indices = {w["sentence_index"] for w in words}
+        if not SqliteStorageAdapter._validate_legacy_index_bounds(
+            session_zid, sent_indices, word_indices
+        ):
+            return None
+        if sent_indices == [0]:
+            return "promote", {**sent_by_idx[0], "sentence_index": 1}
+        orders_0 = SqliteStorageAdapter._word_orders_for_sentence(words, 0)
+        orders_1 = SqliteStorageAdapter._word_orders_for_sentence(words, 1)
+        if orders_0 & orders_1:
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Conflicting word token_order between sentence_index 0 and 1 in session '{session_zid}'",
+            )
+        merged = SqliteStorageAdapter._coalesce_legacy_sentence_pair(
+            session_zid, sent_by_idx[0], sent_by_idx[1], normalize_sentence_fn
+        )
+        return "merge", merged
+
+    @staticmethod
+    def _rewrite_legacy_token_item(session_zid: str, item: Any) -> Tuple[bool, Dict[str, Any]]:
+        if not isinstance(item, dict):
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Invalid client_view_state active token descriptor for session '{session_zid}'",
+            )
+        updated = dict(item)
+        changed = False
+        for key in ("sentence_idx", "sentence_index"):
+            val = updated.get(key)
+            if not isinstance(val, bool) and val == 0:
+                updated[key], changed = 1, True
+            elif isinstance(val, str) and val.strip() == "0":
+                updated[key], changed = "1", True
+        return changed, updated
+
+    @staticmethod
+    def _rewrite_legacy_active_tokens(session_zid: str, raw_tokens: Any) -> Tuple[bool, str]:
+        try:
+            parsed = json.loads(raw_tokens) if isinstance(raw_tokens, str) else raw_tokens
+        except Exception as exc:
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Malformed client_view_state.active_tokens JSON for session '{session_zid}'",
+            ) from exc
+        if not isinstance(parsed, list):
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Invalid client_view_state.active_tokens payload for session '{session_zid}'",
+            )
+        changed = False
+        rewritten = []
+        for item in parsed:
+            item_changed, updated = SqliteStorageAdapter._rewrite_legacy_token_item(session_zid, item)
+            changed = changed or item_changed
+            rewritten.append(updated)
+        return changed, json.dumps(rewritten)
+
+    @staticmethod
+    def _collect_legacy_view_updates(conn, session_zid: str) -> List[Tuple[str, str, str]]:
+        has_views = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'client_view_state';"
+        ).fetchone()
+        if has_views is None:
+            return []
+        updates: List[Tuple[str, str, str]] = []
+        rows = conn.execute(
+            "SELECT client_id, active_tokens FROM client_view_state WHERE session_zid = ?;",
+            (session_zid,),
+        ).fetchall()
+        for row in rows:
+            changed, serialized = SqliteStorageAdapter._rewrite_legacy_active_tokens(
+                session_zid, row["active_tokens"]
+            )
+            if changed:
+                updates.append((serialized, session_zid, row["client_id"]))
+        return updates
+
+    @staticmethod
+    def _apply_legacy_zero_index_sql(
+        conn,
+        session_zid: str,
+        mode: str,
+        target_sent: Dict[str, Any],
+        view_updates: List[Tuple[str, str, str]],
+    ) -> int:
+        if mode == "promote":
+            conn.execute(
+                "INSERT INTO sentences (session_zid, sentence_index, sentence_source, "
+                "sentence_destination, sentence_destination2, sentence_source_ipa, "
+                "sentence_source_audio, text_provenance) VALUES (?, 1, ?, ?, ?, ?, ?, ?);",
+                (
+                    session_zid,
+                    target_sent["sentence_source"],
+                    target_sent.get("sentence_destination"),
+                    target_sent.get("sentence_destination2"),
+                    target_sent.get("sentence_source_ipa"),
+                    target_sent.get("sentence_source_audio"),
+                    target_sent.get("text_provenance"),
+                ),
+            )
+        else:
+            conn.execute(
+                "UPDATE sentences SET sentence_source = ?, sentence_destination = ?, "
+                "sentence_destination2 = ?, sentence_source_ipa = ?, sentence_source_audio = ?, "
+                "text_provenance = ? WHERE session_zid = ? AND sentence_index = 1;",
+                (
+                    target_sent["sentence_source"],
+                    target_sent.get("sentence_destination"),
+                    target_sent.get("sentence_destination2"),
+                    target_sent.get("sentence_source_ipa"),
+                    target_sent.get("sentence_source_audio"),
+                    target_sent.get("text_provenance"),
+                    session_zid,
+                ),
+            )
+        moved_words = conn.execute(
+            "UPDATE words SET sentence_index = 1 WHERE session_zid = ? AND sentence_index = 0;",
+            (session_zid,),
+        ).rowcount
+        conn.execute(
+            "DELETE FROM sentences WHERE session_zid = ? AND sentence_index = 0;",
+            (session_zid,),
+        )
+        for serialized, s_zid, client_id in view_updates:
+            conn.execute(
+                "UPDATE client_view_state SET active_tokens = ?, revision = revision + 1 "
+                "WHERE session_zid = ? AND client_id = ?;",
+                (serialized, s_zid, client_id),
+            )
+        conn.execute(
+            "UPDATE sessions SET updated_at = ? WHERE zid = ?;",
+            (datetime.now(timezone.utc).isoformat(), session_zid),
+        )
+        return moved_words
+
+    def adapt_legacy_zero_index_session(
+        self,
+        session_zid: str,
+        zid: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Atomically adapt a validated legacy zero-index single session to canonical sentence_index = 1."""
+        if not session_zid or str(session_zid).strip() in ("", "00000000000000"):
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Invalid session ZID '{session_zid}' for legacy sentence identity adaptation.",
+            )
+        from kardenwort_db import _normalize_sentence_text
+
+        with self.db.get_connection(zid=zid or session_zid) as conn:
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
+            if conn.execute(
+                "SELECT zid FROM sessions WHERE zid = ? AND deleted_at IS NULL;",
+                (session_zid,),
+            ).fetchone() is None:
+                raise StructuredError(ErrorCode.NOT_FOUND, f"Session '{session_zid}' not found")
+            sentences = list(map(dict, conn.execute(
+                "SELECT * FROM sentences WHERE session_zid = ? ORDER BY sentence_index ASC;",
+                (session_zid,),
+            ).fetchall()))
+            words = list(map(dict, conn.execute(
+                "SELECT sentence_index, token_order FROM words WHERE session_zid = ?;",
+                (session_zid,),
+            ).fetchall()))
+            plan = self._plan_legacy_zero_index_adaptation(
+                session_zid, sentences, words, _normalize_sentence_text
+            )
+            if plan is None:
+                return {
+                    "session_zid": session_zid,
+                    "adapted": False,
+                    "reason": "already_canonical",
+                    "moved_words": 0,
+                    "updated_views": 0,
+                }
+            mode, target_sent = plan
+            view_updates = self._collect_legacy_view_updates(conn, session_zid)
+            moved_words = self._apply_legacy_zero_index_sql(
+                conn, session_zid, mode, target_sent, view_updates
+            )
+        return {
+            "session_zid": session_zid,
+            "adapted": True,
+            "mode": mode,
+            "moved_words": moved_words,
+            "updated_views": len(view_updates),
+        }
+
     def save_session(
         self,
         session_zid: str,
@@ -3834,23 +4212,27 @@ class SqliteStorageAdapter(StorageAdapter):
                     return (True, "") if clear_sentence_destinations else (False, None)
                 return True, raw_val
 
+            resolved_row_sent_indices = (
+                None
+                if is_multi_sentence_existing
+                else self._resolve_single_unit_sentence_indices(
+                    session_zid=session_zid,
+                    data_rows=data_rows,
+                    col_sent_idx=col_sent_idx,
+                    col_sent_src=col_sent_src,
+                    existing_sents_by_idx=existing_sents_by_idx,
+                    explicit_sentences=sentences,
+                    text_mode=text_mode,
+                    source_raw_text=source_raw_text,
+                    normalize_sentence_fn=_normalize_sentence_text,
+                )
+            )
+
             for row_idx, row in enumerate(data_rows):
                 if is_multi_sentence_existing:
                     s_idx = _resolve_multi_sentence_idx(row, row_idx)
                 else:
-                    s_idx = 0
-                    if col_sent_idx is not None and col_sent_idx < len(row):
-                        raw_s_idx = str(row[col_sent_idx]).strip()
-                        if raw_s_idx.isdigit():
-                            s_idx = int(raw_s_idx)
-                        else:
-                            s_idx = row_idx
-                    elif existing_sents_by_idx:
-                        sorted_existing_keys = sorted(existing_sents_by_idx.keys())
-                        if row_idx < len(sorted_existing_keys):
-                            s_idx = sorted_existing_keys[row_idx]
-                        else:
-                            s_idx = sorted_existing_keys[-1]
+                    s_idx = resolved_row_sent_indices[row_idx]
 
                 existing_sent = existing_sents_by_idx.get(s_idx, {})
                 raw_src_cell = (
@@ -6099,6 +6481,9 @@ class StorageRouter:
 
     def save_session(self, *args, **kwargs):
         return self.adapter.save_session(*args, **kwargs)
+
+    def adapt_legacy_zero_index_session(self, *args, **kwargs):
+        return self.adapter.adapt_legacy_zero_index_session(*args, **kwargs)
 
     def load_session(self, *args, **kwargs):
         return self.adapter.load_session(*args, **kwargs)
