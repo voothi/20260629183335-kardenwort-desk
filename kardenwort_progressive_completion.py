@@ -1,6 +1,8 @@
 """Pure completion projections and wordfill field selection."""
 from dataclasses import dataclass
 
+from kardenwort_translation_validation import is_stored_translation_failure, is_unfinished_translation
+
 
 WORD_FIELDS = (
     ('word_translation', 'word_destination', ('WordDestination',)),
@@ -57,7 +59,7 @@ def current_value(row, index):
 def incoming_value(match, names):
     for name in names:
         value = str(match.get(name) or '').strip()
-        if value and value != '[FAILED]' and not value.startswith('[Error'):
+        if value and not is_stored_translation_failure(value):
             return value
     return ''
 
@@ -78,7 +80,9 @@ def wordfill_patch(row, headers, roles, match):
 
 
 def eligible_wordfill(row, lemma_column, translation_column):
-    return bool(current_value(row, lemma_column)) and not current_value(row, translation_column)
+    return bool(current_value(row, lemma_column)) and is_unfinished_translation(
+        current_value(row, translation_column)
+    )
 
 
 def indexed_provenances(keys, provenances):

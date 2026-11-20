@@ -1,5 +1,6 @@
 """Structured IntelliFiller dispatch and complete-batch validation; no file protocol."""
 import kardenwort_reword as reword
+from kardenwort_translation_validation import is_unfinished_translation
 
 
 def provider_options(config):
@@ -51,8 +52,7 @@ def checked_value(name, value):
 
 
 def invalid_translation(value):
-    value = value.strip()
-    return not value or value == '[FAILED]' or value.startswith('[Error')
+    return is_unfinished_translation(value)
 
 
 def normalized_gender(value):

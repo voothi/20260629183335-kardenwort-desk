@@ -1,5 +1,7 @@
 """Real SQLite -> cold /session/status -> public window.receiveUpdate acceptance for stored HTTP 429 errors."""
+import ast
 import json
+from pathlib import Path
 import urllib.request
 
 import pytest
@@ -13,6 +15,7 @@ from tests.controller_test_support import (
     translation_service,
 )
 from tests.reword_contract_support import HEADERS, TOKEN
+from tests.test_intent_architecture import complexity, functions
 from tests.test_reliability_action_matrix import MATRIX, configure
 
 
@@ -354,3 +357,257 @@ def test_cold_status_and_browser_receive_update_preserve_literal_lesson_and_tran
 def test_enrichment_invalid_translation_classification_controls(value, expected_invalid):
     """Classifier contract for enrichment validation without broad substring matching."""
     assert enrichment.invalid_translation(value) is expected_invalid
+
+
+def _post_retry(base_url, server, body):
+    request = urllib.request.Request(
+        f'{base_url}/session/retry',
+        data=json.dumps(body).encode('utf-8'),
+        headers={
+            'Content-Type': 'application/json',
+            'X-API-Token': server.api_key,
+        },
+        method='POST',
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        payload = json.load(response)
+    assert payload.get('status') == 'success'
+    return payload['data']
+
+
+@pytest.mark.parametrize('action', ['session', 'row'])
+def test_explicit_retry_replaces_only_failed_rate_limit_occurrence_and_survives_reload(
+    page, tmp_path, action
+):
+    """Task 2.2: explicit retry replaces only the failed 429 occurrence and survives cold reload."""
+    stored_error = 'HTTP 429 Too Many Requests'
+    with translation_service(DeterministicTranslationHandler) as translator:
+        with controller_lifetime(tmp_path, translator, backend='sqlite') as (url, server):
+            case = next(row for row in MATRIX['rows'] if row['audio'] == 'disabled')
+            adapter, world = configure(server, case)
+            server.config.set('pipeline', 'provider_cooldown_seconds', '0')
+            initial_rows = [
+                ['0', 'Haus', 'Haus', '', '1', 'Haus.', '/haus/', 'noun', 'House.'],
+                ['0', 'Baum', 'Baum', 'tree', '2', 'Baum.', '/baum/', 'noun', 'Tree.'],
+            ]
+            sentences = [
+                {'sentence_index': 1, 'sentence_source': 'Haus.', 'sentence_destination': 'House.'},
+                {'sentence_index': 2, 'sentence_source': 'Baum.', 'sentence_destination': 'Tree.'},
+            ]
+            path = server.resolved_paths['results_dir'] / f'{COLD_ZID}.de.tsv'
+            adapter.save_session(
+                session_zid=COLD_ZID,
+                source_language='de',
+                target_language='en',
+                text_mode='single',
+                source_raw_text='Haus. Baum.',
+                headers=HEADERS + ['SentenceDestination'],
+                data_rows=initial_rows,
+                sentences=sentences,
+                working_tsv_path=path,
+            )
+            _seed_raw_word_destination(
+                adapter, COLD_ZID, sentence_index=1, token_order=0, value=stored_error
+            )
+            server.arbiter.sessions.clear()
+
+            before_bundle = adapter.db.get_session_bundle(COLD_ZID)
+            assert before_bundle['words'][0]['word_destination'] == stored_error
+            assert before_bundle['words'][1]['word_destination'] == 'tree'
+
+            cold_before = _cold_status(url, server, COLD_ZID)
+            assert cold_before['rows']['0']['trans'] == ''
+            assert cold_before['rows']['1']['trans'] == 'tree'
+            assert adapter.db.get_session_bundle(COLD_ZID) == before_bundle
+            assert translator.provider_calls == []
+
+            def render_current():
+                return desk.run_render_flow(
+                    text='Haus. Baum.',
+                    language='de',
+                    zid=COLD_ZID,
+                    text_mode='single',
+                    config=world.config,
+                    resolved_paths=world.paths,
+                    theme=case['theme'],
+                    tsv_path=COLD_ZID,
+                    spawn_children=False,
+                )
+
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.route(
+                url + '/',
+                lambda route: route.fulfill(content_type='text/html', body=render_current()),
+            )
+            page.set_extra_http_headers({'X-API-Token': TOKEN})
+            page.set_default_timeout(6000)
+            try:
+                page.goto(url + '/')
+                page.wait_for_function('window.__stateReady !== undefined')
+                page.evaluate(
+                    '() => { window.__retryReady = false; '
+                    'window.__stateReady.then(() => { window.__retryReady = true; }); }'
+                )
+                page.wait_for_function('window.__retryReady === true')
+                page.wait_for_function('window.WorkspaceTabs && WorkspaceTabs.getCards().length >= 3')
+                page.evaluate('WorkspaceTabs.switchToTab(2)')
+                page.evaluate('(payload) => window.receiveUpdate(payload)', cold_before)
+
+                row0_cell = page.locator(
+                    '#lemma-table tr[data-sentence-idx="1"][data-token-order="0"] '
+                    'td[data-col="WordDestination"] .scrollable-cell'
+                )
+                expect(row0_cell).to_have_text('')
+                assert translator.provider_calls == []
+                assert adapter.db.get_session_bundle(COLD_ZID) == before_bundle
+
+                with page.expect_response('**/session/retry') as retry_response:
+                    if action == 'row':
+                        page.evaluate('retryRow(0, null)')
+                    else:
+                        page.evaluate('(zid) => retrySession(zid)', COLD_ZID)
+                assert retry_response.value.status == 200, retry_response.value.text()
+
+                expect(row0_cell).to_have_text('google: Haus')
+                assert len(translator.provider_calls) == 1
+                assert translator.provider_calls[0][0].strip() == 'Haus'
+
+                words_after = adapter.db.get_words_by_session(COLD_ZID)
+                assert words_after[0]['word_destination'] == 'google: Haus'
+                assert words_after[0]['word_provenance'] == 'live:google'
+                assert words_after[1] == before_bundle['words'][1]
+
+                server.arbiter.sessions.clear()
+                page.reload()
+                page.wait_for_function('window.__stateReady !== undefined')
+                page.evaluate(
+                    '() => { window.__retryReloadReady = false; '
+                    'window.__stateReady.then(() => { window.__retryReloadReady = true; }); }'
+                )
+                page.wait_for_function('window.__retryReloadReady === true')
+                page.wait_for_function('window.WorkspaceTabs && WorkspaceTabs.getCards().length >= 3')
+                page.evaluate('WorkspaceTabs.switchToTab(2)')
+                expect(row0_cell).to_have_text('google: Haus')
+
+                page.evaluate('WorkspaceTabs.switchToTab(3)')
+                row1_cell = page.locator(
+                    '#lemma-table tr[data-sentence-idx="2"][data-token-order="0"] '
+                    'td[data-col="WordDestination"] .scrollable-cell'
+                )
+                expect(row1_cell).to_have_text('tree')
+
+                cold_after = _cold_status(url, server, COLD_ZID)
+                assert cold_after['rows']['0']['trans'] == 'google: Haus'
+                assert cold_after['rows']['1']['trans'] == 'tree'
+                assert len(translator.provider_calls) == 1
+                assert errors == []
+            finally:
+                page.context.close()
+
+
+def test_warm_session_implicit_retry_targets_stored_rate_limit_and_clears_overlay(tmp_path):
+    """Warm session implicit retry targets only the 429 row and stale occurrence_data never shadows retry."""
+    stored_error = 'Error calling Gemini API: HTTP 429 Too Many Requests'
+    with translation_service(DeterministicTranslationHandler) as translator:
+        with controller_lifetime(tmp_path, translator, backend='sqlite') as (url, server):
+            initial_rows = [
+                ['0', 'Haus', 'Haus', '', '1', 'Haus.', '/haus/', 'noun', 'House.'],
+                ['0', 'Baum', 'Baum', 'tree', '2', 'Baum.', '/baum/', 'noun', 'Tree.'],
+            ]
+            sentences = [
+                {'sentence_index': 1, 'sentence_source': 'Haus.', 'sentence_destination': 'House.'},
+                {'sentence_index': 2, 'sentence_source': 'Baum.', 'sentence_destination': 'Tree.'},
+            ]
+            adapter, _ = _prepare_cold_workspace(
+                server, COLD_ZID, text='Haus. Baum.', rows=initial_rows, sentences=sentences
+            )
+            _seed_raw_word_destination(
+                adapter,
+                COLD_ZID,
+                sentence_index=1,
+                token_order=0,
+                value=stored_error,
+                extra_fields={'occurrence_data': {'0': {'trans': 'HTTP 429 Too Many Requests'}}},
+            )
+            # Warm in-memory session uses the real restored column schema with raw stored error text
+            _, warm_headers, warm_rows = adapter.load_tsv_rows(COLD_ZID)
+            warm_rows[0][warm_headers.index('WordDestination')] = stored_error
+            server.arbiter.sessions[COLD_ZID] = {
+                'session_zid': COLD_ZID,
+                'language': 'de',
+                'target_lang': 'en',
+                'text': 'Haus. Baum.',
+                'headers': warm_headers,
+                'data_rows': warm_rows,
+                'tsv_path': COLD_ZID,
+            }
+            before_words = adapter.db.get_words_by_session(COLD_ZID)
+
+            retry_result = _post_retry(url, server, {'session_zid': COLD_ZID})
+            assert len(translator.provider_calls) == 1
+            assert translator.provider_calls[0][0].strip() == 'Haus'
+            assert retry_result['rows']['0']['trans'] == 'google: Haus'
+            assert retry_result['rows']['1']['trans'] == 'tree'
+
+            after_words = adapter.db.get_words_by_session(COLD_ZID)
+            assert after_words[0]['word_destination'] == 'google: Haus'
+            assert after_words[1] == before_words[1]
+
+            server.arbiter.sessions.clear()
+            cold_after = _cold_status(url, server, COLD_ZID)
+            assert cold_after['rows']['0']['trans'] == 'google: Haus'
+            assert cold_after['rows']['1']['trans'] == 'tree'
+
+
+def test_cold_status_marks_recent_rate_limit_session_unfinished_without_auto_retry(tmp_path):
+    """A recent session with stored HTTP 429 is not counted finished and triggers zero auto-retries."""
+    recent_zid = desk.generate_unique_zid()
+    stored_error = 'HTTP 429 Too Many Requests'
+    with translation_service(DeterministicTranslationHandler) as translator:
+        with controller_lifetime(tmp_path, translator, backend='sqlite') as (url, server):
+            initial_rows = [
+                ['0', 'Haus', 'Haus', '', '1', 'Haus.', '/haus/', 'noun', 'House.'],
+            ]
+            sentences = [
+                {'sentence_index': 1, 'sentence_source': 'Haus.', 'sentence_destination': 'House.'},
+            ]
+            adapter, _ = _prepare_cold_workspace(
+                server, recent_zid, text='Haus.', rows=initial_rows, sentences=sentences
+            )
+            _seed_raw_word_destination(
+                adapter, recent_zid, sentence_index=1, token_order=0, value=stored_error
+            )
+            server.arbiter.sessions.clear()
+
+            before_bundle = adapter.db.get_session_bundle(recent_zid)
+            status = _cold_status(url, server, recent_zid)
+
+            assert status['is_finished'] is False
+            assert status['stage'] == 'translating'
+            assert status['rows']['0']['trans'] == ''
+            assert adapter.db.get_session_bundle(recent_zid) == before_bundle
+            assert translator.provider_calls == []
+
+
+def test_translation_validation_core_is_pure_and_within_complexity_ceiling():
+    """Architectural fitness: centralized classifier module stays pure with CC <= 7."""
+    path = Path(__file__).resolve().parents[1] / 'kardenwort_translation_validation.py'
+    tree = ast.parse(path.read_text(encoding='utf-8'))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split('.')[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split('.')[0])
+    assert imported == {'re'}
+    forbidden_calls = {'open', 'exec', 'eval', '__import__', 'print', 'input'}
+    calls = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert not calls.intersection(forbidden_calls)
+    measured = {node.name: complexity(node) for node in functions(tree)}
+    assert measured, 'Expected classifier functions in kardenwort_translation_validation.py'
+    assert max(measured.values()) <= 7, measured

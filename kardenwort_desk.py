@@ -3,6 +3,14 @@ import kardenwort_reword as reword
 from kardenwort_alignment import display_sentence_text
 from kardenwort_restore_projection import case_insensitive_fields
 from kardenwort_theme import resolve_theme_colors, theme_style
+from kardenwort_translation_validation import (
+    is_field_empty,
+    is_stored_rate_limit_failure,
+    is_stored_translation_failure,
+    is_unfinished_translation,
+    sanitize_occurrence_translations,
+    sanitize_translation_value,
+)
 
 import argparse
 import json
@@ -4285,15 +4293,9 @@ class SqliteStorageAdapter(StorageAdapter):
                         val = extra_fields.get(h) if h in extra_fields else (word.get("inflected_form") or "")
                         row_cells.append(str(val or ""))
                     elif h_lower in ("worddestination", "word_destination", "word_translation"):
-                        w_dest = str(word.get("word_destination") or "")
-                        if w_dest.strip() == "[FAILED]" or w_dest.strip().startswith("[Error"):
-                            w_dest = ""
-                        row_cells.append(w_dest)
+                        row_cells.append(sanitize_translation_value(word.get("word_destination") or ""))
                     elif h_lower in ("worddestinationinflectedform", "word_destination_inflected"):
-                        w_dest_inf = str(word.get("word_destination_inflected") or "")
-                        if w_dest_inf.strip() == "[FAILED]" or w_dest_inf.strip().startswith("[Error"):
-                            w_dest_inf = ""
-                        row_cells.append(w_dest_inf)
+                        row_cells.append(sanitize_translation_value(word.get("word_destination_inflected") or ""))
                     elif h_lower == "tokenorder":
                         row_cells.append(str(word.get("token_order", 0)))
                     elif h_lower in ("wordsourcemorphologyai", "morphology", "morphologyai"):
@@ -16124,7 +16126,7 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
     for row_id, row in enumerate(data_rows):
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
         inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
-        trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
+        trans_val = sanitize_translation_value(row[col_word_dest]) if col_word_dest != -1 and len(row) > col_word_dest else ""
         morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
         ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
         pos_raw = row[col_pos] if col_pos != -1 and len(row) > col_pos else ""
@@ -16154,8 +16156,9 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
         }
         occurrence = (row_occurrences or {}).get((str(sent_idx_val), str(token_order_val)))
         if occurrence:
-            projected = reword.project_occurrences(occurrence)
+            projected = reword.project_occurrences(sanitize_occurrence_translations(occurrence))
             row_obj.update({name: value for name, value in projected.items() if value})
+            row_obj['trans'] = sanitize_translation_value(row_obj['trans'])
             row_obj['morphology'] = row_obj['morph']
             row_obj['pos'] = format_pos_cell(row_obj['pos'])
             row_obj['WordSourcePOS'] = row_obj['pos']

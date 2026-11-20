@@ -38,6 +38,7 @@ from http.server import BaseHTTPRequestHandler
 from b64util import encode
 
 # Import core business logic primitives from kardenwort_desk
+from kardenwort_translation_validation import is_unfinished_translation
 from kardenwort_desk import (
     load_config,
     resolve_ui_config,
@@ -2695,7 +2696,7 @@ class SessionArbiter:
                         col_idx = headers.index(field_name)
                         while len(row) <= col_idx:
                             row.append("")
-                        if not row[col_idx].strip() or 'skeleton-loader' in row[col_idx] or row[col_idx] == '[FAILED]':
+                        if is_unfinished_translation(row[col_idx]):
                             row[col_idx] = str(val)
                             if keys is not None:
                                 updates.append(dict(sentence_index=keys[row_id][0], token_order=keys[row_id][1], field=field_name, value=str(val)))
@@ -3136,10 +3137,10 @@ class SessionArbiter:
                 lemma_val = row[col_lemma].strip()
                 if lemma_val in lemma_translations:
                     trans_val = lemma_translations[lemma_val]
-                    if trans_val and str(trans_val).strip():
+                    if trans_val and not is_unfinished_translation(trans_val):
                         while len(row) <= col_word_dest:
                             row.append("")
-                        if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest] or row[col_word_dest] == '[FAILED]':
+                        if is_unfinished_translation(row[col_word_dest]):
                             row[col_word_dest] = trans_val
                             modified = True
                             provenance = (lemma_provenances or {}).get(lemma_val)
@@ -3276,8 +3277,9 @@ class SessionArbiter:
             selected = row_ids
             if row_ids is None and token_orders is None and target_coordinates is None:
                 selected = [index for index, row in enumerate(data_rows)
-                            if col_word_dest == -1 or not row[col_word_dest].strip()
-                            or row[col_word_dest] == '[FAILED]' or 'skeleton-loader' in row[col_word_dest]]
+                            if col_word_dest == -1 or is_unfinished_translation(
+                                row[col_word_dest] if len(row) > col_word_dest else ''
+                            )]
             try:
                 selection = resolve_reword_request(data_rows, headers, role_fields, source, self.config,
                     targets=target_coordinates, selected_rows=selected, token_orders=token_orders)
@@ -3309,7 +3311,7 @@ class SessionArbiter:
                 for idx, r in enumerate(data_rows):
                     if len(r) > col_lemma and r[col_lemma].strip():
                         dest_val = r[col_word_dest].strip() if col_word_dest != -1 and len(r) > col_word_dest else ""
-                        if not dest_val or 'skeleton-loader' in dest_val or dest_val == '[FAILED]':
+                        if is_unfinished_translation(dest_val):
                             target_indices.append(idx)
 
             target_indices = list(dict.fromkeys(target_indices))
@@ -4539,7 +4541,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     for r in data_rows:
                         if len(r) > col_lemma and r[col_lemma].strip():
                             dest_val = r[col_word_dest].strip() if len(r) > col_word_dest else ""
-                            if not dest_val or "skeleton-loader" in dest_val:
+                            if is_unfinished_translation(dest_val):
                                 has_untranslated_lemmas = True
                                 break
 
