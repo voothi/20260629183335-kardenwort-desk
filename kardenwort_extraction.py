@@ -4,8 +4,6 @@ import json
 
 def extraction_rows(stdout, headers):
     records = [json.loads(line) for line in stdout.splitlines() if line.strip()]
-    if not records:
-        raise ValueError('Extractor returned no word records')
     return [extraction_row(record, headers) for record in records]
 
 
