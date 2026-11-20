@@ -10952,6 +10952,10 @@
                     body: JSON.stringify(bodyPayload)
                 })
                 .then(function(res) {
+                    if (res.status === 401 || res.status === 403) {
+                        console.warn("Server spawn-tabs rejected authentication (" + res.status + "); not opening tabs");
+                        return;
+                    }
                     if (!res.ok) {
                         fallbackOpen();
                     }

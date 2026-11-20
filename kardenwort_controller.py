@@ -5622,6 +5622,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
+            self._authenticate_token(body, require_configured=True)
             raw_urls = body.get('urls') or []
             if isinstance(raw_urls, str):
                 raw_urls = [raw_urls]
