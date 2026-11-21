@@ -355,3 +355,104 @@ def test_cold_membership_reload_preserves_empty_client_focus_without_inventing_h
     _assert_source_roles(page, ["haus", "baum"], ["baseline", "baseline", "baseline", "baseline"])
     assert [w["selected"] for w in adapter.db.get_words_by_session(ZID)] == [1, 0]
     assert config_path.read_bytes() == initial_config
+
+
+def test_select_all_clears_stale_token_focus_and_preserves_bound_partners_and_hover(
+    page, preference_world
+):
+    """Tasks 2.2 & 2.3: Select All clears prior exact-token focus via view save barrier,
+    preserves primary/partner/peer identity and hover invariance, and leaves unrelated data intact."""
+    _, _, config_path = preference_world
+    initial_config = config_path.read_bytes()
+    html, stored = _render_sqlite_workspace_html(
+        "Er fängt heute an.\nEr fängt morgen an.",
+        [
+            ("fängt + an", "anfangen", "verb", "begin", 1, "0"),
+            ("fängt + an", "anfangen", "verb", "begin", 2, "0"),
+            ("heute", "heute", "adv", "today", 1, "0"),
+        ],
+    )
+    adapter = _mount_workspace(page, preference_world, html, stored)
+    before_translations = [
+        (w["lemma"], w["word_destination"], w.get("metadata_json"))
+        for w in adapter.db.get_words_by_session(ZID)
+    ]
+
+    # Establish exact-token focus on the second separable occurrence first.
+    with page.expect_response(lambda r: "/api/v1/client-view" in r.url) as view_set:
+        _source_words(page, ["fängt"]).nth(1).click()
+    assert view_set.value.ok
+    page.evaluate("flushPendingSaves()")
+    assert len(page.evaluate("AppState.activeTokenSelections")) > 0
+
+    # Select All transitions cleanly to row-scoped primary highlights and persists cleared token focus.
+    with page.expect_response(lambda r: "/api/v1/client-view" in r.url) as view_clear:
+        page.keyboard.press("Control+a")
+    assert view_clear.value.ok
+    page.evaluate("flushPendingSaves()")
+    assert page.evaluate("AppState.activeTokenSelections") == []
+    assert [w["selected"] for w in adapter.db.get_words_by_session(ZID)] == [1, 1, 1]
+    _assert_source_roles(
+        page, ["fängt", "an"], ["primary", "primary", "baseline", "baseline"], primary="highlight-purple-active"
+    )
+    _assert_source_roles(page, ["heute"], ["primary"])
+
+    # Enable Lemma -> second separable pair becomes peer; hovering preserves primary/partner/peer roles.
+    with page.expect_response("**/api/v1/config") as cfg_resp:
+        page.locator("#kw-btn-same-lemma").click()
+    assert cfg_resp.value.ok
+    _assert_source_roles(
+        page, ["fängt", "an"], ["primary", "primary", "peer", "peer"], primary="highlight-purple-active"
+    )
+    _source_words(page, ["fängt"]).nth(1).hover()
+    page.mouse.move(0, 0)
+    _assert_source_roles(
+        page, ["fängt", "an"], ["primary", "primary", "peer", "peer"], primary="highlight-purple-active"
+    )
+
+    # Ctrl-deselecting 'heute' keeps 'anfangen' primary+partner+peer highlights intact.
+    heute_row = page.locator("#lemma-table tbody tr", has_text="heute").first
+    with page.expect_response(lambda r: "/session/save" in r.url) as save_deselect:
+        heute_row.click(modifiers=["Control"])
+    assert save_deselect.value.ok
+    page.wait_for_function("JSON.parse(getDeltas()).every(d => d.column !== 'DeskSelected')")
+    _assert_source_roles(
+        page, ["fängt", "an"], ["primary", "primary", "peer", "peer"], primary="highlight-purple-active"
+    )
+    _assert_source_roles(page, ["heute"], ["baseline"])
+
+    after_translations = [
+        (w["lemma"], w["word_destination"], w.get("metadata_json"))
+        for w in adapter.db.get_words_by_session(ZID)
+    ]
+    assert after_translations == before_translations
+    assert config_path.read_bytes() == initial_config
+
+
+def test_lookup_mode_missing_occurrence_identity_fails_explicitly_without_focus_mutation(
+    page, preference_world
+):
+    """Task 2.3: Explicit failure behavior in toggleRowSelection leaves selection and focus untouched."""
+    _, _, config_path = preference_world
+    initial_config = config_path.read_bytes()
+    html, stored = _render_sqlite_workspace_html(
+        "Haus bleibt Haus.",
+        [("Haus", "Haus", "noun", "house", 1, "0")],
+    )
+    _mount_workspace(page, preference_world, html, stored)
+
+    page.evaluate(
+        """() => {
+            window.AppState.is_lookup = true;
+            const row = document.querySelector('#lemma-table tbody tr[data-row-id="0"]');
+            row.setAttribute('data-sentence-idx', '');
+            row.setAttribute('data-token-order', '');
+            window.toggleRowSelection(0, true);
+        }"""
+    )
+    assert "Selection unavailable: missing occurrence identity" in page.locator("#kw-toast-container").inner_text()
+    assert page.evaluate("getSelectedRowsArray()") == []
+    assert page.evaluate("getFocusedRowId()") is None
+    _assert_source_roles(page, ["haus"], ["baseline", "baseline"])
+    assert config_path.read_bytes() == initial_config
+

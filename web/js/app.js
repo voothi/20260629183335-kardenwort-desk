@@ -5392,6 +5392,7 @@
             if (!window.AppState || !window.AppState.activeTokenSelections || window.AppState.activeTokenSelections.length === 0) return;
             var rStr = (rowId !== undefined && rowId !== null) ? String(rowId) : null;
             var lStr = (lemma !== undefined && lemma !== null) ? String(lemma).trim().toLowerCase() : null;
+            var beforeCount = window.AppState.activeTokenSelections.length;
             window.AppState.activeTokenSelections = window.AppState.activeTokenSelections.filter(function(item) {
                 if (lStr && item.lemma && String(item.lemma).trim().toLowerCase() === lStr) return false;
                 if (rStr) {
@@ -5402,7 +5403,7 @@
                 }
                 return true;
             });
-            if (typeof saveActiveTokenFocus === 'function') {
+            if (window.AppState.activeTokenSelections.length !== beforeCount && typeof saveActiveTokenFocus === 'function') {
                 saveActiveTokenFocus();
             }
         }
@@ -6894,8 +6895,9 @@
                 }
 
                 lastClickedVisualIdx = rowVisualIdx;
-                lastClickedRowId = dragSelectMode ? rowId : null;
-                focusedRowId = dragSelectMode ? rowId : null;
+                var nextRowFocus = resolveInteractiveRowFocus(rowId, dragSelectMode);
+                lastClickedRowId = nextRowFocus;
+                focusedRowId = nextRowFocus;
                 updateRowStyles();
                 updateBidirectionalHighlights();
                 notifyAHKSelection();
@@ -7549,11 +7551,73 @@
             if (window.forceRepaint) window.forceRepaint();
         };
 
+        function currentTableRowsList() {
+            if (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0) return tableRows;
+            var lt = document.getElementById('lemma-table');
+            if (!lt) return [];
+            return Array.prototype.slice.call(lt.querySelectorAll('tbody tr[data-row-id], tr[data-row-id]'));
+        }
+
+        function isRowCurrentlySelected(row) {
+            if (!row || row.getAttribute('data-deleted') === 'true') return false;
+            var ids = getRowGroupIds(row);
+            for (var i = 0; i < ids.length; i++) {
+                if (selectedRowIdsMap.hasOwnProperty(ids[i])) return true;
+            }
+            return false;
+        }
+
+        function findSelectedRowIdById(candidateId) {
+            if (candidateId === null || candidateId === undefined || isNaN(candidateId)) return null;
+            var candidateStr = String(candidateId);
+            var rows = currentTableRowsList();
+            for (var i = 0; i < rows.length; i++) {
+                if (String(rows[i].getAttribute('data-row-id')) === candidateStr && isRowCurrentlySelected(rows[i])) {
+                    return candidateId;
+                }
+            }
+            return null;
+        }
+
+        function findRemainingSelectedRowId() {
+            var preserved = findSelectedRowIdById(focusedRowId);
+            if (preserved !== null) return preserved;
+            preserved = findSelectedRowIdById(lastClickedRowId);
+            if (preserved !== null) return preserved;
+            var rows = currentTableRowsList();
+            for (var i = 0; i < rows.length; i++) {
+                if (isRowCurrentlySelected(rows[i])) {
+                    var parsed = parseInt(String(rows[i].getAttribute('data-row-id')), 10);
+                    if (!isNaN(parsed)) return parsed;
+                }
+            }
+            return null;
+        }
+
+        function resolveInteractiveRowFocus(preferredRowId, selecting) {
+            if (selecting) {
+                var parsed = parseInt(String(preferredRowId), 10);
+                if (!isNaN(parsed)) return parsed;
+            }
+            return findRemainingSelectedRowId();
+        }
+
+        function findTableRowForSelection(rowIdStr) {
+            var direct = document.querySelector('#lemma-table tr[data-row-id="' + rowIdStr + '"]');
+            if (direct) return direct;
+            var rows = currentTableRowsList();
+            for (var i = 0; i < rows.length; i++) {
+                if (getRowGroupIds(rows[i]).indexOf(rowIdStr) !== -1) return rows[i];
+            }
+            return null;
+        }
+
         /** @param {number|string} rowId @param {boolean=} forceState */
         function toggleRowSelection(rowId, forceState) {
             if (!workspaceCommandsReady()) return;
+            var rIdStr = String(rowId);
+            var targetRow = findTableRowForSelection(rIdStr);
             if (isLookupMode()) {
-                var targetRow = document.querySelector('#lemma-table tr[data-row-id="' + rowId + '"]');
                 var targetSentence = targetRow && targetRow.getAttribute('data-sentence-idx');
                 var targetToken = targetRow && targetRow.getAttribute('data-token-order');
                 if (!/^[0-9]+$/.test(targetSentence || '') || Number(targetSentence) < 1 || !/^[0-9]+$/.test(targetToken || '')) {
@@ -7562,24 +7626,29 @@
                     return;
                 }
             }
-            var rIdStr = String(rowId);
+            var constituentIds = targetRow ? getRowGroupIds(targetRow) : [rIdStr];
             var lem = getLemmaByRowId(rowId);
-            var willSelect;
-            if (forceState !== undefined) {
-                willSelect = Boolean(forceState);
-            } else {
-                willSelect = !selectedRowIdsMap.hasOwnProperty(rIdStr);
-            }
+            var willSelect = (forceState !== undefined)
+                ? Boolean(forceState)
+                : !constituentIds.some(function(id) { return selectedRowIdsMap.hasOwnProperty(id); });
             if (lem) {
                 setLemmaSelected(lem, willSelect);
                 syncSelectionsToCardsAndState();
             } else {
-                if (willSelect) {
-                    selectedRowIdsMap[rIdStr] = true;
-                } else {
-                    delete selectedRowIdsMap[rIdStr];
+                for (var c = 0; c < constituentIds.length; c++) {
+                    if (willSelect) selectedRowIdsMap[constituentIds[c]] = true;
+                    else delete selectedRowIdsMap[constituentIds[c]];
                 }
             }
+            if (!willSelect) {
+                for (var p = 0; p < constituentIds.length; p++) {
+                    pruneActiveTokensByRowOrLemma(constituentIds[p], lem);
+                }
+            }
+            var anchorId = targetRow ? targetRow.getAttribute('data-row-id') : rIdStr;
+            var nextRowFocus = resolveInteractiveRowFocus(anchorId, willSelect);
+            lastClickedRowId = nextRowFocus;
+            focusedRowId = nextRowFocus;
             updateRowStyles();
             updateBidirectionalHighlights();
         }
@@ -9192,13 +9261,32 @@
                 }
             }
             if (typeof tableRows !== 'undefined' && tableRows.length > 0) {
+                var firstSelectedRowId = null;
                 for (var i = 0; i < tableRows.length; i++) {
-                    var rowId = String(tableRows[i].getAttribute('data-row-id'));
-                    selectedRowIdsMap[rowId] = true;
-                    var lem = getRowLemma(tableRows[i]);
+                    var tr = tableRows[i];
+                    if (tr.getAttribute('data-deleted') === 'true') continue;
+                    var groupIds = getRowGroupIds(tr);
+                    for (var g = 0; g < groupIds.length; g++) {
+                        selectedRowIdsMap[groupIds[g]] = true;
+                    }
+                    var lem = getRowLemma(tr);
                     if (lem) setLemmaSelected(lem, true);
+                    if (firstSelectedRowId === null) {
+                        var parsedId = parseInt(String(tr.getAttribute('data-row-id')), 10);
+                        if (!isNaN(parsedId)) firstSelectedRowId = parsedId;
+                    }
+                }
+                if (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0) {
+                    window.AppState.activeTokenSelections = [];
+                    if (typeof saveActiveTokenFocus === 'function') {
+                        saveActiveTokenFocus();
+                    }
                 }
                 syncSelectionsToCardsAndState();
+                var nextRowFocus = findSelectedRowIdById(focusedRowId);
+                if (nextRowFocus === null) nextRowFocus = firstSelectedRowId;
+                lastClickedRowId = nextRowFocus;
+                focusedRowId = nextRowFocus;
                 updateRowStyles();
                 updateBidirectionalHighlights();
                 if (typeof notifyAHKSelection !== 'undefined') {
