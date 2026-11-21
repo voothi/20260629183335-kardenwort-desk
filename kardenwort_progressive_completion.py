@@ -236,6 +236,15 @@ def combine_worker_errors(primary, secondary):
     return combined
 
 
+def startup_persistence_error(error):
+    return {
+        'code': 'ERR_PROGRESSIVE_STARTUP_FAILED',
+        'message': str(error),
+        'provider': 'storage',
+        'details': {'phase': 'startup'},
+    }
+
+
 def translated_text_event(rows, fingerprint, translated_html, sentences, error, provider=None, provenance=None):
     failed = error is not None
     status = 'failed' if failed else 'success'

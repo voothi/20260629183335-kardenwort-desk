@@ -469,3 +469,99 @@ def test_worker_startup_failure_preserves_generation_and_deletion_guards(tmp_pat
         dispatcher.unregister(zid_c, ev_c)
         arbiter_c.enrichment_queue.shutdown(wait=True)
         desk.unregister_failover_callback(arbiter_c._on_global_failover)
+
+
+def test_worker_distinguishes_initialization_failure_from_provider_failure(tmp_path, monkeypatch):
+    """Startup persistence failure reports storage/startup identity and stays observable; external provider failure remains a provider stage failure."""
+    import kardenwort_controller as controller
+
+    db, cfg, paths, arbiter, zid, _ = _seed_worker_world(tmp_path, "provider_vs_init", "20261119085347", "20261119085348")
+    cfg.set("triggers", "run_text_translation", "auto")
+    db.save_session_bundle(
+        {
+            "zid": zid,
+            "slug": "provider_vs_init",
+            "source_language": "de",
+            "target_language": "ru",
+            "text_mode": "single",
+            "source_raw_text": "Das Haus.",
+        },
+        [
+            {
+                "session_zid": zid,
+                "sentence_index": 1,
+                "sentence_source": "Das Haus.",
+                "sentence_destination": "",
+                "text_provenance": None,
+            }
+        ],
+        [
+            {
+                "session_zid": zid,
+                "sentence_index": 1,
+                "token_order": 0,
+                "quotation": "Haus",
+                "lemma": "Haus",
+                "word_destination": "дом",
+                "ipa": None,
+                "morphology": None,
+                "pos": None,
+                "gender": None,
+                "word_provenance": "live:google",
+                "selected": 0,
+            }
+        ],
+    )
+
+    def failing_provider(*_args, **_kwargs):
+        raise RuntimeError("simulated external provider outage")
+
+    monkeypatch.setattr(controller, "translate_source_text", failing_provider)
+    dispatcher = EventDispatcher.get_instance()
+    events = dispatcher.register(zid)
+    try:
+        arbiter.enrichment_queue._execute_progressive_task(
+            zid, arbiter, "de", "ru", skip_intellifiller=True
+        )
+        status = db.get_worker_status(zid)
+        assert status["worker_status"] == "failed"
+        assert status["worker_heartbeat_at"] is not None
+        assert status["worker_finished_at"] is not None
+
+        finished = [e for e in _drain_events(events) if e.get("stage") == "finished"]
+        assert finished
+        terminal = finished[-1]
+        assert terminal["status"] == "failed"
+        assert terminal["error"]["code"] == "ERR_SENTENCE_TRANSLATION_FAILED"
+        assert terminal["error"]["provider"] != "storage"
+        assert terminal["error"]["details"].get("phase") != "startup"
+
+        arbiter.enrichment_queue.shutdown(wait=True)
+        assert not arbiter.enrichment_queue._unobserved_progressive_failures
+    finally:
+        dispatcher.unregister(zid, events)
+        desk.unregister_failover_callback(arbiter._on_global_failover)
+
+
+def test_startup_finalization_helpers_meet_complexity_ceiling():
+    """All new and edited startup/finalization helpers stay pure and within CC <= 7."""
+    import ast
+    from tests.test_intent_architecture import complexity, functions
+
+    root = Path(__file__).resolve().parents[1]
+    ctrl_tree = ast.parse((root / "kardenwort_controller.py").read_text(encoding="utf-8-sig"))
+    ctrl_names = {
+        "_flatten_finalization_errors",
+        "raise_progressive_finalization_errors",
+        "_start_progressive_worker_state",
+        "_finalize_progressive_execution",
+    }
+    measured = {node.name: complexity(node) for node in functions(ctrl_tree) if node.name in ctrl_names}
+    assert set(measured) == ctrl_names
+    assert max(measured.values()) <= 7, measured
+
+    core_tree = ast.parse((root / "kardenwort_progressive_completion.py").read_text(encoding="utf-8"))
+    core_measured = {node.name: complexity(node) for node in functions(core_tree)}
+    assert "startup_persistence_error" in core_measured
+    assert max(core_measured.values()) <= 7, core_measured
+

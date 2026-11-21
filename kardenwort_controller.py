@@ -190,12 +190,22 @@ def progressive_delivery_failure(error, session_zid, fingerprint, committed):
     return failure
 
 
-def raise_progressive_finalization_errors(status_error, delivery_error):
-    errors = [error for error in (status_error, delivery_error) if error is not None]
-    if len(errors) == 1:
-        raise errors[0]
-    if errors:
-        raise BaseExceptionGroup('Progressive finalization failed', errors)
+def _flatten_finalization_errors(errors):
+    flattened = []
+    for error in errors:
+        if isinstance(error, BaseExceptionGroup):
+            flattened.extend(_flatten_finalization_errors(error.exceptions))
+        elif error is not None:
+            flattened.append(error)
+    return flattened
+
+
+def raise_progressive_finalization_errors(*errors):
+    flat = _flatten_finalization_errors(errors)
+    if len(flat) == 1:
+        raise flat[0]
+    if flat:
+        raise BaseExceptionGroup('Progressive finalization failed', flat)
 
 
 def _sentence_writer_target(adapter):
@@ -1764,6 +1774,26 @@ class EnrichmentQueue:
         )
         return stage_err, committed_prov, False
 
+    def _start_progressive_worker_state(self, storage_adapter, session_zid, is_sqlite):
+        if not (is_sqlite and hasattr(storage_adapter, 'db')):
+            return None, None
+        try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            storage_adapter.db.set_worker_status(session_zid, "running", started_at=now_iso)
+            storage_adapter.db.update_worker_heartbeat(session_zid, heartbeat_at=now_iso)
+            return None, None
+        except Exception as exc:
+            logger.error(f"Error initializing progressive worker state for session {session_zid}: {exc}\n{traceback.format_exc()}")
+            return exc, progressive.startup_persistence_error(exc)
+
+    def _finalize_progressive_execution(self, *, startup_error, **final_state_kwargs):
+        finalization_error = None
+        try:
+            self._publish_progressive_final_state(**final_state_kwargs)
+        except Exception as error:
+            finalization_error = error
+        raise_progressive_finalization_errors(startup_error, finalization_error)
+
     @operation_preferences
     def _execute_progressive_task(
         self,
@@ -1787,6 +1817,7 @@ class EnrichmentQueue:
         mapping = load_anki_mapping(mapping_path) if mapping_path and mapping_path.exists() else None
 
         worker_error = None
+        startup_error = None
         data_rows = []
         headers = []
         role_fields = {}
@@ -1799,12 +1830,11 @@ class EnrichmentQueue:
         if self._is_progressive_superseded(session_zid, generation):
             return
 
-        if is_sqlite and hasattr(storage_adapter, 'db'):
-            now_iso = datetime.now(timezone.utc).isoformat()
-            storage_adapter.db.set_worker_status(session_zid, "running", started_at=now_iso)
-            storage_adapter.db.update_worker_heartbeat(session_zid, heartbeat_at=now_iso)
-
         try:
+            startup_error, startup_payload = self._start_progressive_worker_state(storage_adapter, session_zid, is_sqlite)
+            if startup_error is not None:
+                worker_error = progressive.combine_worker_errors(worker_error, startup_payload)
+                return
             # 1. Recover / Load session data
             session_data = None
             with arbiter._lock:
@@ -2106,7 +2136,8 @@ class EnrichmentQueue:
                 },
             )
         finally:
-            self._publish_progressive_final_state(
+            self._finalize_progressive_execution(
+                startup_error=startup_error,
                 arbiter=arbiter,
                 storage_adapter=storage_adapter,
                 session_zid=session_zid,
