@@ -63,10 +63,31 @@ def align_retry_sentences(raw, records):
     return mapped, context
 
 
+def _display_entry_text(value):
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError('Sentence translation must be non-empty text')
+    cleaned = value.strip()
+    return None if not cleaned or failed_sentence_text(cleaned) else cleaned
+
+
 def display_sentence_text(entries):
-    present = {key: value for key, value in entries.items() if value not in (None, '')}
-    main = numeric_sentence_entries(present, ('FULL_TEXT', 'PADDED'))
-    return ' '.join(value.strip() for _, value in sorted(main.items()) if not failed_sentence_text(value))
+    if not isinstance(entries, dict):
+        raise ValueError('Sentence entries must be a mapping')
+    main = {}
+    seen = set()
+    for key, value in entries.items():
+        if key in ('FULL_TEXT', 'PADDED'):
+            continue
+        index = sentence_index(key) + 1
+        if index in seen:
+            raise ValueError('Duplicate sentence identity')
+        seen.add(index)
+        text = _display_entry_text(value)
+        if text is not None:
+            main[index] = text
+    return ' '.join(main[index] for index in sorted(main))
 
 
 def validate_complete_alignment(main, records):
