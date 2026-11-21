@@ -398,12 +398,28 @@ def test_independent_sqlite_writer_between_commit_and_delivery_preserves_save_sn
     hook_state = {"armed": True}
     original_exit = KardenwortConnection.__exit__
 
+    def _haus_is_committed() -> bool:
+        probe = sqlite3.connect(str(db_path), timeout=5.0)
+        try:
+            row = probe.execute(
+                "SELECT selected FROM words WHERE session_zid = ? AND sentence_index = 1 AND token_order = 0;",
+                (ZID,),
+            ).fetchone()
+            return bool(row and row[0] == 1)
+        finally:
+            probe.close()
+
     def independent_writer():
         try:
             assert save1_committed.wait(timeout=5.0), "Timed out waiting for Save 1 SQLite commit"
             ext_conn = sqlite3.connect(str(db_path), timeout=5.0, isolation_level=None)
             try:
                 ext_conn.execute("BEGIN IMMEDIATE;")
+                before_rows = ext_conn.execute(
+                    "SELECT lemma, selected FROM words WHERE session_zid = ? ORDER BY sentence_index, token_order;",
+                    (ZID,),
+                ).fetchall()
+                assert before_rows == [("Haus", 1), ("Haus", 1), ("Baum", 0)], before_rows
                 ext_conn.execute(
                     "UPDATE words SET selected = 1 WHERE session_zid = ? AND lemma = 'Baum';",
                     (ZID,),
@@ -417,17 +433,12 @@ def test_independent_sqlite_writer_between_commit_and_delivery_preserves_save_sn
             writer_done.set()
 
     def observed_exit(self_conn, exc_type, exc_val, exc_tb):
-        should_coordinate = (
-            exc_type is None
-            and not getattr(self_conn, "read_only", False)
-            and hook_state["armed"]
-        )
-        if should_coordinate:
-            hook_state["armed"] = False
+        was_write = exc_type is None and not getattr(self_conn, "read_only", False)
         result = original_exit(self_conn, exc_type, exc_val, exc_tb)
-        if should_coordinate:
-            # Real SQLite COMMIT has already completed; now let the independent writer commit
-            # before core_edit_save/SessionArbiter constructs or publishes Save 1's event.
+        if was_write and hook_state["armed"] and _haus_is_committed():
+            hook_state["armed"] = False
+            # Real SQLite COMMIT of Save 1 has just completed (Haus=1 is visible to independent
+            # connections); now interleave the independent writer BEFORE event delivery.
             save1_committed.set()
             assert writer_done.wait(timeout=5.0), "Timed out waiting for independent SQLite writer"
         return result
@@ -603,3 +614,79 @@ def test_two_live_browser_clients_sync_custom_selected_role_without_focus_mutati
         assert _payload_data(committed_status)["fingerprint"] == _payload_data(res)["fingerprint"]
     finally:
         other.close()
+
+
+def test_build_committed_shared_selection_guards_null_and_blank_lemmas():
+    """Pure functional core: null/blank lemmas never crash and multi-occurrence selection is OR-ed."""
+    words = [
+        {"lemma": None, "selected": 1},
+        {"lemma": "   ", "selected": 1},
+        {"lemma": " Haus ", "selected": 0},
+        {"lemma": "haus", "selected": 1},
+        {"lemma": "Baum", "selected": 0},
+    ]
+    assert desk.build_committed_shared_selection(words) == {"haus": True, "baum": False}
+
+
+def test_failed_selection_save_rolls_back_and_emits_no_event(role_world):
+    """Publish only after commit: a rolled-back save emits zero events and leaves SQLite untouched."""
+    tmp_path, url, server = role_world
+    adapter, _ = _configure_world(tmp_path, server, selected_field="MySelected")
+    _seed_sessions(adapter, selected_field="MySelected")
+
+    dispatcher = EventDispatcher.get_instance()
+    sub = dispatcher.register(ZID)
+    try:
+        status, res = _http_json(
+            url,
+            "/session/save",
+            method="POST",
+            body={
+                "session_zid": ZID,
+                "language": "de",
+                "deltas": [
+                    {"row_id": 0, "sentence_idx": 1, "token_order": 0, "column": "MySelected", "value": "1"},
+                    {"row_id": 99, "sentence_idx": 99, "token_order": 99, "column": "MySelected", "value": "1"},
+                ],
+            },
+        )
+        assert status >= 400, res
+        assert adapter.get_shared_selection(ZID) == {"haus": False, "baum": False}
+        assert sub.empty()
+    finally:
+        dispatcher.unregister(ZID, sub)
+
+
+def test_committed_delivery_barrier_preserved_for_custom_selected_role(role_world, monkeypatch):
+    """Preserves committed_delivery structured recovery when event delivery fails after MySelected commit."""
+    tmp_path, url, server = role_world
+    adapter, _ = _configure_world(tmp_path, server, selected_field="MySelected")
+    _seed_sessions(adapter, selected_field="MySelected")
+
+    def broken_delivery(*args, **kwargs):
+        raise ConnectionError("simulated delivery failure")
+
+    monkeypatch.setattr(server.arbiter, "emit_event", broken_delivery)
+    status, res = _http_json(
+        url,
+        "/session/save",
+        method="POST",
+        body={
+            "session_zid": ZID,
+            "language": "de",
+            "deltas": [
+                {"row_id": 0, "sentence_idx": 1, "token_order": 0, "column": "MySelected", "value": "1"},
+            ],
+        },
+    )
+    assert status >= 400, res
+    details = res["details"]
+    assert details["committed"] is True
+    assert details["session_zid"] == ZID
+    assert details["fingerprint"]
+    assert details["recovery_url"] == f"/session/status?zid={ZID}&committed=1"
+    assert adapter.get_shared_selection(ZID) == {"haus": True, "baum": False}
+
+    st_rec, recovered = _http_json(url, details["recovery_url"])
+    assert st_rec == 200, recovered
+    assert _payload_data(recovered)["fingerprint"] == details["fingerprint"]

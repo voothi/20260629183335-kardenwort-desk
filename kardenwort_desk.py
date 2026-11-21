@@ -2948,6 +2948,38 @@ def get_role_fields(mapping, headers):
 
     return role_fields
 
+
+def resolve_selected_column(mapping) -> str:
+    """Return the configured selected-role column name from anki-mapping [desk_columns]."""
+    if mapping and "desk_columns" in mapping:
+        for field, role in mapping["desk_columns"].items():
+            if str(role or "").strip().lower() == "selected":
+                field_name = str(field or "").strip()
+                if field_name:
+                    return field_name
+    return "DeskSelected"
+
+
+def is_selected_column(column, mapping=None, *, selected_column: Optional[str] = None) -> bool:
+    """Return True if column matches the configured selected role or documented aliases."""
+    if not isinstance(column, str):
+        return False
+    col_norm = column.strip().lower()
+    if not col_norm:
+        return False
+    configured = (selected_column or resolve_selected_column(mapping)).strip().lower()
+    return col_norm in (configured, "deskselected", "selected")
+
+
+def build_committed_shared_selection(words) -> Dict[str, bool]:
+    """Project committed normalized-lemma selection membership with a null-lemma guard."""
+    membership: Dict[str, bool] = {}
+    for word in words:
+        lemma_key = (word.get("lemma") or "").strip().lower()
+        if lemma_key:
+            membership[lemma_key] = membership.get(lemma_key, False) or bool(word.get("selected"))
+    return membership
+
 # Setup structured logging
 class JSONFormatter(logging.Formatter):
     def format(self, record):
@@ -4460,6 +4492,7 @@ class SqliteStorageAdapter(StorageAdapter):
         zid: str,
         results_dir: Optional[Path] = None,
         include_overview_selections: bool = False,
+        connection=None,
         **kwargs,
     ) -> Dict[str, Any]:
         if not zid or str(zid).strip() in ("", "00000000000000"):
@@ -4469,7 +4502,7 @@ class SqliteStorageAdapter(StorageAdapter):
             )
 
         with TraceTimer("sqlite_restore", zid, self.config, self.resolved_paths):
-            bundle = self.db.get_session_bundle(zid, parse_json=True, zid=zid)
+            bundle = self.db.get_session_bundle(zid, parse_json=True, zid=zid, connection=connection)
 
             if not bundle or not bundle.get('session'):
                 raise StructuredError(ErrorCode.NOT_FOUND, f"Session '{zid}' not found in SQLite database")
@@ -5082,7 +5115,7 @@ class SqliteStorageAdapter(StorageAdapter):
             if target is None:
                 return False
             lemma = normalize_selection_lemma(target['lemma'])
-            matching = [word for word in words if normalize_selection_lemma(word['lemma']) == lemma]
+            matching = [word for word in words if (word['lemma'] or '').strip().lower() == lemma]
             conn.executemany("UPDATE words SET selected = ? WHERE session_zid = ? AND sentence_index = ? AND token_order = ?",
                              [(selected_value, session_zid, word['sentence_index'], word['token_order']) for word in matching])
             conn.executemany("INSERT INTO overview_selections(session_zid, token_order, selected) VALUES (?, ?, ?) "
@@ -18274,12 +18307,14 @@ def resolve_occurrence_rows(rows, headers, coordinates, sentence_field="Sentence
     return result
 
 
-def edit_save_projection(adapter, session_zid, deltas, selected_column, fingerprint):
+def edit_save_projection(adapter, session_zid, deltas, selected_column, fingerprint, connection=None):
     """Read the pre-edit projection only for stale checks or inline word edits."""
-    direct_columns = (selected_column, "DeskSelected", "selected", "_delete")
-    if not fingerprint and all(delta.get("column") in direct_columns for delta in deltas):
+    if not fingerprint and all(
+        delta.get("column") == "_delete" or is_selected_column(delta.get("column"), selected_column=selected_column)
+        for delta in deltas
+    ):
         return None
-    restored = adapter.restore_session(session_zid)
+    restored = adapter.restore_session(session_zid, connection=connection)
     if fingerprint:
         current_fp = compute_content_fingerprint(restored.get("data_rows", []))
         if fingerprint != current_fp:
@@ -18287,7 +18322,17 @@ def edit_save_projection(adapter, session_zid, deltas, selected_column, fingerpr
     return restored
 
 
-def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerprint=None, zid=None, language=None, trace_id=None):
+def core_edit_save(
+    tsv_path_or_session,
+    deltas,
+    config,
+    resolved_paths,
+    fingerprint=None,
+    zid=None,
+    language=None,
+    trace_id=None,
+    snapshot_out=None,
+):
     if zid is None:
         zid = generate_unique_zid()
 
@@ -18306,33 +18351,34 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
             mapping_file = resolved_paths.get('anki_mapping_file') if resolved_paths else None
             mapping = load_anki_mapping(mapping_file) if mapping_file else None
             editable_cols = []
-            role_fields = {}
-            if mapping:
-                if hasattr(mapping, 'has_section') and mapping.has_section('desk_editable'):
-                    editable_cols = [c.strip() for c in mapping.get('desk_editable', 'editable_columns', fallback='').split(',') if c.strip()]
-                if hasattr(mapping, 'has_section') and mapping.has_section('desk_columns'):
-                    role_fields = {role: field for field, role in mapping['desk_columns'].items()}
-            selected_col_name = role_fields.get('selected', 'DeskSelected')
-            if selected_col_name not in editable_cols:
+            if mapping and hasattr(mapping, 'has_section') and mapping.has_section('desk_editable'):
+                editable_cols = [c.strip() for c in mapping.get('desk_editable', 'editable_columns', fallback='').split(',') if c.strip()]
+            selected_col_name = resolve_selected_column(mapping)
+            if selected_col_name.lower() not in [c.lower() for c in editable_cols]:
                 editable_cols.append(selected_col_name)
 
-            restored = edit_save_projection(storage_adapter, session_zid, deltas, selected_col_name, fingerprint)
-
             deleted_rows = []
-            # Validate the complete request and apply it under one write transaction.
-            # A later invalid delta or failed update cannot commit earlier deltas.
+            committed_shared_selection = None
+            committed_headers = None
+            committed_rows = None
+            # Validate, apply, and capture immutable delivery facts under one SQLite write transaction.
+            # A later invalid delta, failed update, or independent writer cannot corrupt this save's snapshot.
             with storage_adapter.db.get_connection(zid=zid) as conn:
+                restored = edit_save_projection(
+                    storage_adapter, session_zid, deltas, selected_col_name, fingerprint, connection=conn
+                )
                 targets = []
+                has_selection_mutation = False
                 for delta in deltas:
                     row_id, col_name, val = delta.get("row_id"), delta.get("column"), delta.get("value")
-                    if col_name in ("DeskSelected", "selected"):
-                        col_name = selected_col_name
                     if row_id is None or not isinstance(col_name, str) or val is None:
                         raise StructuredError(ErrorCode.INVALID_STATE, "Each delta requires row_id, column and value")
-                    if col_name != "_delete" and col_name.lower() not in [c.lower() for c in editable_cols]:
-                        raise StructuredError(ErrorCode.DESK_FAILED, f"Column '{col_name}' is not inline-editable.")
+                    is_selection = is_selected_column(col_name, selected_column=selected_col_name)
+                    effective_col = selected_col_name if is_selection else col_name
+                    if effective_col != "_delete" and effective_col.lower() not in [c.lower() for c in editable_cols]:
+                        raise StructuredError(ErrorCode.DESK_FAILED, f"Column '{effective_col}' is not inline-editable.")
                     sentence_idx, token_order = delta.get("sentence_idx"), delta.get("token_order")
-                    if col_name not in (selected_col_name, "DeskSelected", "selected", "_delete"):
+                    if not is_selection and effective_col != "_delete":
                         sentence_idx, token_order = edit_occurrence_coordinates(sentence_idx, token_order)
                         matches = conn.execute(
                             "SELECT id FROM words WHERE session_zid=? AND sentence_index=? AND token_order=?",
@@ -18342,15 +18388,17 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                             raise StructuredError(code, f"Expected one occurrence for sentence {sentence_idx}, token {token_order}; found {len(matches)}")
                     elif token_order is None:
                         token_order = row_id
-                    targets.append((delta, sentence_idx, token_order))
+                    if is_selection:
+                        has_selection_mutation = True
+                    targets.append((delta, sentence_idx, token_order, is_selection))
 
-                for delta, sentence_idx, token_order in targets:
+                for delta, sentence_idx, token_order, is_selection in targets:
                     col_name, val = delta["column"], delta["value"]
                     if col_name == "_delete":
                         records = storage_adapter.persist_word_deletion(session_zid, sentence_idx, token_order,
                             val, delta.get('restore'), zid=zid, _connection=conn)
                         deleted_rows.append(dict(delta, restore=records))
-                    elif col_name in (selected_col_name, "DeskSelected", "selected"):
+                    elif is_selection:
                         if not storage_adapter.update_word_selection(session_zid, sentence_idx, token_order, val,
                                                                      zid=zid, _connection=conn):
                             raise StructuredError(ErrorCode.NOT_FOUND, "Selection occurrence not found")
@@ -18362,21 +18410,35 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                                                 col_name, val, restored, config, zid, conn):
                             raise StructuredError(ErrorCode.NOT_FOUND, "Edited occurrence not found")
 
-            updated_restored = storage_adapter.restore_session(session_zid)
-            new_fingerprint = compute_content_fingerprint(updated_restored.get("data_rows", []))
+                updated_restored = storage_adapter.restore_session(session_zid, connection=conn)
+                new_fingerprint = compute_content_fingerprint(updated_restored.get("data_rows", []))
+                if has_selection_mutation:
+                    committed_shared_selection = tuple(
+                        sorted(build_committed_shared_selection(updated_restored.get("words", [])).items())
+                    )
+                if snapshot_out is not None:
+                    committed_headers = tuple(updated_restored.get("headers", []))
+                    committed_rows = tuple(tuple(row) for row in updated_restored.get("data_rows", []))
+
+            if snapshot_out is not None and committed_headers is not None and committed_rows is not None:
+                snapshot_out["headers"] = list(committed_headers)
+                snapshot_out["data_rows"] = [list(row) for row in committed_rows]
 
             results_dir = resolve_results_dir(resolved_paths, config) if resolved_paths and config else None
             if (zid or session_zid) and results_dir:
                 sess_logger = SessionLogger(zid or session_zid, results_dir, trace_id=(trace_id or f"{zid or session_zid}:edit-save"))
                 sess_logger.info(f"Saved {len(deltas)} edit delta(s) via SQLite to session {session_zid}")
 
-            return {
+            result = {
                 "status": "success",
                 "deleted_rows": deleted_rows,
                 "fingerprint": new_fingerprint,
                 "session_zid": session_zid,
-                "zid": zid
+                "zid": zid,
             }
+            if committed_shared_selection is not None:
+                result["shared_selection"] = dict(committed_shared_selection)
+            return result
 
     if isinstance(tsv_path_or_session, Path):
         tsv_path = tsv_path_or_session

@@ -2434,6 +2434,7 @@ class SessionArbiter:
 
         adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
         sess_lock = session["lock"] if session else self._lock
+        committed_snapshot: Dict[str, Any] = {}
         with sess_lock:
             res = core_edit_save(
                 tsv_path_or_session=session_zid,
@@ -2443,21 +2444,24 @@ class SessionArbiter:
                 fingerprint=fingerprint,
                 zid=req_zid,
                 language=language or (session.get("language") if session else None),
+                snapshot_out=committed_snapshot if (session and adapter.backend_name == 'sqlite') else None,
             )
 
             if session:
                 session["fingerprint"] = res["fingerprint"]
-                stored_path = session.get('tsv_path') or res.get('tsv_path')
-                if adapter.backend_name == 'sqlite' or (stored_path and Path(stored_path).is_file()):
-                    _, current_headers, current_rows = adapter.load_tsv_rows(session_zid if adapter.backend_name == 'sqlite' else stored_path)
-                    session['headers'] = current_headers
-                    session['data_rows'] = current_rows
+                if committed_snapshot.get("headers") is not None and committed_snapshot.get("data_rows") is not None:
+                    session["headers"] = committed_snapshot["headers"]
+                    session["data_rows"] = committed_snapshot["data_rows"]
+                else:
+                    stored_path = session.get('tsv_path') or res.get('tsv_path')
+                    if adapter.backend_name == 'sqlite' or (stored_path and Path(stored_path).is_file()):
+                        _, current_headers, current_rows = adapter.load_tsv_rows(session_zid if adapter.backend_name == 'sqlite' else stored_path)
+                        session['headers'] = current_headers
+                        session['data_rows'] = current_rows
 
-        selection = None
-        if adapter.backend_name == 'sqlite' and any(d.get('column') == 'DeskSelected' for d in deltas):
-            words = adapter.db.get_words_by_session(session_zid)
-            selection = {word['lemma'].strip().lower(): bool(word['selected']) for word in words}
-        # Broadcast state mutation event to all connected SSE clients
+        raw_selection = res.get("shared_selection")
+        selection = dict(raw_selection) if isinstance(raw_selection, dict) else None
+        # Broadcast state mutation event to all connected SSE clients only after commit
         with committed_delivery(session_zid, res['fingerprint']):
             self.emit_event(session_zid, {
                 "type": "update",
