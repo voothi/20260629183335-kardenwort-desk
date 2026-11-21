@@ -7742,8 +7742,9 @@
             for (var i = 0; i < tableRows.length; i++) {
                 var row = tableRows[i];
                 var rowIdStr = String(row.getAttribute('data-row-id'));
-                var isSel = selectedRowIdsMap.hasOwnProperty(rowIdStr);
-                if (!isSel) {
+                var isDeleted = row.getAttribute('data-deleted') === 'true';
+                var isSel = !isDeleted && selectedRowIdsMap.hasOwnProperty(rowIdStr);
+                if (!isDeleted && !isSel) {
                     var cIds = getExtraRowIds(row);
                     for (var c = 0; c < cIds.length; c++) {
                         if (selectedRowIdsMap.hasOwnProperty(cIds[c])) {
@@ -8068,8 +8069,9 @@
             var activeTargetRowIds = {};
             var primaryTargetRowIds = {};
             var selectedHighlightGroups = [];
+            var deleted = deletedRowIds();
             for (var rId in selectedRowIdsMap) {
-                if (!selectedRowIdsMap.hasOwnProperty(rId)) continue;
+                if (!selectedRowIdsMap.hasOwnProperty(rId) || deleted[String(rId)]) continue;
                 var rowId = parseInt(String(rId), 10);
                 if (!isNaN(rowId)) {
                     activeTargetRowIds[rowId] = true;
@@ -8080,6 +8082,7 @@
                 :  (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
             for (var i = 0; i < curTableRows.length; i++) {
                 var tr = curTableRows[i];
+                if (tr.getAttribute('data-deleted') === 'true') continue;
                 var trId = String(tr.getAttribute('data-row-id'));
                 var trSelected = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
                 if (trSelected) {
@@ -8516,7 +8519,7 @@
         function deletedRowIds() {
             var deleted = {};
             Array.prototype.forEach.call(document.querySelectorAll('#lemma-table tr[data-deleted="true"]'), function(row) {
-                deleted[String(row.getAttribute('data-row-id'))] = true;
+                getRowGroupIds(row).forEach(function(id) { deleted[String(id)] = true; });
             });
             return deleted;
         }
@@ -8841,11 +8844,14 @@
             if (!workspaceCommandsReady()) return;
             var targets = collectDeletionTargets(getSelectedRowsArray());
             if (targets.length === 0) return;
+            var rowIds = targets.map(function(target) { return target.row_id; });
+            resolveCommittedDeletionSelections(rowIds);
             var action = {
                 type: 'delete',
-                rowIds: targets.map(function(target) { return target.row_id; }),
+                rowIds: rowIds,
                 tokenOrders: targets.map(function(target) { return target.token_order; }),
-                sentenceIndices: targets.map(function(target) { return target.sentence_idx; })
+                sentenceIndices: targets.map(function(target) { return target.sentence_idx; }),
+                beforeSelection: captureDeletionSelectionState(rowIds)
             };
             pushHistory(action);
             applyAction(action);
@@ -8903,20 +8909,129 @@
                 return {row_ids: getRowGroupIds(row), selected: !!initialHighlights[id]};
             });
         }
-        function resetDeletionSelection(action) {
+        function findDeletionRows(rowIds) {
+            var idMap = {};
+            rowIds.forEach(function(id) { idMap[String(id)] = true; });
+            return tableRows.filter(function(row) {
+                return idMap[String(row.getAttribute('data-row-id'))];
+            });
+        }
+        function recordPreDeletionLemma(lemmas, lem) {
+            if (!lem || Object.prototype.hasOwnProperty.call(lemmas, lem)) return;
+            lemmas[lem] = !!(window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas[lem]);
+        }
+        function captureDeletionSelectionState(rowIds) {
+            var lemmas = {}, rowSelected = {};
+            findDeletionRows(rowIds).forEach(function(row) {
+                recordPreDeletionLemma(lemmas, getRowLemma(row));
+                getRowGroupIds(row).forEach(function(id) {
+                    rowSelected[id] = selectedRowIdsMap.hasOwnProperty(id);
+                });
+            });
+            rowIds.forEach(function(id) {
+                var key = String(id);
+                recordPreDeletionLemma(lemmas, getLemmaByRowId(id));
+                if (!Object.prototype.hasOwnProperty.call(rowSelected, key)) {
+                    rowSelected[key] = selectedRowIdsMap.hasOwnProperty(key);
+                }
+            });
+            return {
+                lemmas: lemmas,
+                rowSelected: rowSelected,
+                activeTokens: cloneActiveTokens(window.AppState && window.AppState.activeTokenSelections),
+                focusedRowId: focusedRowId,
+                lastClickedRowId: lastClickedRowId,
+                bookmarks: window.getBookmarkIndices ? window.getBookmarkIndices() : ''
+            };
+        }
+        function resolveCommittedDeletionSelections(rowIds) {
             var committed = {};
             committedSelectionRows().forEach(function(row) {
                 row.row_ids.forEach(function(id) {
-                    if (Object.prototype.hasOwnProperty.call(committed, String(id)) && committed[String(id)] !== row.selected) throw new Error('Ambiguous deletion selection identity');
-                    committed[String(id)] = row.selected;
+                    var key = String(id);
+                    if (Object.prototype.hasOwnProperty.call(committed, key) && committed[key] !== row.selected) {
+                        throw new Error('Ambiguous deletion selection identity');
+                    }
+                    committed[key] = row.selected;
                 });
             });
-            action.rowIds.forEach(function(id) {
-                if (!Object.prototype.hasOwnProperty.call(committed, String(id))) throw new Error('Missing deletion selection identity');
-                var lemma = getLemmaByRowId(id);
-                if (lemma) window.AppState.selectedLemmas[lemma] = committed[String(id)];
+            return rowIds.map(function(id) {
+                var key = String(id);
+                if (!Object.prototype.hasOwnProperty.call(committed, key)) {
+                    throw new Error('Missing deletion selection identity');
+                }
+                return {rowId: key, lemma: getLemmaByRowId(id), selected: committed[key]};
+            });
+        }
+        function setLemmaMembershipFlag(lemma, selected) {
+            if (!lemma || !window.AppState || !window.AppState.selectedLemmas) return;
+            if (selected) window.AppState.selectedLemmas[lemma] = true;
+            else delete window.AppState.selectedLemmas[lemma];
+        }
+        function resetDeletionSelection(action) {
+            resolveCommittedDeletionSelections(action.rowIds).forEach(function(item) {
+                if (item.lemma) setLemmaMembershipFlag(item.lemma, item.selected);
+                else if (item.selected) selectedRowIdsMap[item.rowId] = true;
+                else delete selectedRowIdsMap[item.rowId];
             });
             syncSelectionsToCardsAndState();
+        }
+        function applyDeletionRowVisibility(rowIds, deleted) {
+            findDeletionRows(rowIds).forEach(function(row) {
+                if (deleted) {
+                    row.setAttribute('data-deleted', 'true');
+                    row.style.display = 'none';
+                } else {
+                    row.removeAttribute('data-deleted');
+                    row.style.display = '';
+                }
+            });
+        }
+        function projectDeletionView() {
+            updateRowStyles();
+            updateBidirectionalHighlights();
+        }
+        function hasPendingDeletionRestore(action) {
+            return historyValues(action).some(function(item) {
+                var baseline = acknowledgedValues[deltaIdentity(item)];
+                return !!(baseline && baseline.value === true && baseline.current === false);
+            });
+        }
+        function restoreDeletionFocus(before, deferViewSave) {
+            var state = window.AppState;
+            var currentTokens = state ? state.activeTokenSelections : [];
+            var nextTokens = cloneActiveTokens(before.activeTokens);
+            var changed = activeTokensSignature(currentTokens) !== activeTokensSignature(nextTokens);
+            if (state) state.activeTokenSelections = nextTokens;
+            if (changed && !deferViewSave) saveActiveTokenFocus();
+            focusedRowId = before.focusedRowId;
+            lastClickedRowId = before.lastClickedRowId;
+            if (before.bookmarks && window.restoreBookmarksByIndices) {
+                window.restoreBookmarksByIndices(before.bookmarks);
+            }
+        }
+        function restoreDeletionSelection(action) {
+            var before = action.beforeSelection;
+            if (!before) return;
+            Object.keys(before.lemmas).forEach(function(lem) {
+                setLemmaMembershipFlag(lem, before.lemmas[lem]);
+            });
+            Object.keys(before.rowSelected).forEach(function(id) {
+                if (before.rowSelected[id]) selectedRowIdsMap[id] = true;
+                else delete selectedRowIdsMap[id];
+            });
+            syncSelectionsToCardsAndState();
+            restoreDeletionFocus(before, hasPendingDeletionRestore(action));
+        }
+        function applyDeleteAction(action) {
+            resetDeletionSelection(action);
+            applyDeletionRowVisibility(action.rowIds, true);
+            clearTokenSelections();
+            if (window.clearMVPBookmarks) window.clearMVPBookmarks();
+            var nextFocus = findRemainingSelectedRowId();
+            focusedRowId = nextFocus;
+            lastClickedRowId = nextFocus;
+            projectDeletionView();
         }
         /** @param {HistoryAction} action */
         function applyAction(action) {
@@ -8924,20 +9039,7 @@
             if (action.type === 'edit') {
                 projectEditedValue(action, action.newValue);
             } else if (action.type === 'delete') {
-                resetDeletionSelection(action);
-                for (var j = 0; j < action.rowIds.length; j++) {
-                    var rId = action.rowIds[j];
-                    for (var i = 0; i < tableRows.length; i++) {
-                        if (parseInt(String(tableRows[i].getAttribute('data-row-id'))) === rId) {
-                            tableRows[i].setAttribute('data-deleted', 'true');
-                            tableRows[i].style.display = 'none';
-                            break;
-                        }
-                    }
-                }
-                clearTokenSelections();
-                if (window.clearMVPBookmarks) window.clearMVPBookmarks();
-                updateBidirectionalHighlights();
+                applyDeleteAction(action);
             }
         }
 
@@ -8947,16 +9049,9 @@
             if (action.type === 'edit') {
                 projectEditedValue(action, action.oldValue);
             } else if (action.type === 'delete') {
-                for (var j = 0; j < action.rowIds.length; j++) {
-                    var rId = action.rowIds[j];
-                    for (var i = 0; i < tableRows.length; i++) {
-                        if (parseInt(String(tableRows[i].getAttribute('data-row-id'))) === rId) {
-                            tableRows[i].removeAttribute('data-deleted');
-                            tableRows[i].style.display = '';
-                            break;
-                        }
-                    }
-                }
+                applyDeletionRowVisibility(action.rowIds, false);
+                restoreDeletionSelection(action);
+                projectDeletionView();
             }
         }
 
@@ -9044,6 +9139,10 @@
             });
             acknowledgeSelections(snapshot);
             rebuildDeltas();
+            if (snapshot.some(function(d) { return d.column === '_delete' && !d.value; }) &&
+                window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0) {
+                saveActiveTokenFocus();
+            }
         }
 
         /** @param {Delta} delta */
