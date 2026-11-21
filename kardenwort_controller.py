@@ -4498,11 +4498,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1)):
                             s_dest = s.get("sentence_destination")
                             s_src = s.get("sentence_source")
-                            sentences_list.append({
+                            entry = {
                                 "sentence_index": s.get("sentence_index", 1),
                                 "sentence_source": str(s_src).strip() if s_src else "",
                                 "sentence_destination": str(s_dest).strip() if s_dest else "",
-                            })
+                            }
+                            if s.get("text_provenance"):
+                                entry["text_provenance"] = s.get("text_provenance")
+                            sentences_list.append(entry)
                         if not sentence_translation:
                             clean_translations = [s["sentence_destination"] for s in sentences_list if s["sentence_destination"]]
                             if clean_translations:

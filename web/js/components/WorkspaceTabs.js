@@ -871,6 +871,24 @@
             }
         }
 
+        function buildProvenanceAttrs(prov) {
+            if (!prov) return '';
+            var attrs = ' data-provenance="' + escapeHtml(prov) + '"';
+            var tip = formatProvenanceTooltip(prov);
+            if (tip) attrs += ' title="' + escapeHtml(tip) + '"';
+            return attrs;
+        }
+
+        function buildOverviewTranslationHtml(slots, slotProvs) {
+            var html = [];
+            for (var i = 0; i < slots.length; i++) {
+                var line = (slots[i] || '').trim();
+                var attrs = line ? buildProvenanceAttrs(slotProvs[i]) : '';
+                html.push('<div' + attrs + '>' + (line ? escapeHtml(line) : '&nbsp;') + '</div>');
+            }
+            return html.join('');
+        }
+
         function updateActiveTabTranslation() {
             var w = (window);
             var transContainer = document.getElementById('translation-container');
@@ -878,6 +896,7 @@
             for (var c = 0; c < cards.length; c++) {
                 if (cards[c].seq_num === activeTabSeq) {
                     var tText = cards[c].translated_text;
+                    var overviewHtml = '';
                     if ((!tText || !tText.trim()) && w.AppState && (w.AppState.translatedText || w.AppState.translated_text)) {
                         var rawText = w.AppState.translatedText || w.AppState.translated_text;
                         if (cards.length === 1 || activeSentenceIdx === 0) {
@@ -931,8 +950,11 @@
                         if (filledCount > 1) {
 
                             var slots = new Array(maxSentenceIdx);
+                            var slotProvs = new Array(maxSentenceIdx);
+                            var hasPerBlockProv = false;
                             for (var si = 0; si < maxSentenceIdx; si++) {
                                 slots[si] = "";
+                                slotProvs[si] = "";
                             }
                             for (var sc2 = 0; sc2 < cards.length; sc2++) {
                                 var sc2Card = cards[sc2];
@@ -940,9 +962,15 @@
                                 var cIdx = sc2Card.sentence_idx;
                                 if (cIdx > 0 && cIdx <= maxSentenceIdx) {
                                     slots[cIdx - 1] = (sc2Card.translated_text || "").trim();
+                                    var cProv = (sc2Card.text_provenance || "").trim();
+                                    slotProvs[cIdx - 1] = cProv;
+                                    if (cProv) hasPerBlockProv = true;
                                 }
                             }
                             tText = slots.join(String.fromCharCode(10));
+                            if (hasPerBlockProv) {
+                                overviewHtml = buildOverviewTranslationHtml(slots, slotProvs);
+                            }
                         }
                     }
                     tText = tText || '';
@@ -958,7 +986,7 @@
                         transContainer.removeAttribute('data-sentence-idx');
                         transContainer.removeAttribute('data-line-idx');
                     }
-                    w.TranslationView.project(getTranslationHtml(tText), String(activeSentenceIdx));
+                    w.TranslationView.project(overviewHtml || getTranslationHtml(tText), String(activeSentenceIdx));
                     w.applyTextProvenance(transContainer);
                     break;
                 }
@@ -1268,10 +1296,14 @@
                     var s = sents[i];
                     var sIdx = (typeof s === 'object' && s !== null && s.sentence_index !== undefined) ? s.sentence_index : (i + 1);
                     var sDst = (typeof s === 'string') ? s : ((s && (s.sentence_destination || s.translation)) || "");
+                    var sProv = (typeof s === 'object' && s !== null && (s.text_provenance || s.textProvenance)) || "";
                     for (var c = 0; c < cards.length; c++) {
                         if (cards[c].sentence_idx === sIdx) {
                             if (cards[c].translated_text !== sDst) {
                                 cards[c].translated_text = sDst;
+                            }
+                            if (sProv) {
+                                cards[c].text_provenance = sProv;
                             }
                         }
                     }
@@ -1287,10 +1319,14 @@
                         var sIdx2 = isZeroBased ? (num + 1) : num;
                         if (sIdx2 <= 0) continue;
                         var sDst2 = typeof sentsObj[kRaw] === 'string' ? sentsObj[kRaw] : ((sentsObj[kRaw] && (sentsObj[kRaw].sentence_destination || sentsObj[kRaw].translation)) || "");
+                        var sProv2 = (typeof sentsObj[kRaw] === 'object' && sentsObj[kRaw] !== null && (sentsObj[kRaw].text_provenance || sentsObj[kRaw].textProvenance)) || "";
                         for (var c2 = 0; c2 < cards.length; c2++) {
                             if (cards[c2].sentence_idx === sIdx2) {
                                 if (cards[c2].translated_text !== sDst2) {
                                     cards[c2].translated_text = sDst2;
+                                }
+                                if (sProv2) {
+                                    cards[c2].text_provenance = sProv2;
                                 }
                             }
                         }

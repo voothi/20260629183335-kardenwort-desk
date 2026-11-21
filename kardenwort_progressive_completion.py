@@ -190,11 +190,14 @@ def committed_translation_map(sentences):
 def sentence_summary_rows(db_sentences):
     rows = []
     for row in sorted(db_sentences, key=lambda item: item.get('sentence_index', 1)):
-        rows.append({
+        entry = {
             'sentence_index': row.get('sentence_index', 1),
             'sentence_source': str(row.get('sentence_source') or '').strip(),
             'sentence_destination': str(row.get('sentence_destination') or '').strip(),
-        })
+        }
+        if row.get('text_provenance'):
+            entry['text_provenance'] = row.get('text_provenance')
+        rows.append(entry)
     return rows
 
 

@@ -650,21 +650,78 @@
         return 'live:' + (provider || 'google');
     }
 
+    function activeCardProvenance() {
+        if (!window.WorkspaceTabs || typeof window.WorkspaceTabs.getActiveCard !== 'function') return '';
+        var card = window.WorkspaceTabs.getActiveCard();
+        return (card && card.sentence_idx > 0 && card.text_provenance) ? String(card.text_provenance).trim() : '';
+    }
+
+    function blockProvenances(container) {
+        var divs = container.querySelectorAll('div');
+        var tagged = [];
+        var distinct = {};
+        var distinctCount = 0;
+        for (var i = 0; i < divs.length; i++) {
+            var div = divs[i];
+            if (div.getAttribute('data-pending') === 'true' || div.classList.contains('skeleton-loader')) continue;
+            var prov = div.getAttribute('data-provenance');
+            if (prov) {
+                tagged.push({ el: div, prov: prov });
+                if (!Object.prototype.hasOwnProperty.call(distinct, prov)) {
+                    distinct[prov] = true;
+                    distinctCount++;
+                }
+            }
+        }
+        return { tagged: tagged, distinctCount: distinctCount };
+    }
+
+    function applyBlockProvenance(div, provenance) {
+        div.setAttribute('data-provenance', String(provenance));
+        var title = formatProvenanceTooltip(provenance);
+        if (!title) return;
+        div.setAttribute('title', String(title));
+        var spans = div.querySelectorAll('span.word');
+        for (var i = 0; i < spans.length; i++) {
+            spans[i].setAttribute('data-provenance', String(provenance));
+            spans[i].setAttribute('title', String(title));
+        }
+    }
+
+    function applyMixedBlockProvenances(container) {
+        var blocks = blockProvenances(container);
+        if (blocks.distinctCount <= 1) return false;
+        container.removeAttribute('data-provenance');
+        container.removeAttribute('title');
+        for (var i = 0; i < blocks.tagged.length; i++) {
+            applyBlockProvenance(blocks.tagged[i].el, blocks.tagged[i].prov);
+        }
+        return true;
+    }
+
+    function resolveContainerProvenance(container) {
+        return activeCardProvenance() || stateTextProvenance() || container.getAttribute('data-provenance') || scriptTextProvenance() || liveTextProvenance();
+    }
+
     function applyTextProvenance(container) {
         if (!container) throw new Error('Missing translation container');
-        var provenance = stateTextProvenance() || container.getAttribute('data-provenance') || scriptTextProvenance() || liveTextProvenance();
+        if (applyMixedBlockProvenances(container)) return;
+        var provenance = resolveContainerProvenance(container);
         if (provenance) projectTextProvenance(container, provenance);
     }
 
     function projectTextProvenance(container, provenance) {
+        if (applyMixedBlockProvenances(container)) return;
         container.setAttribute('data-provenance', String(provenance));
         var title = formatProvenanceTooltip(provenance);
         if (!title) return;
         container.setAttribute('title', String(title));
         var words = container.querySelectorAll('span.word, div');
         for (var i = 0; i < words.length; i++) {
-            words[i].setAttribute('data-provenance', String(provenance));
-            words[i].setAttribute('title', String(title));
+            var node = words[i];
+            if (node.getAttribute('data-pending') === 'true' || node.classList.contains('skeleton-loader')) continue;
+            node.setAttribute('data-provenance', String(provenance));
+            node.setAttribute('title', String(title));
         }
     }
     window.applyTextProvenance = applyTextProvenance;

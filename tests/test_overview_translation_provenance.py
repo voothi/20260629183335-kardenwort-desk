@@ -4,14 +4,24 @@ Exercises real desk.run_render_flow initial server-rendered HTML (before client
 JavaScript runs), real owned SQLite and TSV storage, and Playwright client DOM
 projection across hydration, tab switching, and live SSE/status updates.
 """
+import json
 import re
+import threading
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 from playwright.sync_api import expect
 
 import kardenwort_desk as desk
 from kardenwort_db import KardenwortDB
-from tests.controller_test_support import owned_configuration
+from tests.controller_test_support import (
+    DeterministicTranslationHandler,
+    controller_lifetime,
+    owned_configuration,
+    seed_cached_lookup_inputs,
+    token_service,
+    translation_service,
+)
 
 
 def _seed_sqlite_multiline_session(
@@ -574,3 +584,148 @@ def test_control_child_card_initial_formatting_remains_valid(tmp_path, browser):
     assert blocks[0]["title"] == "Translated via Argos (offline)"
     assert blocks[1]["provenance"] == "live:argos"
     assert blocks[1]["title"] == "Translated via Argos (offline)"
+
+
+def test_async_controller_status_preserves_mixed_provenance_and_unrelated_sessions(tmp_path, page):
+    """Deterministic async coordination: controller worker + /session/status preserve per-sentence provenance and leave unrelated sessions untouched."""
+    arrived = threading.Event()
+    release = threading.Event()
+
+    class GatedTranslationHandler(DeterministicTranslationHandler):
+        def translate(self, provider, text, source, target):
+            arrived.set()
+            assert release.wait(timeout=10), "Timed out waiting to release gated external translation"
+            return super().translate(provider, text, source, target)
+
+    with translation_service(GatedTranslationHandler) as translator, token_service() as tokenizer:
+        with controller_lifetime(tmp_path, translator, backend="sqlite") as (controller_url, server):
+            config, paths = server.config, server.resolved_paths
+            config.set("services", "spacy_server_url", f"http://127.0.0.1:{tokenizer.server_port}")
+            _configure_render_profile(
+                config,
+                sentences_enabled=True,
+                display_mode="progressive",
+                run_text="auto",
+                server_enabled=True,
+            )
+            seed_cached_lookup_inputs(server)
+
+            adapter = desk.SqliteStorageAdapter(config, paths)
+            unrelated_apple_sents = adapter.db.get_sentences_by_session("20261108113001")
+            unrelated_dog_sents = adapter.db.get_sentences_by_session("20261108113002")
+
+            # Seed an owned two-sentence session where sentence 1 has Argos provenance and sentence 2 is translated asynchronously via Google
+            zid = "20261121173007"
+            source_text = "Alpha eins.\nBeta zwei."
+            _seed_sqlite_multiline_session(
+                paths["sqlite_db_path"],
+                zid=zid,
+                source_text=source_text,
+                text_mode="multi",
+                sentences=[
+                    {
+                        "sentence_index": 1,
+                        "sentence_source": "Alpha eins.",
+                        "sentence_destination": "",
+                        "text_provenance": None,
+                    },
+                    {
+                        "sentence_index": 2,
+                        "sentence_source": "Beta zwei.",
+                        "sentence_destination": "",
+                        "text_provenance": None,
+                    },
+                ],
+                words=[
+                    {
+                        "sentence_index": 1,
+                        "token_order": 0,
+                        "quotation": "Alpha",
+                        "lemma": "Alpha",
+                        "word_destination": "альфа",
+                        "word_provenance": "live:argos",
+                    },
+                    {
+                        "sentence_index": 2,
+                        "token_order": 0,
+                        "quotation": "Beta",
+                        "lemma": "Beta",
+                        "word_destination": "бета",
+                        "word_provenance": "live:google",
+                    },
+                ],
+            )
+
+            sub_queue = server.arbiter.register_subscriber(zid)
+            try:
+                html = desk.run_render_flow(
+                    text=source_text,
+                    language="de",
+                    zid=zid,
+                    text_mode="multi",
+                    config=config,
+                    resolved_paths=paths,
+                    spawn_children=False,
+                    wordfill_cfg={"enabled": False},
+                    seq_num=1,
+                )
+                page.set_content(html)
+                expect(
+                    page.locator('#translation-container .skeleton-loader[data-pending="true"]')
+                ).to_have_count(1)
+                assert (
+                    page.locator('#translation-container .skeleton-loader').get_attribute("data-provenance")
+                    is None
+                )
+                assert arrived.wait(timeout=10), "External translation engine was never invoked"
+
+                release.set()
+                while True:
+                    evt = sub_queue.get(timeout=15)
+                    evt_data = evt.get("data") if isinstance(evt, dict) and isinstance(evt.get("data"), dict) else evt
+                    if isinstance(evt_data, dict) and (
+                        evt_data.get("stage") == "finished" or evt_data.get("is_finished") is True
+                    ):
+                        break
+
+                # Simulate mixed stored providers (sentence 1 Argos, sentence 2 Google) and fetch real /session/status
+                adapter.db.insert_sentence(
+                    {
+                        "session_zid": zid,
+                        "sentence_index": 1,
+                        "sentence_source": "Alpha eins.",
+                        "sentence_destination": "argos: Alpha eins.",
+                        "text_provenance": "live:argos",
+                    }
+                )
+                persisted = adapter.db.get_sentences_by_session(zid)
+                assert [s["text_provenance"] for s in persisted] == ["live:argos", "live:google"]
+
+                req = Request(
+                    f"{controller_url}/session/status?zid={zid}",
+                    headers={"X-API-Token": server.api_key},
+                )
+                with urlopen(req, timeout=5) as resp:
+                    status_body = json.loads(resp.read().decode("utf-8"))
+                assert status_body["status"] == "success"
+                status_data = status_body["data"]
+                assert [s.get("text_provenance") for s in status_data["sentences"]] == [
+                    "live:argos",
+                    "live:google",
+                ]
+
+                page.evaluate("(update) => window.receiveUpdate(update)", status_data)
+                expect(page.locator("#translation-container > div")).to_have_count(2)
+                div0 = page.locator("#translation-container > div").nth(0)
+                div1 = page.locator("#translation-container > div").nth(1)
+                assert div0.get_attribute("data-provenance") == "live:argos"
+                assert div0.get_attribute("title") == "Translated via Argos (offline)"
+                assert div1.get_attribute("data-provenance") == "live:google"
+                assert div1.get_attribute("title") == "Translated via Google"
+
+                # Unrelated sessions and their stored provenance remain completely untouched
+                assert adapter.db.get_sentences_by_session("20261108113001") == unrelated_apple_sents
+                assert adapter.db.get_sentences_by_session("20261108113002") == unrelated_dog_sents
+            finally:
+                release.set()
+                server.arbiter.unregister_subscriber(zid, sub_queue)

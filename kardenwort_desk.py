@@ -8677,60 +8677,137 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
         return sentence_translations_raw.get(0, "")
     return None
 
+def _provenance_attr_str(provenance):
+    prov = str(provenance).strip() if provenance else ""
+    if not prov:
+        return ""
+    attrs = f' data-provenance="{html.escape(prov, quote=True)}"'
+    p_title = format_provenance_tooltip(prov)
+    if p_title:
+        attrs += f' title="{html.escape(p_title, quote=True)}"'
+    return attrs
+
+
+def _render_initial_card_translation(card, active_sentence, text_mode, config, pending_html, provenance_attrs):
+    translated = card["translated_text"]
+    if not translated and card["sentence_idx"] == active_sentence:
+        return pending_html
+    card_prov = card.get("text_provenance")
+    rendered = format_translated_html(
+        translated, text_mode=text_mode, text=card["source_text"], config=config, provenance=card_prov,
+    )
+    if not card_prov and provenance_attrs:
+        rendered = rendered.replace("<div", f"<div{provenance_attrs}")
+    return rendered or "<div></div>"
+
+
 def format_initial_card_translations(cards, active_sentence, text_mode, config, pending_html, provenance_attrs):
-    chunks = []
     children = sorted((card for card in cards if card["sentence_idx"] > 0), key=lambda card: card["sentence_idx"])
-    for card in children:
-        translated = card["translated_text"]
-        if not translated and card["sentence_idx"] == active_sentence:
-            rendered = pending_html
-        else:
-            rendered = format_translated_html(translated, text_mode=text_mode, text=card["source_text"], config=config).replace("<div", f"<div{provenance_attrs}")
-        if not rendered:
-            rendered = "<div></div>"
-        chunks.append(rendered.replace("<div", f'<div data-translation-sentence="{card["sentence_idx"]}"'))
-    return "".join(chunks)
+    return "".join(
+        _render_initial_card_translation(card, active_sentence, text_mode, config, pending_html, provenance_attrs)
+        .replace("<div", f'<div data-translation-sentence="{card["sentence_idx"]}"')
+        for card in children
+    )
 
 
-def format_translated_html(sentence_translations, text_mode="single", text="", config=None):
+def _is_numeric_key(key):
+    return isinstance(key, int) or (isinstance(key, str) and key.isdigit())
+
+
+def _nonempty_values(values):
+    return [(idx, str(v)) for idx, v in enumerate(values) if v]
+
+
+def _dict_translation_entries(mapping):
+    numeric = sorted(filter(_is_numeric_key, mapping), key=int)
+    entries = [(k, mapping[k]) for k in numeric if mapping[k]]
+    return entries if entries else _nonempty_values(mapping.values())
+
+
+def _extract_translation_entries(sentence_translations):
+    if isinstance(sentence_translations, str):
+        lines = [ln for ln in re.split(r'[\r\n]+', sentence_translations) if ln.strip()]
+        return list(enumerate(lines or [sentence_translations]))
+    if isinstance(sentence_translations, dict):
+        return _dict_translation_entries(sentence_translations)
+    if isinstance(sentence_translations, (list, tuple)):
+        return _nonempty_values(sentence_translations)
+    return [(0, str(sentence_translations))]
+
+
+def _clean_translation_line(raw_val, norm_brackets):
+    text_s = str(raw_val).strip()
+    if not text_s or text_s == "[FAILED]" or text_s.startswith("[Error"):
+        return ""
+    stripped = re.sub(r'</?[a-zA-Z][^>]*>', '', str(raw_val)).strip()
+    if not stripped:
+        return ""
+    return html.escape(normalize_bracket_spacing(stripped) if norm_brackets else stripped)
+
+
+def _resolve_dict_provenance(provenance, key):
+    if key in provenance:
+        return provenance[key]
+    if str(key) in provenance:
+        return provenance[str(key)]
+    if isinstance(key, str) and key.isdigit():
+        return provenance.get(int(key))
+    return None
+
+
+def _resolve_entry_provenance(provenance, key, pos):
+    if not provenance:
+        return None
+    if isinstance(provenance, str):
+        return provenance
+    if isinstance(provenance, dict):
+        return _resolve_dict_provenance(provenance, key)
+    if isinstance(provenance, (list, tuple)) and 0 <= pos < len(provenance):
+        return provenance[pos]
+    return None
+
+
+def _is_single_display_mode(text, text_mode):
+    eff_mode = _effective_text_mode(text, text_mode) if text else text_mode
+    if eff_mode != 'single':
+        return False
+    return not (text and ('\n' in text.strip() or '\r' in text.strip()))
+
+
+def _flatten_single_lines(cleaned):
+    flattened = [sub.strip() for line, _ in cleaned for sub in re.split(r'[\r\n]+', line) if sub.strip()]
+    if flattened and all(s == flattened[0] for s in flattened):
+        return [flattened[0]]
+    return flattened
+
+
+def _single_mode_provenance(cleaned, provenance):
+    for _, prov in cleaned:
+        if prov:
+            return prov
+    return provenance if isinstance(provenance, str) else None
+
+
+def _collect_cleaned_translations(sentence_translations, norm_brackets, provenance):
+    cleaned = []
+    for pos, (key, raw_val) in enumerate(_extract_translation_entries(sentence_translations)):
+        line = _clean_translation_line(raw_val, norm_brackets)
+        if line:
+            cleaned.append((line, _resolve_entry_provenance(provenance, key, pos)))
+    return cleaned
+
+
+def format_translated_html(sentence_translations, text_mode="single", text="", config=None, provenance=None):
     if not sentence_translations:
         return ""
-    if isinstance(sentence_translations, str):
-        raw_lines = [ln for ln in re.split(r'[\r\n]+', sentence_translations) if ln.strip()] or [sentence_translations]
-    elif isinstance(sentence_translations, dict):
-        sorted_keys = sorted([k for k in sentence_translations.keys() if isinstance(k, int) or (isinstance(k, str) and k.isdigit())], key=int)
-        raw_lines = [sentence_translations[k] for k in sorted_keys if sentence_translations[k]]
-        if not raw_lines and sentence_translations:
-            raw_lines = [str(v) for v in sentence_translations.values() if v]
-    elif isinstance(sentence_translations, (list, tuple)):
-        raw_lines = [str(v) for v in sentence_translations if v]
-    else:
-        raw_lines = [str(sentence_translations)]
-
-    raw_lines = [
-        re.sub(r'</?[a-zA-Z][^>]*>', '', str(s)) for s in raw_lines
-        if str(s).strip() != "[FAILED]" and not str(s).strip().startswith("[Error")
-    ]
     norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
-    lines = [html.escape(normalize_bracket_spacing(line.strip()) if norm_brackets else line.strip()) for line in raw_lines if line.strip()]
-
-    eff_mode = _effective_text_mode(text, text_mode) if text else text_mode
-    is_single = (eff_mode == 'single')
-    if text and ('\n' in text.strip() or '\r' in text.strip()):
-        is_single = False
-
-    if is_single:
-        flattened_lines = []
-        for line in lines:
-            for sub_line in re.split(r'[\r\n]+', line):
-                sub_clean = sub_line.strip()
-                if sub_clean:
-                    flattened_lines.append(sub_clean)
-        if flattened_lines and all(s == flattened_lines[0] for s in flattened_lines):
-            flattened_lines = [flattened_lines[0]]
-        return f"<div>{' '.join(flattened_lines)}</div>" if flattened_lines else ""
-    else:
-        return "".join(f"<div>{line if line else '&nbsp;'}</div>" for line in lines)
+    cleaned = _collect_cleaned_translations(sentence_translations, norm_brackets, provenance)
+    if not cleaned:
+        return ""
+    if _is_single_display_mode(text, text_mode):
+        flattened = _flatten_single_lines(cleaned)
+        return f"<div{_provenance_attr_str(_single_mode_provenance(cleaned, provenance))}>{' '.join(flattened)}</div>" if flattened else ""
+    return "".join(f"<div{_provenance_attr_str(prov)}>{line}</div>" for line, prov in cleaned)
 
 
 
@@ -11777,6 +11854,7 @@ html, body {{
             extracted_translations[content_line_idx] = cand_dest
 
     db_sents = None
+    extracted_provenances = {}
     if is_sqlite:
         tsv_zid = extract_zid(working_tsv_path)
         for candidate_zid in [tsv_zid, zid]:
@@ -11789,6 +11867,9 @@ html, body {{
                             s_dest = s.get("sentence_destination")
                             if s_dest and str(s_dest).strip() and str(s_dest).strip() != "[FAILED]" and not str(s_dest).strip().startswith("[Error"):
                                 extracted_translations[s_idx] = str(s_dest).strip()
+                                s_prov = s.get("text_provenance")
+                                if s_prov and str(s_prov).strip():
+                                    extracted_provenances[s_idx] = str(s_prov).strip()
                             elif str(s.get("sentence_source", "")).strip().startswith("#") and (s_idx not in extracted_translations or not extracted_translations[s_idx]):
                                 extracted_translations[s_idx] = str(s.get("sentence_source", "")).strip()
                         break
@@ -11797,6 +11878,7 @@ html, body {{
 
 
     sentence_translations = {}
+    sentence_provenances = {}
     sentence_provenance = None
     if not sentence_translated and 'sentence_translations_raw' in locals():
         sentence_translations = sentence_translations_raw
@@ -11868,9 +11950,16 @@ html, body {{
                     if not val and ln.strip().startswith("#"):
                         val = ln.strip()
                     sentence_translations[a_idx] = val
+                    if c_idx in extracted_provenances:
+                        sentence_provenances[a_idx] = extracted_provenances[c_idx]
                     c_idx += 1
                 else:
                     sentence_translations[a_idx] = ""
+            distinct_provs = {p for p in sentence_provenances.values() if p}
+            if len(distinct_provs) > 1:
+                sentence_provenance = None
+            elif len(distinct_provs) == 1:
+                sentence_provenance = next(iter(distinct_provs))
 
     if not is_sqlite and not is_mismatch:
         save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
@@ -12314,6 +12403,7 @@ html, body {{
 
     source_html = "" if is_mismatch else "".join(span_htmls)
 
+    has_real_text = False
     if is_mismatch:
         sentence_html = ""
     else:
@@ -12325,16 +12415,12 @@ html, body {{
         if is_progressive and run_text == 'auto' and not has_real_text:
             sentence_html = f'<div class="skeleton-loader" data-pending="true" title="{text_provider_label}">{text_provider_label}</div>'
         else:
-            sentence_html = format_translated_html(sentence_translations, text_mode=text_mode, text=text, config=config)
+            effective_prov = sentence_provenances if sentence_provenances else (sentence_provenance if has_real_text else None)
+            sentence_html = format_translated_html(
+                sentence_translations, text_mode=text_mode, text=text, config=config, provenance=effective_prov
+            )
 
-    container_prov_attr = ""
-    has_real_text = any(t and str(t).strip() for t in sentence_translations.values())
-    if has_real_text and not is_mismatch and sentence_provenance:
-        p_title = format_provenance_tooltip(sentence_provenance)
-        container_prov_attr = f' data-provenance="{sentence_provenance}"'
-        if p_title:
-            container_prov_attr += f' title="{p_title}"'
-            sentence_html = sentence_html.replace("<div", f'<div data-provenance="{sentence_provenance}" title="{p_title}"', 1)
+    container_prov_attr = _provenance_attr_str(sentence_provenance) if (has_real_text and not is_mismatch and sentence_provenance) else ""
 
     col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
     col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
@@ -13257,6 +13343,8 @@ html, body {{
                                 recovered_w["row_html"] = re.sub(r'data-sentence-idx="[^"]*"', f'data-sentence-idx="{sent_i}"', recovered_w["row_html"])
                             sent_words.append(recovered_w)
 
+            s_has_real_trans = bool(s_trans and s_trans != "[FAILED]" and not s_trans.startswith("[Error"))
+            s_prov = (extracted_provenances.get(idx) or sentence_provenance) if s_has_real_trans else None
             child_cards.append({
                 "index": idx + 1,
                 "seq_num": seq,
@@ -13267,6 +13355,7 @@ html, body {{
                 "tsv_filename": c_tsv_name,
                 "source_text": s_src,
                 "translated_text": s_trans,
+                "text_provenance": s_prov or "",
                 "SentenceSource": s_src,
                 "SentenceDestination": s_trans,
                 "sentence_source": s_src,
