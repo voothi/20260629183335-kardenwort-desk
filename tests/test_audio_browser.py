@@ -147,6 +147,98 @@ def test_client_timeout_owns_and_releases_its_request(audio_page):
     assert page.evaluate('errors') == ['Audio request timed out']
 
 
+def flush_microtasks(page):
+    page.evaluate('async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); }')
+
+
+def test_active_audio_playback_past_75s_is_not_aborted(audio_page):
+    page = audio_page
+    page.clock.install()
+    page.evaluate("player.play('long sentence', 'de')")
+    resolve_audio(page, 0)
+    flush_microtasks(page)
+    assert page.evaluate('players.length') == 1
+    page.evaluate("players[0].dispatchEvent(new Event('play'))")
+    assert page.evaluate('player.getState()') == 'playing'
+    page.clock.fast_forward(90000)
+    assert page.evaluate('errors') == []
+    assert page.evaluate('player.getState()') == 'playing'
+    assert not page.evaluate('players[0].paused')
+    assert not page.evaluate('requests[0].options.signal.aborted')
+    page.evaluate("players[0].dispatchEvent(new Event('ended'))")
+    assert page.evaluate('player.getState()') == 'finished'
+    assert page.evaluate('errors') == []
+
+
+def test_chained_segments_reset_fetch_timeout_per_segment_and_survive_past_75s(audio_page):
+    page = audio_page
+    page.clock.install()
+    page.evaluate("player.play('eins ||| zwei ||| drei', 'de')")
+    for idx, (fetch_ms, play_ms) in enumerate([(50000, 40000), (50000, 40000), (10000, 10000)]):
+        assert page.evaluate('requests.length') == idx + 1
+        page.clock.fast_forward(fetch_ms)
+        assert page.evaluate('errors') == []
+        assert page.evaluate('player.getState()') == 'loading'
+        resolve_audio(page, idx)
+        flush_microtasks(page)
+        assert page.evaluate('players.length') == idx + 1
+        page.evaluate(f"players[{idx}].dispatchEvent(new Event('play'))")
+        page.clock.fast_forward(play_ms)
+        assert page.evaluate('errors') == []
+        assert page.evaluate('player.getState()') == 'playing'
+        page.evaluate(f"players[{idx}].dispatchEvent(new Event('ended'))")
+    assert page.evaluate('player.getState()') == 'finished'
+    assert page.evaluate('errors') == []
+    assert page.evaluate('requests.every(r => !r.options.signal.aborted)')
+
+
+def test_chained_later_segment_hung_fetch_aborts_after_own_75s_window(audio_page):
+    page = audio_page
+    page.clock.install()
+    page.evaluate("player.play('eins ||| zwei', 'de')")
+    page.clock.fast_forward(30000)
+    resolve_audio(page, 0)
+    flush_microtasks(page)
+    assert page.evaluate('players.length') == 1
+    page.evaluate("players[0].dispatchEvent(new Event('play'))")
+    page.clock.fast_forward(30000)
+    page.evaluate("players[0].dispatchEvent(new Event('ended'))")
+    assert page.evaluate('requests.length') == 2
+    assert page.evaluate('player.getState()') == 'loading'
+    page.clock.fast_forward(74999)
+    assert page.evaluate('errors') == []
+    assert page.evaluate('player.getState()') == 'loading'
+    assert not page.evaluate('requests[1].options.signal.aborted')
+    page.clock.fast_forward(1)
+    assert page.evaluate('player.getState()') == 'failed'
+    assert page.evaluate('requests[1].options.signal.aborted')
+    assert page.evaluate('errors') == ['Audio request timed out']
+
+
+def test_new_playback_cancels_prior_timer_and_completes_past_75s(audio_page):
+    page = audio_page
+    page.clock.install()
+    page.evaluate("player.play('old', 'de')")
+    page.clock.fast_forward(50000)
+    page.evaluate("player.play('new', 'de')")
+    assert page.evaluate('requests[0].options.signal.aborted')
+    assert page.evaluate('requests.length') == 2
+    page.clock.fast_forward(50000)
+    assert page.evaluate('errors') == []
+    assert page.evaluate('player.getState()') == 'loading'
+    assert not page.evaluate('requests[1].options.signal.aborted')
+    resolve_audio(page, 1)
+    flush_microtasks(page)
+    assert page.evaluate('players.length') == 1
+    page.evaluate("players[0].dispatchEvent(new Event('play'))")
+    page.clock.fast_forward(80000)
+    assert page.evaluate('errors') == []
+    assert page.evaluate('player.getState()') == 'playing'
+    page.evaluate("players[0].dispatchEvent(new Event('ended'))")
+    assert page.evaluate('player.getState()') == 'finished'
+    assert page.evaluate('errors') == []
+
+
 def gesture_document():
     manifest = [{'text':'beim','is_word':True,'visual_idx':0,'lower_clean':'beim','row_ids':[76,74]}]
     return '''<div class="container"><div class="source-text" id="source-container">
