@@ -162,6 +162,8 @@ class ControllerHTTPServer(ThreadingHTTPServer):
             self.cancel_connection(connection)
 
     def cancel_connection(self, connection):
+        if connection.fileno() < 0:
+            return
         try:
             connection.shutdown(socket.SHUT_RDWR)
         except OSError as error:

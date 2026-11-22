@@ -24,10 +24,26 @@ def capability(paths):
     return str(Path(python).resolve()), str(Path(script).resolve())
 
 
+def _descriptor_detached(connection):
+    fileno = getattr(connection, 'fileno', None)
+    if not callable(fileno):
+        return False
+    try:
+        return fileno() < 0
+    except OSError:
+        return True
+
+
 def disconnected(connection):
+    if _descriptor_detached(connection):
+        return True
     try:
         readable, _, _ = select.select([connection], [], [], 0)
         return bool(readable) and not connection.recv(1, socket.MSG_PEEK)
+    except ValueError:
+        if _descriptor_detached(connection):
+            return True
+        raise
     except OSError:
         return True
 
@@ -244,6 +260,8 @@ def execute_audio(body, paths, config, connection, job_factory, synthesize=True)
 
 
 def execute_owned(python, script, text, language, directory, timeout, connection, job_factory, synthesize, stateless=False):
+    if disconnected(connection):
+        raise AudioError('Audio request cancelled', 'INTERRUPTED')
     output = Path(directory) / 'speech.media' if synthesize else None
     arguments = synthesis_arguments(script, text, language, output, stateless)
     with process_owner(python, arguments, directory, job_factory) as process:
