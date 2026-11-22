@@ -2992,6 +2992,14 @@ class SessionArbiter:
                 adapter.save_tsv_rows_safely(path, comments, headers, rows)
         return comments, headers, rows, roles
 
+    @staticmethod
+    def _retext_fingerprint(adapter, session_zid, rows):
+        if adapter.backend_name == 'sqlite':
+            restored = adapter.restore_session(session_zid)
+            if isinstance(restored, dict) and isinstance(restored.get('data_rows'), list):
+                return compute_content_fingerprint(restored['data_rows'])
+        return compute_content_fingerprint(rows)
+
     def _persist_retext_updates(self, session_zid, sentence_trans, active_text_prov=None,
                                 req_zid=None, tsv_path=None, active_text_provider=None,
                                 translated_text=None, sentence_map=None, padded_map=None):
@@ -3006,7 +3014,7 @@ class SessionArbiter:
             translated_text = format_translated_html(sentence_trans, text_mode=memo.get('text_mode', 'single'), text=memo.get('text', ''), config=self.config)
         comments, headers, rows, roles = self._persist_retext_rows(adapter, path, session_zid, memo, main, padded, provenance, req_zid)
         result = dict(status='success', session_zid=session_zid, comments=comments, headers=headers,
-                      data_rows=rows, role_fields=roles, fingerprint=compute_content_fingerprint(rows),
+                      data_rows=rows, role_fields=roles, fingerprint=self._retext_fingerprint(adapter, session_zid, rows),
                       tsv_path=path, translated_text=translated_text, translatedText=translated_text,
                       text_provenance=provenance, textProvenance=provenance, active_text_provider=provider)
         self._cache_retext_result(session_zid, result, sentence_trans)

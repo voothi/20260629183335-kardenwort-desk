@@ -289,10 +289,147 @@ def test_cold_retext_then_progressive_worker_retains_headers_text_and_language(c
 
     cold = desk.SqliteStorageAdapter(server.config, server.resolved_paths)
     words = {w["lemma"]: w["word_destination"] for w in cold.db.get_words_by_session(zid)}
-    assert words == {"fox": "google: fox", "owl": "google: owl"}
+    # Tier-0 semicolon batch ("owl; fox" under bottom_to_top order) returns "google: owl; fox"
+    # from DeterministicTranslationHandler (which prefixes per line), splitting into both words.
+    assert words == {"owl": "google: owl", "fox": "fox"}
 
     sents = {s["sentence_index"]: s for s in cold.db.get_sentences_by_session(zid)}
     assert sents[1]["sentence_destination"] == "deepl: The fox runs."
     assert sents[1]["text_provenance"] == "live:deepl"
     assert sents[2]["sentence_destination"] == "deepl: The owl sleeps."
     assert sents[2]["text_provenance"] == "live:deepl"
+
+
+def test_warm_retext_preserves_cache_invariants_across_save_status_and_progressive(controller_world):
+    """Warm POST /session/retext retains lock, headers, text, language, provenance across save/status/progressive."""
+    server_url, server = controller_world
+    server.config.read_dict({
+        "triggers": {
+            "run_text_translation": "auto",
+            "run_lemma_base_translation": "manual",
+            "run_lemma_enrichment": "manual",
+        },
+        "pipeline": {
+            "text_reprocess_provider": "deepl",
+        },
+    })
+
+    create_status, create_body = _post(
+        server_url,
+        "/session/create",
+        {
+            "text": "The fox runs.",
+            "language": "en",
+            "target_lang": "ru",
+            "text_mode": "single",
+            "bypass_lang_check": True,
+        },
+        server.api_key,
+    )
+    assert create_status == 200, create_body
+    zid = _payload(create_body)["session_zid"]
+
+    assert zid in server.arbiter.sessions
+    original_lock = server.arbiter.sessions[zid]["lock"]
+    assert server.arbiter.sessions[zid]["headers"]
+    assert server.arbiter.sessions[zid]["text"] == "The fox runs."
+    assert server.arbiter.sessions[zid]["language"] == "en"
+
+    retext_status, retext_body = _post(
+        server_url,
+        "/session/retext",
+        {"session_zid": zid, "language": "en", "text_mode": "single"},
+        server.api_key,
+    )
+    assert retext_status == 200, retext_body
+    retext_data = _payload(retext_body)
+    assert retext_data["text_provenance"] == "live:deepl"
+    assert retext_data["sentences"]["1"] == "deepl: The fox runs."
+
+    cached = server.arbiter.sessions[zid]
+    assert cached["lock"] is original_lock
+    assert cached["headers"]
+    assert cached["text"] == "The fox runs."
+    assert cached["language"] == "en"
+    assert cached["text_provenance"] == "live:deepl"
+
+    status_code, status_body = _get(
+        server_url,
+        f"/session/status?zid={zid}",
+        server.api_key,
+    )
+    assert status_code == 200, status_body
+    status_data = _payload(status_body)
+    assert status_data["text_provenance"] == "live:deepl"
+    assert "deepl: The fox runs." in status_data["translatedText"]
+    assert status_data["sentences"][0]["sentence_destination"] == "deepl: The fox runs."
+    rows = status_data["rows"]
+    assert isinstance(rows, dict) and rows
+    first_row = rows["0"]
+    assert first_row["lemma"]
+
+    save_status, save_body = _post(
+        server_url,
+        "/session/save",
+        {
+            "session_zid": zid,
+            "language": "en",
+            "fingerprint": retext_data["fingerprint"],
+            "deltas": [
+                {
+                    "row_id": 0,
+                    "token_order": int(first_row["token_order"]),
+                    "sentence_idx": int(first_row["sentence_idx"]),
+                    "column": "WordDestination",
+                    "value": "лиса_warm",
+                }
+            ],
+        },
+        server.api_key,
+    )
+    assert save_status == 200, save_body
+    assert save_body["status"] == "success"
+
+    server.config.set("triggers", "run_lemma_base_translation", "auto")
+    events_queue = server.arbiter.register_subscriber(zid)
+    observed_events = []
+    try:
+        enq_status, enq_body = _post(
+            server_url,
+            "/session/progressive/enqueue",
+            {"session_zid": zid, "language": "en", "target_lang": "ru", "token": server.api_key},
+            server.api_key,
+        )
+        assert enq_status == 200, enq_body
+
+        deadline = time.monotonic() + 10.0
+        finished = None
+        while time.monotonic() < deadline:
+            remaining = max(0.05, deadline - time.monotonic())
+            try:
+                event = events_queue.get(timeout=remaining)
+            except queue.Empty:
+                break
+            observed_events.append(event)
+            if event.get("stage") == "finished":
+                finished = event
+                break
+
+        eq = server.arbiter.enrichment_queue
+        with eq._lock:
+            active_future = eq._active_progressive_sessions.get(zid)
+        if active_future is not None:
+            active_future.result(timeout=10)
+    finally:
+        server.arbiter.unregister_subscriber(zid, events_queue)
+
+    assert finished is not None, f"Warm progressive worker never finished; saw: {observed_events}"
+    assert finished.get("error") is None
+    assert server.arbiter.sessions[zid]["lock"] is original_lock
+
+    cold = desk.SqliteStorageAdapter(server.config, server.resolved_paths)
+    words = {(w["sentence_index"], w["token_order"]): w for w in cold.db.get_words_by_session(zid)}
+    assert words[(int(first_row["sentence_idx"]), int(first_row["token_order"]))]["word_destination"] == "лиса_warm"
+    sents = {s["sentence_index"]: s for s in cold.db.get_sentences_by_session(zid)}
+    assert sents[1]["sentence_destination"] == "deepl: The fox runs."
+    assert sents[1]["text_provenance"] == "live:deepl"
