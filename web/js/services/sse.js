@@ -157,11 +157,13 @@
         }
     }
 
+    function noop() {}
+
     function releaseSource(es) {
         if (!es) return;
-        es.onopen = null;
-        es.onerror = null;
-        es.onmessage = null;
+        es.onopen = noop;
+        es.onerror = noop;
+        es.onmessage = noop;
         try { es.close(); } catch (e) { console.warn('[SSE] Error closing active EventSource:', e); }
     }
 
@@ -525,10 +527,6 @@
         connect(targetZid, resume.serverUrl, resume.token, true);
     }
 
-    function handleOnline() {
-        reconnect(true);
-    }
-
     var SSEBridge = {
         createSource: createSource,
         connect: connect,
@@ -543,7 +541,9 @@
             return reconnectTimer !== null || Boolean(activeEventSource && activeEventSource.hasPendingReconnect && activeEventSource.hasPendingReconnect());
         },
         needsCommittedRecovery: function () { return activeEventSource && activeEventSource.recoveryMode === 'committed'; },
-        getServerUrl: function () { return activeServerUrl; }
+        getServerUrl: function () { return activeServerUrl; },
+        _onPageHide: handlePageHide,
+        _onPageShow: handlePageShow
     };
 
     var w = (typeof window !== 'undefined' ? window : null);
@@ -552,9 +552,15 @@
         w.initSSE = connect;
         if (w.addEventListener && !w.__sseLifecycleAttached) {
             w.__sseLifecycleAttached = true;
-            w.addEventListener('pagehide', handlePageHide);
-            w.addEventListener('pageshow', handlePageShow);
-            w.addEventListener('online', handleOnline);
+            w.addEventListener('pagehide', function (event) {
+                if (w.SSEBridge && w.SSEBridge._onPageHide) w.SSEBridge._onPageHide(event);
+            });
+            w.addEventListener('pageshow', function (event) {
+                if (w.SSEBridge && w.SSEBridge._onPageShow) w.SSEBridge._onPageShow(event);
+            });
+            w.addEventListener('online', function () {
+                if (w.SSEBridge && w.SSEBridge.reconnect) w.SSEBridge.reconnect(true);
+            });
         }
     }
 
