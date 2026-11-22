@@ -1,6 +1,7 @@
 """Real HTTP tests for controller route preference scopes, error mapping, and body limits."""
 from concurrent.futures import ThreadPoolExecutor
 import json
+import socket
 import sqlite3
 import threading
 from types import SimpleNamespace
@@ -452,3 +453,120 @@ def test_confirm_language_storage_failure_and_valid_controls(scope_world, monkey
     finally:
         with controller._DRAFT_SESSIONS_LOCK:
             controller._DRAFT_SESSIONS.pop(draft_zid, None)
+
+
+MAX_IMPORT_TSV_BYTES = 10 * 1024 * 1024
+SAMPLE_RAW_TSV = (
+    b'Quotation\tWordSource\tWordDestination\tSentenceSource\tDeskSelected\n'
+    b'Vogel\tVogel\t\xd0\xbf\xd1\x82\xd0\xb8\xd1\x86\xd0\xb0\tEin Vogel singt.\t1\n'
+)
+
+
+def _raw_http_post(port, path, *, content_length=None, body_bytes=b'', token=TOKEN, content_type='text/tab-separated-values', shutdown_write=True):
+    header_lines = [
+        f'POST {path} HTTP/1.1',
+        f'Host: 127.0.0.1:{port}',
+        f'Content-Type: {content_type}',
+        'Connection: close',
+    ]
+    if token is not None:
+        header_lines.append(f'X-API-Token: {token}')
+    if content_length is not None:
+        header_lines.append(f'Content-Length: {content_length}')
+    wire = ('\r\n'.join(header_lines) + '\r\n\r\n').encode('ascii')
+    with socket.create_connection(('127.0.0.1', port), timeout=5) as sock:
+        try:
+            sock.sendall(wire + body_bytes)
+            if shutdown_write:
+                sock.shutdown(socket.SHUT_WR)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, OSError):
+            pass
+        chunks = []
+        while True:
+            try:
+                chunk = sock.recv(65536)
+            except (ConnectionAbortedError, ConnectionResetError):
+                break
+            if not chunk:
+                break
+            chunks.append(chunk)
+    raw = b''.join(chunks)
+    head, _, payload = raw.partition(b'\r\n\r\n')
+    status = int(head.split(b'\r\n', 1)[0].split(b' ')[1])
+    parsed = json.loads(payload.decode('utf-8')) if payload else {}
+    return status, parsed
+
+
+@pytest.mark.parametrize('bad_len,zid', [
+    ('abc', '20261122173001'),
+    ('-5', '20261122173002'),
+    ('-1', '20261122173004'),
+    (str(MAX_IMPORT_TSV_BYTES + 1), '20261122173003'),
+])
+def test_import_tsv_raw_invalid_content_lengths_rejected_before_read(scope_world, bad_len, zid):
+    _, server, _ = scope_world
+    db = KardenwortDB(config=server.config, resolved_paths=server.resolved_paths)
+    db.run_migrations()
+    path = f'/api/v1/sessions/import-tsv?session_zid={zid}&language=de'
+
+    # Auth control: unauthenticated requests are rejected before body length validation.
+    unauth_status, unauth_body = _raw_http_post(
+        server.server_port, path, content_length=bad_len, body_bytes=SAMPLE_RAW_TSV, token='wrong',
+    )
+    assert unauth_status == 403, unauth_body
+    assert db.get_session_bundle(zid) is None
+
+    status, body = _raw_http_post(
+        server.server_port, path, content_length=bad_len, body_bytes=SAMPLE_RAW_TSV,
+    )
+    assert status == 400, body
+    assert body['error_code'] == 'INVALID_PAYLOAD'
+    assert db.get_session_bundle(zid) is None
+
+
+def test_import_tsv_raw_truncated_body_rejected_without_partial_import(scope_world):
+    _, server, _ = scope_world
+    db = KardenwortDB(config=server.config, resolved_paths=server.resolved_paths)
+    db.run_migrations()
+    st_trunc, body_trunc = _raw_http_post(
+        server.server_port, '/api/v1/sessions/import-tsv?session_zid=20261122173012&language=de',
+        content_length='300', body_bytes=SAMPLE_RAW_TSV,
+    )
+    assert st_trunc == 400, body_trunc
+    assert body_trunc['error_code'] == 'INVALID_PAYLOAD'
+    assert db.get_session_bundle('20261122173012') is None
+
+
+def test_import_tsv_raw_absent_zero_and_exact_limit_controls(scope_world):
+    _, server, _ = scope_world
+    db = KardenwortDB(config=server.config, resolved_paths=server.resolved_paths)
+    db.run_migrations()
+
+    # Absent Content-Length -> 400 MISSING_FIELD, zero DB write.
+    st_abs, body_abs = _raw_http_post(
+        server.server_port, '/api/v1/sessions/import-tsv?session_zid=20261122173010&language=de',
+        content_length=None, body_bytes=b'',
+    )
+    assert st_abs == 400 and body_abs['error_code'] == 'MISSING_FIELD'
+    assert db.get_session_bundle('20261122173010') is None
+
+    # Zero Content-Length -> 400 MISSING_FIELD, zero DB write.
+    st_zero, body_zero = _raw_http_post(
+        server.server_port, '/api/v1/sessions/import-tsv?session_zid=20261122173011&language=de',
+        content_length='0', body_bytes=b'',
+    )
+    assert st_zero == 400 and body_zero['error_code'] == 'MISSING_FIELD'
+    assert db.get_session_bundle('20261122173011') is None
+
+    # Exact 10 MiB limit -> accepted (200 OK) and persisted cleanly.
+    pad_len = MAX_IMPORT_TSV_BYTES - len(SAMPLE_RAW_TSV) - 3  # '# ' + pad + '\n'
+    exact_payload = b'# ' + (b'x' * pad_len) + b'\n' + SAMPLE_RAW_TSV
+    assert len(exact_payload) == MAX_IMPORT_TSV_BYTES
+    st_exact, body_exact = _raw_http_post(
+        server.server_port, '/api/v1/sessions/import-tsv?session_zid=20261122173013&language=de',
+        content_length=str(MAX_IMPORT_TSV_BYTES), body_bytes=exact_payload,
+    )
+    assert st_exact == 200, body_exact
+    assert _data(body_exact)['words_count'] == 1
+    bundle = db.get_session_bundle('20261122173013')
+    assert bundle is not None and bundle['words'][0]['lemma'] == 'Vogel'
