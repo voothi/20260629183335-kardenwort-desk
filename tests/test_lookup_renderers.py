@@ -530,9 +530,11 @@ def test_orthogonal_tsv_column_mapping(tmp_path, monkeypatch):
     assert 'data-col="MyCustomInflection"' in html_out
     assert 'data-col="MyCustomIPA"' in html_out
     
-    # Assert JavaScript variables correctly use the custom lemma
-    assert "col === 'MyCustomLemma'" in html_out
-    assert "col === 'MyCustomInflection'" in html_out
+    # Assert runtime config payload carries the custom column names and JS reads them via config helpers
+    assert '"lemma_col_name": "MyCustomLemma"' in html_out
+    assert '"inflected_col_name": "MyCustomInflection"' in html_out
+    assert "getConfiguredLemmaColName()" in html_out
+    assert "getConfiguredInflectedColName()" in html_out
     
     # Assert editable classes are properly resolved
     assert 'class="editable col-lemma" data-col="MyCustomLemma"' in html_out
