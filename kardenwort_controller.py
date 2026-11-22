@@ -1661,9 +1661,10 @@ class EnrichmentQueue:
             if self._active_progressive_sessions.get(session_zid) is future:
                 del self._active_progressive_sessions[session_zid]
 
-    def _collect_wordfill_row_updates(self, row, headers, role_fields, match):
+    def _collect_wordfill_row_updates(self, row, headers, role_fields, match, existing_provenance=None):
         patch = progressive.wordfill_patch(
-            row, headers, role_fields, match, is_failure=is_stored_translation_failure
+            row, headers, role_fields, match, is_failure=is_stored_translation_failure,
+            provenance=match.get('_provenance'), existing_provenance=existing_provenance,
         )
         for field, index, value in patch:
             self._apply_wordfill_cell(row, index, value)
@@ -1676,7 +1677,8 @@ class EnrichmentQueue:
         row.extend([''] * max(0, index + 1 - len(row)))
         row[index] = value
 
-    def _wordfill_row(self, row, headers, roles, lemma_column, translation_column, language, config, path):
+    def _wordfill_row(self, row, headers, roles, lemma_column, translation_column, language, config, path,
+                      existing_provenance=None):
         if not progressive.eligible_wordfill(
             row, lemma_column, translation_column, is_unfinished=is_unfinished_translation
         ):
@@ -1684,32 +1686,49 @@ class EnrichmentQueue:
         match = find_wordfill_match(row[lemma_column].strip(), language, config, exclude_path=path)
         if not match:
             return {}
-        updates = self._collect_wordfill_row_updates(row, headers, roles, match)
+        updates = self._collect_wordfill_row_updates(
+            row, headers, roles, match, existing_provenance=existing_provenance
+        )
         apply_wordfill_to_rows([row], headers, match)
         return updates
 
-    def _wordfill_updates(self, rows, headers, roles, columns, language, config, path, keys):
+    def _wordfill_updates(self, rows, headers, roles, columns, language, config, path, keys,
+                          existing_provenances=None):
         updates = []
+        prior_map = existing_provenances or {}
         for index, row in enumerate(rows):
-            values = self._wordfill_row(row, headers, roles, *columns, language, config, path)
+            sentence, token = keys[index]
+            existing = prior_map.get((str(sentence), str(token)))
+            values = self._wordfill_row(
+                row, headers, roles, *columns, language, config, path, existing_provenance=existing
+            )
             if values:
-                sentence, token = keys[index]
                 updates.append(dict(sentence_index=sentence, token_order=token, updates=values))
         return updates
+
+    @staticmethod
+    def _existing_wordfill_provenances(storage_adapter, session_zid, is_sqlite):
+        if is_sqlite and hasattr(storage_adapter, 'db'):
+            return reword_query_provenances(storage_adapter, session_zid)
+        return {}
 
     def _run_wordfill_stage(self, arbiter, storage_adapter, session_zid, req_zid, is_sqlite,
                             data_rows, headers, role_fields, occurrence_keys, col_lemma,
                             col_word_dest, sess_lang, tsv_path, comments):
         config = getattr(arbiter, 'wordfill_cfg', None) or resolve_wordfill_config(self.config, self.resolved_paths)
         if not (config and config.get('enabled', False)):
-            return
-        keys = occurrence_keys if is_sqlite else [(0, index) for index in range(len(data_rows))]
-        updates = self._wordfill_updates(data_rows, headers, role_fields, (col_lemma, col_word_dest),
-                                         sess_lang, config, tsv_path, keys)
+            return [], {}
+        keys = occurrence_keys if is_sqlite else list(zip([0] * len(data_rows), range(len(data_rows))))
+        existing_provenances = self._existing_wordfill_provenances(storage_adapter, session_zid, is_sqlite)
+        updates = self._wordfill_updates(
+            data_rows, headers, role_fields, (col_lemma, col_word_dest),
+            sess_lang, config, tsv_path, keys, existing_provenances=existing_provenances,
+        )
         if not updates:
-            return
+            return [], existing_provenances
         self._persist_wordfill_updates(storage_adapter, session_zid, req_zid, is_sqlite,
                                        tsv_path, comments, headers, data_rows, updates)
+        return updates, existing_provenances
 
     @staticmethod
     def _persist_wordfill_updates(adapter, session_zid, zid, sqlite, path, comments, headers, rows, updates):
@@ -2300,7 +2319,7 @@ class EnrichmentQueue:
         sess_row_provs: Dict[Any, str],
         active_text_prov: Optional[str],
     ) -> Tuple[Optional[Dict[str, Any]], bool]:
-        self._run_wordfill_stage(
+        wordfill_updates, existing_wf_provs = self._run_wordfill_stage(
             arbiter, storage_adapter, session_zid, req_zid, is_sqlite,
             data_rows, headers, role_fields, occurrence_keys,
             col_lemma, col_word_dest, sess_lang, tsv_path, comments,
@@ -2310,6 +2329,10 @@ class EnrichmentQueue:
         lemma_chain, _ = resolve_provider_chain(self.config, task_type='lemma') if self.config else (['google'], 'chain')
         active_prov = lemma_chain[0] if lemma_chain else 'google'
         occurrence_provs: Dict[Any, str] = {}
+        progressive.apply_wordfill_provenances(
+            wordfill_updates, existing_wf_provs, data_rows, occurrence_keys,
+            col_token_order, is_sqlite, sess_row_provs, occurrence_provs,
+        )
         stage_err = None
         if lemmas_to_translate:
             chunks = self._build_lemma_chunks(lemmas_to_translate)

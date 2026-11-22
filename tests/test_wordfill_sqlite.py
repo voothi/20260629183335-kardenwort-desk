@@ -767,3 +767,55 @@ def test_controller_progressive_wordfill_persists_word_provenance_across_reload(
     assert not by_projected_coord[("2", "1")].get("provenance")
 
 
+def test_wordfill_patch_preserves_existing_provenance_on_supplementary_only_updates():
+    """wordfill_patch preserves existing translation provenance when only supplementary fields are patched."""
+    import kardenwort_progressive_completion as progressive
+
+    headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"]
+    roles = {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "ipa": "WordSourceIPA",
+        "morphology": "WordSourceMorphologyAI",
+    }
+    match = {
+        "WordDestination": "корпусный дом",
+        "WordSourceIPA": "haʊ̯s",
+        "WordSourceMorphologyAI": "Subst.Neut.Nom.Sg",
+        "_provenance": "corpus:wordfill",
+    }
+
+    # Already-translated row with live:deepl provenance receiving only IPA/morphology must keep live:deepl
+    translated_row = ["Haus", "дом", "", ""]
+    supp_patch = progressive.wordfill_patch(
+        translated_row, headers, roles, match,
+        provenance="corpus:wordfill", existing_provenance="live:deepl",
+    )
+    supp_fields = {field: value for field, _, value in supp_patch}
+    assert supp_fields == {"ipa": "haʊ̯s", "morphology": "Subst.Neut.Nom.Sg"}
+    assert "word_provenance" not in supp_fields
+
+    # Already-translated row without prior provenance receiving supplementary fields may record wordfill provenance
+    no_prior_patch = progressive.wordfill_patch(
+        translated_row, headers, roles, match,
+        provenance="corpus:wordfill", existing_provenance="",
+    )
+    assert {field: value for field, _, value in no_prior_patch}["word_provenance"] == "corpus:wordfill"
+
+    # Untranslated row filled by wordfill records validated provenance
+    empty_row = ["Haus", "", "", ""]
+    full_patch = progressive.wordfill_patch(
+        empty_row, headers, roles, match,
+        provenance="corpus:wordfill", existing_provenance="live:deepl",
+    )
+    full_fields = {field: value for field, _, value in full_patch}
+    assert full_fields["word_destination"] == "корпусный дом"
+    assert full_fields["word_provenance"] == "corpus:wordfill"
+
+    # Empty/blank match or empty provenance produces no fabricated provenance
+    assert progressive.wordfill_patch(empty_row, headers, roles, {}, provenance="corpus:wordfill") == []
+    no_prov_patch = progressive.wordfill_patch(empty_row, headers, roles, match, provenance="   ")
+    assert "word_provenance" not in {field for field, _, _ in no_prov_patch}
+
+
+

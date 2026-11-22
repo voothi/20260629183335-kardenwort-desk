@@ -77,12 +77,60 @@ def wordfill_field(row, headers, roles, match, definition, is_failure=_default_f
     return (field, index, value) if value else None
 
 
-def wordfill_patch(row, headers, roles, match, is_failure=_default_failure):
-    fields = (
-        wordfill_field(row, headers, roles, match, definition, is_failure=is_failure)
+def _clean_provenance(value):
+    return value.strip() if isinstance(value, str) else ''
+
+
+def _validated_wordfill_provenance(patch, provenance, existing_provenance=None):
+    clean = _clean_provenance(provenance)
+    if not patch or not clean:
+        return ''
+    if any(field == 'word_destination' for field, _, _ in patch):
+        return clean
+    return '' if _clean_provenance(existing_provenance) else clean
+
+
+def wordfill_patch(row, headers, roles, match, is_failure=_default_failure, provenance=None, existing_provenance=None):
+    patch = [
+        field
         for definition in WORD_FIELDS
-    )
-    return [field for field in fields if field is not None]
+        if (field := wordfill_field(row, headers, roles, match, definition, is_failure=is_failure)) is not None
+    ]
+    resolved_provenance = _validated_wordfill_provenance(patch, provenance, existing_provenance=existing_provenance)
+    if resolved_provenance:
+        patch.append(('word_provenance', -1, resolved_provenance))
+    return patch
+
+
+def _apply_sqlite_wordfill_provenances(updates, existing_provenances, occurrence_keys, sess_row_provs, occurrence_provs):
+    for key, value in (existing_provenances or {}).items():
+        if value:
+            occurrence_provs[key] = value
+    for item in updates:
+        wf_prov = item['updates'].get('word_provenance')
+        if wf_prov:
+            occurrence_provs[(str(item['sentence_index']), str(item['token_order']))] = wf_prov
+    sess_row_provs.update(indexed_provenances(occurrence_keys, occurrence_provs))
+
+
+def _apply_tsv_wordfill_provenances(updates, data_rows, col_token_order, sess_row_provs):
+    for item in updates:
+        wf_prov = item['updates'].get('word_provenance')
+        row_idx = item['token_order']
+        if wf_prov and 0 <= row_idx < len(data_rows):
+            _record_row_provenance(data_rows[row_idx], row_idx, col_token_order, wf_prov, sess_row_provs)
+
+
+def apply_wordfill_provenances(updates, existing_provenances, data_rows, occurrence_keys,
+                               col_token_order, is_sqlite, sess_row_provs, occurrence_provs):
+    if not updates:
+        return
+    if is_sqlite and occurrence_keys:
+        _apply_sqlite_wordfill_provenances(
+            updates, existing_provenances, occurrence_keys, sess_row_provs, occurrence_provs
+        )
+        return
+    _apply_tsv_wordfill_provenances(updates, data_rows, col_token_order, sess_row_provs)
 
 
 def eligible_wordfill(row, lemma_column, translation_column, is_unfinished=None):
