@@ -343,3 +343,66 @@ def test_malformed_client_view_descriptor_remains_fail_fast_http_400(preference_
     stored = ClientViewAdapter(adapter.db).get(zid, client)
     assert stored['active_tokens'] == []
     assert stored['revision'] == 0
+
+
+def test_ambiguous_different_occurrence_compound_candidates_rejected_without_first_row_guessing():
+    rows = [
+        ['multi-token', 'multi-token', 'мульти-токен', '0', 'multi-token and multi-token.', '1', '0'],
+        ['multi-token', 'multi-token', 'мульти-токен', '0', 'multi-token and multi-token.', '1', '5'],
+        ['multi-token', 'multi-token', 'мульти-токен', '0', 'multi-token and multi-token.', '1', '0'],
+        ['multi-token', 'multi-token', 'мульти-токен', '0', 'multi-token second sentence.', '2', '0'],
+    ]
+
+    # Same canonical occurrence across multiple candidates succeeds.
+    assert desk.resolve_compound_only_occurrence_anchor(
+        [0, 2], rows, col_index=5, col_token_order=6, source_sentence_idx=1, visual_idx=0
+    ) == (1, '0')
+
+    # Unambiguous sentence-local binding resolves cleanly.
+    assert desk.resolve_compound_only_occurrence_anchor(
+        [0, 3], rows, col_index=5, col_token_order=6, source_sentence_idx=2, visual_idx=10
+    ) == (2, '0')
+
+    # Unambiguous visual binding resolves cleanly even within the same sentence.
+    assert desk.resolve_compound_only_occurrence_anchor(
+        [0, 1],
+        rows,
+        col_index=5,
+        col_token_order=6,
+        source_sentence_idx=1,
+        bound_visual_by_row={'1': [6, 8]},
+        visual_idx=6,
+    ) == (1, '5')
+
+    # Different canonical occurrences with no unambiguous local binding must fail fast, never guessing row 0.
+    with pytest.raises(ValueError, match='Ambiguous compound occurrence anchor'):
+        desk.resolve_compound_only_occurrence_anchor(
+            [0, 1], rows, col_index=5, col_token_order=6, source_sentence_idx=1, visual_idx=0
+        )
+
+
+def test_ambiguous_compound_anchor_fails_render_before_any_view_persistence(preference_world):
+    from urllib.error import HTTPError
+    from urllib.request import Request, urlopen
+
+    url, server, _ = preference_world
+    zid = '20261119102705'
+    source_text = 'multi-token and multi-token.'
+    rows = [
+        ['multi-token', 'multi-token', 'мульти-токен', '0', source_text, '1', '0'],
+        ['multi-token', 'multi-token', 'мульти-токен', '0', source_text, '1', '5'],
+    ]
+    adapter = _seed_sqlite_session(server, zid, source_text, rows)
+
+    request = Request(f'{url}/?session_zid={zid}&seq_num=1', headers={'X-API-Token': server.api_key})
+    with pytest.raises(HTTPError) as exc_info:
+        urlopen(request, timeout=10)
+    assert exc_info.value.code >= 400
+    body = exc_info.value.read().decode('utf-8', errors='replace')
+    assert 'token-map' not in body
+    assert 'Ambiguous compound occurrence anchor' in body
+
+    with adapter.db.get_connection(read_only=True) as connection:
+        assert connection.execute('SELECT COUNT(*) FROM client_view_state WHERE session_zid=?', (zid,)).fetchone()[0] == 0
+    assert not any(adapter.get_shared_selection(zid).values())
+

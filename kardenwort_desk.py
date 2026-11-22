@@ -10389,6 +10389,97 @@ def project_bound_visual_indices(occurrences_by_row, source_word_visual_idxs):
     return bindings
 
 
+def _extract_row_occurrence_anchor(row, col_index, col_token_order):
+    """Extract canonical (sentence_idx, token_order) from a vocabulary row, or None if absent."""
+    sent_val = None
+    if col_index != -1 and len(row) > col_index and str(row[col_index]).strip():
+        raw_sent = str(row[col_index]).strip()
+        try:
+            sent_val = int(raw_sent)
+        except ValueError:
+            sent_val = raw_sent
+    ord_val = None
+    if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip():
+        ord_val = str(row[col_token_order]).strip()
+    if sent_val is None and ord_val is None:
+        return None
+    return (sent_val, ord_val)
+
+
+def _narrow_compound_anchor_candidates(
+    compound_cand_rows,
+    data_rows,
+    col_index,
+    source_sentence_idx,
+    bound_visual_by_row,
+    visual_idx,
+):
+    """Narrow compound candidate rows using unambiguous local visual or sentence bindings."""
+    valid_rows = [r_idx for r_idx in compound_cand_rows if 0 <= r_idx < len(data_rows)]
+    if len(valid_rows) <= 1:
+        return valid_rows
+
+    if bound_visual_by_row and visual_idx is not None:
+        bound_matches = [
+            r_idx for r_idx in valid_rows
+            if visual_idx in bound_visual_by_row.get(str(r_idx), bound_visual_by_row.get(r_idx, ()))
+        ]
+        if bound_matches:
+            valid_rows = bound_matches
+            if len(valid_rows) == 1:
+                return valid_rows
+
+    if col_index != -1 and source_sentence_idx is not None:
+        sent_matches = [
+            r_idx for r_idx in valid_rows
+            if len(data_rows[r_idx]) > col_index
+            and str(data_rows[r_idx][col_index]).strip() == str(source_sentence_idx)
+        ]
+        if sent_matches:
+            valid_rows = sent_matches
+
+    return valid_rows
+
+
+def resolve_compound_only_occurrence_anchor(
+    compound_cand_rows,
+    data_rows,
+    col_index,
+    col_token_order,
+    *,
+    source_sentence_idx=None,
+    bound_visual_by_row=None,
+    visual_idx=None,
+):
+    """Resolve canonical (sentence_idx, token_order) for a compound-only token.
+
+    Multiple candidate rows sharing one canonical occurrence are accepted.
+    Candidate rows identifying different canonical occurrences without an unambiguous
+    local binding raise ValueError instead of guessing the first candidate.
+    """
+    candidates = _narrow_compound_anchor_candidates(
+        compound_cand_rows,
+        data_rows,
+        col_index,
+        source_sentence_idx,
+        bound_visual_by_row,
+        visual_idx,
+    )
+    anchors = {}
+    for r_idx in candidates:
+        anchor = _extract_row_occurrence_anchor(data_rows[r_idx], col_index, col_token_order)
+        if anchor is not None:
+            anchors[anchor] = r_idx
+    if not anchors:
+        return None
+    if len(anchors) > 1:
+        raise ValueError(
+            f"Ambiguous compound occurrence anchor for visual_idx={visual_idx}: "
+            f"candidates {candidates} identify distinct occurrences {sorted(anchors.keys(), key=str)}"
+        )
+    return next(iter(anchors.keys()))
+
+
 def parse_source_sentences(text, text_mode, config):
     smc = SentencesModeConfig.from_config(config)
     sbc = SentenceBoundaryConfig.from_config(config)
@@ -12842,6 +12933,22 @@ html, body {{
                             tok_data["lemma"] = str(r_prim[col_lemma]).strip()
                         if col_pos != -1 and len(r_prim) > col_pos and str(r_prim[col_pos]).strip():
                             tok_data["pos"] = str(r_prim[col_pos]).strip()
+                elif compound_cand_rows:
+                    comp_anchor = resolve_compound_only_occurrence_anchor(
+                        compound_cand_rows,
+                        data_rows,
+                        col_index,
+                        col_token_order,
+                        source_sentence_idx=tok_data.get("source_sentence_idx"),
+                        bound_visual_by_row=tok_data.get("bound_visual_idxs_by_row"),
+                        visual_idx=tok_data.get("visual_idx"),
+                    )
+                    if comp_anchor is not None:
+                        comp_sent, comp_ord = comp_anchor
+                        if comp_sent is not None:
+                            tok_data["sentence_idx"] = comp_sent
+                        if comp_ord is not None:
+                            tok_data["token_order"] = comp_ord
                 if "pos" not in tok_data and filtered_rows and 0 <= filtered_rows[0] < len(data_rows):
                     r_f = data_rows[filtered_rows[0]]
                     if col_pos != -1 and len(r_f) > col_pos and str(r_f[col_pos]).strip():

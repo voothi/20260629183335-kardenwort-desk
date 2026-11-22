@@ -2767,6 +2767,7 @@
          var initialSelectedMap = null;
          var initialSelectedLemmas = null;
          var initialActiveTokenSelections = null;
+         var initialOrphanWordIdxsMap = null;
          var mousedownTargetSpan = null;
         var isRmbDragFlipping = false;
         var rmbFlipMode = true;
@@ -5253,6 +5254,7 @@
             isTokenDragSelecting = false;
             initialSelectedLemmas = null;
             initialActiveTokenSelections = null;
+            initialOrphanWordIdxsMap = null;
             mousedownTargetSpan = null;
             tokenDragStartIdx = -1;
             tokenDragLastIdx = -1;
@@ -5269,6 +5271,7 @@
             if (!Array.isArray(window.AppState.restoredActiveTokens)) return;
             window.AppState.activeTokenSelections = window.AppState.restoredActiveTokens;
             delete window.AppState.restoredActiveTokens;
+            selectedOrphanWordIdxsMap = {};
             window.AppState.activeTokenSelections.forEach(restorePendingTokenSelection);
         }
 
@@ -5277,15 +5280,25 @@
         }
 
         function restorePendingTokenSelection(item) {
+            var hasExplicitAtomics = Array.isArray(item.atomic_row_ids);
+            if (hasExplicitAtomics && item.atomic_row_ids.length === 0) {
+                if (item.visual_idx !== undefined && item.visual_idx !== null) {
+                    selectedOrphanWordIdxsMap[String(item.visual_idx)] = true;
+                }
+                return;
+            }
             var lemma = String(item.lemma || '').trim().toLowerCase();
             if (lemma) window.AppState.selectedLemmas[lemma] = true;
             markRestoredSelection(item.atomic_id);
             (item.atomic_row_ids || []).forEach(markRestoredSelection);
-            (item.row_ids || []).forEach(markRestoredSelection);
+            if (!hasExplicitAtomics) {
+                (item.row_ids || []).forEach(markRestoredSelection);
+            }
         }
 
         function clearTokenSelections() {
             if (!workspaceCommandsReady()) return;
+            selectedOrphanWordIdxsMap = {};
             if (window.AppState) {
                 window.AppState.activeTokenSelections = [];
             }
@@ -5353,8 +5366,15 @@
                         if (ac && ac.sentence_idx !== undefined && !isNaN(ac.sentence_idx)) sIdx = ac.sentence_idx;
                     }
                     var tOrder = (td && td.token_order !== undefined) ? td.token_order : (s.getAttribute('data-token-order') || '');
-                    var aId = (td && td.atomic_id !== undefined) ? td.atomic_id : ((td && td.atomic_row_ids && td.atomic_row_ids.length > 0) ? td.atomic_row_ids[0] : ((td && td.row_ids && td.row_ids.length > 0) ? td.row_ids[0] : null));
-                    var lem = (td && td.lemma) ? td.lemma : (getWordLemma(s) || '');
+                    var hasExplicitAtomicRows = !!(td && td.atomic_row_ids !== undefined && td.atomic_row_ids !== null);
+                    var aId = (td && td.atomic_id !== undefined)
+                        ? td.atomic_id
+                        : (hasExplicitAtomicRows
+                            ? (td.atomic_row_ids.length > 0 ? td.atomic_row_ids[0] : null)
+                            : ((td && td.row_ids && td.row_ids.length > 0) ? td.row_ids[0] : null));
+                    var lem = (td && td.lemma)
+                        ? td.lemma
+                        : ((hasExplicitAtomicRows && td.atomic_row_ids.length === 0) ? '' : (getWordLemma(s) || ''));
                     var rIds = (td && td.row_ids) ? td.row_ids.slice() : ((aId !== null && aId !== undefined) ? [aId] : []);
                     window.AppState.activeTokenSelections.push({
                         visual_idx: vIdx,
@@ -5382,7 +5402,10 @@
                 var s = relatedSpans[i];
                 var td = findTokenData(s);
                 var vIdx = td ? td.visual_idx : parseInt(String(s.getAttribute('data-word-idx')), 10);
-                if (!isNaN(Number(vIdx))) vIdxsToRemove[String(vIdx)] = true;
+                if (!isNaN(Number(vIdx))) {
+                    vIdxsToRemove[String(vIdx)] = true;
+                    delete selectedOrphanWordIdxsMap[String(vIdx)];
+                }
             }
             window.AppState.activeTokenSelections = window.AppState.activeTokenSelections.filter(function(item) {
                 return !vIdxsToRemove[String(item.visual_idx)];
@@ -6326,6 +6349,7 @@
                             }
                         }
 
+                        initialOrphanWordIdxsMap = Object.assign({}, selectedOrphanWordIdxsMap);
                         if (targetRowIds.length === 0) {
                             if (wIdx !== undefined && wIdx !== null) {
                                 if (shouldDeselect) {
@@ -6472,6 +6496,7 @@
                                 selectedRowIdsMap[key] = initialSelectedMap[key];
                             }
                         }
+                        selectedOrphanWordIdxsMap = Object.assign({}, initialOrphanWordIdxsMap || {});
                         restoreSelectedLemmasSnapshot(initialSelectedLemmas);
                         if (window.AppState && initialActiveTokenSelections !== null) {
                             window.AppState.activeTokenSelections = cloneActiveTokens(initialActiveTokenSelections);
@@ -6488,6 +6513,13 @@
                                 var atomics = (td.atomic_row_ids !== undefined)
                                     ? td.atomic_row_ids
                                     : (td.row_ids || []);
+                                if (atomics.length === 0 && td.visual_idx !== undefined && td.visual_idx !== null) {
+                                    if (tokenDragMode) {
+                                        selectedOrphanWordIdxsMap[String(td.visual_idx)] = true;
+                                    } else {
+                                        delete selectedOrphanWordIdxsMap[String(td.visual_idx)];
+                                    }
+                                }
                                 for (var j = 0; j < atomics.length; j++) {
                                     if (tokenDragMode) {
                                         selectedRowIdsMap[String(atomics[j])] = true;
@@ -7143,6 +7175,7 @@
                 isTokenDragSelecting = false;
                 initialSelectedLemmas = null;
                 initialActiveTokenSelections = null;
+                initialOrphanWordIdxsMap = null;
                 isRmbDragFlipping = false;
                 updateRowStyles();
                 updateBidirectionalHighlights();
