@@ -3,6 +3,8 @@
 Spec: specs/progressive-worker-resilience/spec.md
 Requirement: Retain successful word batches when a later batch fails
 """
+import ast
+from pathlib import Path
 import pytest
 
 import kardenwort_desk as desk
@@ -11,6 +13,7 @@ from tests.controller_test_support import (
     controller_lifetime,
     translation_service,
 )
+from tests.test_intent_architecture import complexity, functions
 from translate_server import TranslationServerException
 
 
@@ -33,6 +36,7 @@ def _configure_progressive(server, *, batch_size=1):
             'run_lemma_enrichment': 'manual',
         },
         'translation': {
+            'translation_order': 'top_to_bottom',
             'translation_max_retries': '1',
             'translation_retry_backoff': '0',
             'lemma_batch_size': str(batch_size),
@@ -291,3 +295,35 @@ def test_explicit_reword_remains_all_or_nothing_control(tmp_path):
             words = {w['lemma']: w for w in adapter.db.get_words_by_session(zid)}
             assert (words['Haus']['word_destination'] or '') == ''
             assert (words['Baum']['word_destination'] or '') == ''
+
+
+def test_progressive_word_batch_helpers_meet_complexity_and_purity_contract():
+    """New pure completion and controller Stage 2 helpers enforce CC <= 7 and pure-core isolation."""
+    root = Path(desk.__file__).resolve().parent
+    comp_tree = ast.parse((root / 'kardenwort_progressive_completion.py').read_text(encoding='utf-8'))
+    comp_imports = set()
+    for node in ast.walk(comp_tree):
+        if isinstance(node, ast.Import):
+            comp_imports.update(alias.name.split('.')[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            comp_imports.add(node.module.split('.')[0])
+    assert not comp_imports.intersection({'kardenwort_desk', 'kardenwort_controller', 'http_server', 'kardenwort_db'})
+    comp_violations = {node.name: complexity(node) for node in functions(comp_tree) if complexity(node) > 7}
+    assert comp_violations == {}
+
+    ctrl_tree = ast.parse((root / 'kardenwort_controller.py').read_text(encoding='utf-8'))
+    checked = {
+        '_heartbeat_lemma_worker',
+        '_translate_single_lemma_chunk',
+        '_update_active_lemma_provider',
+        '_commit_single_lemma_chunk',
+        '_build_lemma_chunks',
+        '_collect_untranslated_lemmas',
+        '_emit_translated_stage',
+        '_translate_and_persist_lemma_chunks',
+        '_run_lemma_stage',
+    }
+    measured = {node.name: complexity(node) for node in functions(ctrl_tree) if node.name in checked}
+    assert set(measured) == checked
+    assert max(measured.values()) <= 7, measured
+

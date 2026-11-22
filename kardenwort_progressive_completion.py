@@ -269,3 +269,108 @@ def translated_text_event(rows, fingerprint, translated_html, sentences, error, 
     if provenance:
         event.update(text_provenance=provenance, textProvenance=provenance)
     return event
+
+
+def lemma_stage_error(error, provider='controller', failed_lemmas=(), code='ERR_TRANSLATION_FAILED'):
+    envelope = getattr(error, 'envelope', None)
+    if isinstance(envelope, dict) and envelope:
+        payload = dict(envelope)
+        payload.setdefault('code', code)
+        payload.setdefault('message', str(error))
+        payload.setdefault('provider', provider)
+    else:
+        payload = dict(code=code, message=str(error), provider=provider)
+    details = dict(payload.get('details') or {})
+    if failed_lemmas:
+        details['failed_lemmas'] = list(failed_lemmas)
+    payload['details'] = details
+    return payload
+
+
+def is_untranslated_lemma(row, col_lemma, col_word_dest):
+    if col_lemma < 0 or len(row) <= col_lemma:
+        return None
+    val = row[col_lemma].strip()
+    if not val:
+        return None
+    if col_word_dest != -1 and len(row) > col_word_dest and row[col_word_dest].strip():
+        return None
+    return val
+
+
+def extract_untranslated_lemmas(data_rows, col_lemma, col_word_dest):
+    seen = set()
+    lemmas = []
+    for row in data_rows:
+        val = is_untranslated_lemma(row, col_lemma, col_word_dest)
+        if val and val not in seen:
+            seen.add(val)
+            lemmas.append(val)
+    return lemmas
+
+
+def _record_row_provenance(row, row_idx, col_token_order, chunk_prov, sess_row_provs):
+    t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_idx)
+    sess_row_provs[t_ord] = chunk_prov
+    if t_ord.isdigit():
+        sess_row_provs[int(t_ord)] = chunk_prov
+
+
+def apply_chunk_to_row(row, row_idx, col_word_dest, col_token_order, trans_val, chunk_prov, sess_row_provs):
+    while len(row) <= col_word_dest:
+        row.append("")
+    row[col_word_dest] = trans_val
+    _record_row_provenance(row, row_idx, col_token_order, chunk_prov, sess_row_provs)
+
+
+def _chunk_occurrence_update(row_idx, occurrence_keys, trans_val, chunk_prov):
+    if not (occurrence_keys and row_idx < len(occurrence_keys)):
+        return None
+    key = occurrence_keys[row_idx]
+    return dict(
+        sentence_index=key[0],
+        token_order=key[1],
+        updates=dict(word_destination=trans_val, word_provenance=chunk_prov),
+    )
+
+
+def _apply_row_chunk_match(row, row_idx, col_word_dest, col_token_order, trans, chunk_prov, is_sqlite, occurrence_keys, sess_row_provs):
+    apply_chunk_to_row(row, row_idx, col_word_dest, col_token_order, trans, chunk_prov, sess_row_provs)
+    if is_sqlite:
+        return _chunk_occurrence_update(row_idx, occurrence_keys, trans, chunk_prov)
+    return None
+
+
+def build_chunk_word_updates(data_rows, col_lemma, col_word_dest, col_token_order, occurrence_keys, chunk_trans, chunk_prov, is_sqlite, sess_row_provs):
+    if col_lemma < 0 or col_word_dest < 0:
+        return []
+    updates = []
+    for row_idx, row in enumerate(data_rows):
+        lemma = current_value(row, col_lemma)
+        trans = chunk_trans.get(lemma)
+        if trans and str(trans).strip():
+            upd = _apply_row_chunk_match(row, row_idx, col_word_dest, col_token_order, trans, chunk_prov, is_sqlite, occurrence_keys, sess_row_provs)
+            if upd is not None:
+                updates.append(upd)
+    return updates
+
+
+def translated_stage_event(rows, fingerprint, provenances, error, provider=None, sentences=None, text_provenance=None):
+    event = dict(
+        type='update',
+        stage='translated',
+        status='failed' if error else 'success',
+        fingerprint=fingerprint,
+        rows=rows,
+        row_provenances=provenances,
+        rowProvenances=provenances,
+    )
+    if error:
+        event['error'] = error
+    if provider:
+        event.update(provider=provider, active_lemma_provider=provider, active_provider=provider)
+    if sentences:
+        event['sentences'] = sentences
+    if text_provenance:
+        event.update(text_provenance=text_provenance, textProvenance=text_provenance)
+    return event
