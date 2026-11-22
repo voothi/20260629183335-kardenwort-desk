@@ -4,7 +4,10 @@ import kardenwort_progressive_completion as progressive
 import sys
 from collections import deque
 from contextlib import contextmanager
+from dataclasses import dataclass
 import sqlite3
+import kardenwort_desk as _desk_module
+import kardenwort_enrichment as _enrichment_core
 from kardenwort_db import QueryExecutionError
 import kardenwort_reword as reword
 from kardenwort_state_http import STATE_ROUTES, dispatch_state, set_language
@@ -58,6 +61,8 @@ from kardenwort_desk import (
     resolve_occurrence_rows,
     resolve_reword_request,
     reword_descriptors,
+    reword_scratch_rows,
+    sanitize_bracketed_field,
     enrich_reword_tsv,
     checked_provider_rows,
     reword_query_occurrences,
@@ -948,6 +953,12 @@ class ProcessSupervisor:
         return status
 
 
+@dataclass
+class _InFlightProgressiveBatch:
+    future: concurrent.futures.Future
+    subscribers: List[Tuple[str, Optional[int]]]
+
+
 # ---------------------------------------------------------------------------
 # Centralized Controller Enrichment Task Queue
 # ---------------------------------------------------------------------------
@@ -1002,6 +1013,7 @@ class EnrichmentQueue:
         )
         self._cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._inflight_lemmas: Dict[Tuple[str, str], concurrent.futures.Future] = {}
+        self._inflight_progressive_batches: Dict[Any, _InFlightProgressiveBatch] = {}
         self._lemma_trans_cache: Dict[Tuple[str, str, str], str] = {}
         self._inflight_trans: Dict[Tuple[str, str, str], concurrent.futures.Future] = {}
         self._active_progressive_sessions: Dict[str, concurrent.futures.Future] = {}
@@ -1346,6 +1358,72 @@ class EnrichmentQueue:
                     return res
 
         return {}
+
+    def _has_active_batch_subscriber(self, subscribers: List[Tuple[str, Optional[int]]]) -> bool:
+        with self._lock:
+            if self._shutting_down:
+                return False
+            return any(
+                gen is None or self._progressive_generations.get(s_zid) == gen
+                for s_zid, gen in subscribers
+            )
+
+    def _retire_progressive_batch(self, request_key: Any, future: Optional[concurrent.futures.Future]):
+        with self._lock:
+            entry = self._inflight_progressive_batches.get(request_key)
+            if entry is not None and (future is None or entry.future is future):
+                del self._inflight_progressive_batches[request_key]
+
+    def _acquire_progressive_batch_future(
+        self, request_key, batch, prompt, language, config, session_zid, generation, zid, trace_id
+    ) -> concurrent.futures.Future:
+        subscriber = (session_zid, generation)
+        with self._lock:
+            if self._shutting_down:
+                raise RuntimeError("Controller enrichment queue has been shut down")
+            existing = self._inflight_progressive_batches.get(request_key)
+            if existing is not None and not existing.future.done():
+                existing.subscribers.append(subscriber)
+                return existing.future
+            subscribers = [subscriber]
+            holder: List[Optional[concurrent.futures.Future]] = [None]
+            fut = self._executor.submit(
+                self._execute_progressive_batch,
+                request_key, holder, subscribers, batch, prompt, language, config, zid, trace_id,
+            )
+            holder[0] = fut
+            self._inflight_progressive_batches[request_key] = _InFlightProgressiveBatch(fut, subscribers)
+        fut.add_done_callback(lambda completed, key=request_key: self._retire_progressive_batch(key, completed))
+        return fut
+
+    def _execute_progressive_batch(
+        self, request_key, holder, subscribers, batch, prompt, language, config, zid, trace_id
+    ) -> Dict[int, Dict[str, str]]:
+        try:
+            if not self._has_active_batch_subscriber(subscribers):
+                raise concurrent.futures.CancelledError("All progressive enrichment subscribers were superseded")
+            return _enrichment_core.request_batch(
+                batch, prompt, language, config, _desk_module.query_intellifiller_server, zid, trace_id,
+            )
+        finally:
+            self._retire_progressive_batch(request_key, holder[0])
+
+    def enrich_progressive_batch(
+        self,
+        request_key: Any,
+        batch: List[Dict[str, Any]],
+        prompt: str,
+        language: str,
+        config: Any,
+        session_zid: str,
+        generation: Optional[int],
+        zid: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> Dict[int, Dict[str, str]]:
+        future = self._acquire_progressive_batch_future(
+            request_key, batch, prompt, language, config, session_zid, generation, zid, trace_id,
+        )
+        return future.result()
 
     def enqueue_progressive_task(
         self,
@@ -2284,13 +2362,20 @@ class EnrichmentQueue:
                             selected_rows.append(idx)
 
                 if selected_rows:
+                    if self._is_progressive_superseded(session_zid, generation):
+                        return
                     arbiter.reword_session(
                         session_zid=session_zid,
                         selected_rows=selected_rows,
                         prompt=prompt_name,
                         language=sess_lang,
                         zid=req_zid,
+                        progressive_automatic=True,
+                        progressive_generation=generation,
+                        progressive_queue=self,
                     )
+                    if self._is_progressive_superseded(session_zid, generation):
+                        return
 
         except Exception as e:
             logger.error(f"Error in progressive queue task for session {session_zid}: {e}\n{traceback.format_exc()}")
@@ -2331,7 +2416,7 @@ class EnrichmentQueue:
                 "translation_delay_seconds": self.translation_delay,
                 "enrichment_cache_size": len(self._cache),
                 "translation_cache_size": len(self._lemma_trans_cache),
-                "inflight_enrichments": len(self._inflight_lemmas),
+                "inflight_enrichments": len(self._inflight_lemmas) + len(self._inflight_progressive_batches),
                 "inflight_translations": len(self._inflight_trans),
                 "active_progressive_sessions": list(self._active_progressive_sessions.keys()),
             }
@@ -2355,8 +2440,9 @@ class EnrichmentQueue:
         with self._lock:
             self._shutting_down = True
             tasks = set(self._inflight_lemmas.values()) | set(self._inflight_trans.values()) | set(self._active_progressive_sessions.values())
+            batch_futures = {entry.future for entry in self._inflight_progressive_batches.values()}
         if not wait:
-            for task in tasks:
+            for task in tasks | batch_futures:
                 task.cancel()
         executors = (self._executor, self._translation_executor, self._progressive_executor)
         errors = run_cleanup([lambda executor=executor: executor.shutdown(wait=wait) for executor in executors])
@@ -2951,6 +3037,109 @@ class SessionArbiter:
                     "rowProvenances": sib_row_provs,
                 })
 
+    def _commit_progressive_enrichment_sqlite(
+        self, storage_adapter, queue, session_zid, generation,
+        changes, selection, roles, rows, headers, source, req_zid,
+    ) -> bool:
+        with storage_adapter.db.transaction(zid=req_zid) as conn:
+            active = conn.execute(
+                'SELECT 1 FROM sessions WHERE zid = ? AND deleted_at IS NULL',
+                (session_zid,),
+            ).fetchone()
+            if active is None:
+                raise StructuredError(
+                    ErrorCode.NOT_FOUND,
+                    f'Session {session_zid} was deleted before enrichment commit',
+                )
+            with queue._lock:
+                if generation is not None and queue._progressive_generations.get(session_zid) != generation:
+                    return False
+            commit_reword_sqlite(
+                storage_adapter, session_zid, changes, selection, roles,
+                rows, headers, source, self.config, req_zid, connection=conn,
+            )
+        return True
+
+    def _prepare_progressive_sqlite_batch(
+        self, storage_adapter, session_zid, mapping, selection, prompt_name, lang, target_lang,
+    ):
+        restored = storage_adapter.restore_session(session_zid)
+        sql_headers, sql_rows = reword.restored_manifest_rows(restored)
+        sql_roles = get_role_fields(mapping, sql_headers)
+        sql_lang = restored.get('source_language') or lang
+        sql_target = restored.get('target_language') or target_lang
+        sql_rows = sort_session_data_rows(
+            sql_rows, sql_headers, sql_lang, self.config, self.resolved_paths, role_fields=sql_roles,
+        )
+        sql_source = restored.get('source_text', '')
+        sql_selection = resolve_reword_request(
+            sql_rows, sql_headers, sql_roles, sql_source, self.config,
+            targets=reword_descriptors(selection), visual_indices=list(selection.visuals),
+        )
+        scratch = reword_scratch_rows(sql_rows, sql_headers, sql_roles, sql_selection, sql_source)
+        batch = _enrichment_core.canonical_batch(scratch, sql_headers, sql_selection)
+        request_key = _enrichment_core.progressive_request_key(
+            batch, prompt_name, sql_lang, sql_target, self.config, roles=sql_roles,
+        )
+        return sql_headers, sql_rows, sql_roles, sql_lang, sql_source, sql_selection, batch, request_key
+
+    def _reword_progressive_sqlite(
+        self, storage_adapter, session_zid, mapping, selection, prompt_name, lang, target_lang,
+        req_zid, progressive_generation, progressive_queue,
+    ) -> bool:
+        queue = progressive_queue or self.enrichment_queue
+        if queue._is_progressive_superseded(session_zid, progressive_generation):
+            return False
+        (
+            sql_headers, sql_rows, sql_roles, sql_lang, sql_source, sql_selection, batch, request_key,
+        ) = self._prepare_progressive_sqlite_batch(
+            storage_adapter, session_zid, mapping, selection, prompt_name, lang, target_lang,
+        )
+        try:
+            patches_by_pos = queue.enrich_progressive_batch(
+                request_key=request_key, batch=batch, prompt=prompt_name, language=sql_lang,
+                config=self.config, session_zid=session_zid, generation=progressive_generation,
+                zid=req_zid, trace_id=f"{req_zid}:progressive:enrichment",
+            )
+        except concurrent.futures.CancelledError:
+            if queue._is_progressive_superseded(session_zid, progressive_generation):
+                return False
+            raise
+        changes = _enrichment_core.subscriber_changes(
+            sql_selection, sql_roles, patches_by_pos, sanitize=sanitize_bracketed_field,
+        )
+        return self._commit_progressive_enrichment_sqlite(
+            storage_adapter, queue, session_zid, progressive_generation,
+            changes, sql_selection, sql_roles, sql_rows, sql_headers, sql_source, req_zid,
+        )
+
+    def _can_publish_progressive_reword(self, storage_adapter, is_sqlite, queue, session_zid, generation) -> bool:
+        if is_sqlite and not _sqlite_session_active(storage_adapter, session_zid):
+            return False
+        return not queue._is_progressive_superseded(session_zid, generation)
+
+    def _cache_reword_session_state(
+        self, session_zid, data_rows, headers, new_fp, existing_row_provs,
+        progressive_automatic, queue, generation,
+    ) -> bool:
+        if not progressive_automatic:
+            with self._lock:
+                self._store_reword_session_locked(session_zid, data_rows, headers, new_fp, existing_row_provs)
+            return True
+        with queue._lock:
+            if generation is not None and queue._progressive_generations.get(session_zid) != generation:
+                return False
+            with self._lock:
+                self._store_reword_session_locked(session_zid, data_rows, headers, new_fp, existing_row_provs)
+        return True
+
+    def _store_reword_session_locked(self, session_zid, data_rows, headers, new_fp, existing_row_provs):
+        if session_zid in self.sessions:
+            self.sessions[session_zid]["data_rows"] = data_rows
+            self.sessions[session_zid]["fingerprint"] = new_fp
+            self.sessions[session_zid]["row_provenances"] = existing_row_provs
+            self.sessions[session_zid]['headers'] = headers
+
     @operation_preferences
     def reword_session(
         self,
@@ -2963,6 +3152,9 @@ class SessionArbiter:
         target_coordinates: Optional[List[Any]] = None,
         visual_indices: Optional[List[Any]] = None,
         sentence_idx: Optional[int] = None,
+        progressive_automatic: bool = False,
+        progressive_generation: Optional[int] = None,
+        progressive_queue: Optional[Any] = None,
     ) -> Dict[str, Any]:
         try:
             reword.validate_session_targets(session_zid, target_coordinates)
@@ -3035,11 +3227,20 @@ class SessionArbiter:
             existing_row_provs.update(new_reword_provs)
 
         enriched_lemma_map: Dict[str, Dict[str, str]] = {}
+        eff_progressive_queue = progressive_queue or self.enrichment_queue
         if selected_row_indices and provider != 'none':
             if provider == 'intellifiller':
                 try:
                     original_rows, original_headers = data_rows, headers
-                    if is_sqlite:
+                    if is_sqlite and progressive_automatic:
+                        committed = self._reword_progressive_sqlite(
+                            storage_adapter, session_zid, mapping, selection, prompt_name, lang, target_lang,
+                            req_zid, progressive_generation, eff_progressive_queue,
+                        )
+                        if not committed:
+                            return {"status": "superseded", "session_zid": session_zid}
+                        _, output_headers, output_rows = storage_adapter.load_tsv_rows(tsv_path)
+                    elif is_sqlite:
                         success = storage_adapter.enrich_session_intellifiller(
                             session_zid=session_zid, prompt_name=prompt_name, reprocess=True,
                             zid=req_zid, target_coordinates=reword_descriptors(selection),
@@ -3056,27 +3257,28 @@ class SessionArbiter:
                     keys = reword.row_keys(original_rows, original_headers,
                         role_fields.get('sentence_index', 'SentenceSourceIndex'))
                     headers, data_rows = output_headers, [output[key] for key in keys]
-                    for index in selection.rows:
-                        row = data_rows[index]
-                        lemma = row[col_lemma].strip()
-                        item = {}
-                        for role, field in [('word_translation', 'WordDestination'), ('ipa', 'WordSourceIPA'),
-                                            ('morphology', 'WordSourceMorphologyAI'), ('pos', 'WordSourcePOS'),
-                                            ('gender', 'WordSourceGender')]:
-                            column = role_fields.get(role, field)
-                            if column in headers and row[headers.index(column)].strip():
-                                item[field] = row[headers.index(column)].strip()
-                        if item:
-                            item['word_provenance'] = 'live:intellifiller'
-                            self.enrichment_queue.set_cached(lemma, lang, item)
-                            enriched_lemma_map[lemma] = item
+                    if not progressive_automatic:
+                        for index in selection.rows:
+                            row = data_rows[index]
+                            lemma = row[col_lemma].strip()
+                            item = {}
+                            for role, field in [('word_translation', 'WordDestination'), ('ipa', 'WordSourceIPA'),
+                                                ('morphology', 'WordSourceMorphologyAI'), ('pos', 'WordSourcePOS'),
+                                                ('gender', 'WordSourceGender')]:
+                                column = role_fields.get(role, field)
+                                if column in headers and row[headers.index(column)].strip():
+                                    item[field] = row[headers.index(column)].strip()
+                            if item:
+                                item['word_provenance'] = 'live:intellifiller'
+                                self.enrichment_queue.set_cached(lemma, lang, item)
+                                enriched_lemma_map[lemma] = item
                 except StructuredError:
                     raise
                 except Exception as exc:
                     raise StructuredError(ErrorCode.DESK_FAILED, f'Re-word failed: {exc}') from exc
 
-                # Propagate newly enriched lemmas to open sibling sessions strictly if Master Overview session
-                if enriched_lemma_map and is_master_overview:
+                # Propagate newly enriched lemmas to open sibling sessions strictly if Master Overview explicit Re-word
+                if not progressive_automatic and enriched_lemma_map and is_master_overview:
                     self.propagate_enrichment_to_siblings(enriched_lemma_map, exclude_session_zid=session_zid, language=lang)
             else:
                 # Fast-path machine translation (deepl, google, argos, combined, etc.)
@@ -3214,12 +3416,16 @@ class SessionArbiter:
                     role_fields.get('sentence_index', 'SentenceSourceIndex')))}
         new_fp = compute_content_fingerprint(data_rows)
 
-        with self._lock:
-            if session_zid in self.sessions:
-                self.sessions[session_zid]["data_rows"] = data_rows
-                self.sessions[session_zid]["fingerprint"] = new_fp
-                self.sessions[session_zid]["row_provenances"] = existing_row_provs
-                self.sessions[session_zid]['headers'] = headers
+        if progressive_automatic and not self._can_publish_progressive_reword(
+            storage_adapter, is_sqlite, eff_progressive_queue, session_zid, progressive_generation,
+        ):
+            return {"status": "superseded", "session_zid": session_zid}
+
+        if not self._cache_reword_session_state(
+            session_zid, data_rows, headers, new_fp, existing_row_provs,
+            progressive_automatic, eff_progressive_queue, progressive_generation,
+        ):
+            return {"status": "superseded", "session_zid": session_zid}
 
         row_occurrences = reword_query_occurrences(storage_adapter, session_zid)
         with committed_delivery(session_zid, new_fp):

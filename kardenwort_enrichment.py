@@ -107,3 +107,72 @@ def enrich_rows(rows, headers, selection, language, prompt, config, query, zid=N
     changes = {key: patches[index] for index, key in zip(selection.rows, selection.keys)}
     columns, output = reword.merge_changes(rows, headers, changes)
     return columns, output, {index: set(patch) for index, patch in patches.items()}
+
+
+IDENTITY_COLUMNS = frozenset({
+    'row_id',
+    'TokenOrder',
+    'token_order',
+    'SentenceSourceIndex',
+    'sentence_index',
+    'DeskSelected',
+})
+
+
+def _identity_columns(roles):
+    sentence_col = (roles or {}).get('sentence_index')
+    return IDENTITY_COLUMNS | ({sentence_col} if sentence_col else set())
+
+
+def _row_dict(headers, row, row_id):
+    values = {name: (row[col] if col < len(row) else '') for col, name in enumerate(headers)}
+    values['row_id'] = row_id
+    return values
+
+
+def canonical_batch(scratch, headers, selection):
+    """Build normalized 0..N-1 batch rows for shared structured provider dispatch."""
+    return [_row_dict(headers, scratch[index], pos) for pos, index in enumerate(selection.rows)]
+
+
+def _canonical_row_key(row, identity_cols):
+    return tuple((name, str(row[name])) for name in sorted(row) if name not in identity_cols)
+
+
+def progressive_request_key(batch, prompt, source_language, target_language, config, roles=None):
+    """Build an immutable equivalence key covering all meaning-affecting request inputs."""
+    url = config.get('services', 'intellifiller_server_url', fallback='').strip()
+    opts = provider_options(config)
+    provider_key = (
+        url,
+        opts['model'],
+        opts['base_url'],
+        opts['api_key'],
+        opts['prompt_template'],
+        opts['temperature'],
+    )
+    role_key = tuple(sorted((str(k), str(v)) for k, v in (roles or {}).items()))
+    identity_cols = _identity_columns(roles)
+    rows_key = tuple(_canonical_row_key(row, identity_cols) for row in batch)
+    return (
+        provider_key,
+        str(prompt or '').strip(),
+        str(source_language or '').strip().lower(),
+        str(target_language or '').strip().lower(),
+        role_key,
+        rows_key,
+    )
+
+
+def subscriber_changes(selection, roles, patches_by_pos, sanitize=None):
+    """Map validated canonical batch patches onto one subscriber's exact occurrence keys."""
+    if len(patches_by_pos) != len(selection.keys):
+        raise reword.InvalidRewordTarget('Shared enrichment batch size does not match subscriber selection')
+    changes = {}
+    for pos, key in enumerate(selection.keys):
+        if pos not in patches_by_pos:
+            raise reword.InvalidRewordTarget('Shared enrichment batch omitted a subscriber position')
+        raw_patch = patches_by_pos[pos]
+        cleaned = {name: (sanitize(value) if sanitize else value) for name, value in raw_patch.items()}
+        changes[key] = reword.provider_values({}, cleaned, roles, set(cleaned))
+    return changes
