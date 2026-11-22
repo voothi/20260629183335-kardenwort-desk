@@ -3,8 +3,10 @@
 Spec: specs/fs-free-sqlite-pipeline/spec.md
 Requirement: Scope supported CLI progressive writes to the exact sentence
 """
+import ast
 import json
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +19,7 @@ from tests.controller_test_support import (
     owned_configuration,
     translation_service,
 )
+from tests.test_intent_architecture import complexity, functions
 
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "schemas" / "migrations"
@@ -806,3 +809,232 @@ def test_adjacent_control_controller_unavailable_does_not_fallback_to_file_deliv
         tsv_path = resolved_paths["results_dir"] / f"{zid}-no-fallback.de.tsv"
         updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
         assert not updates_dir.exists()
+
+
+def test_cli_wordfill_batch_transaction_and_provenance_rollback_atomic(tmp_path):
+    """Task 4.2: all accepted wordfill fields share one batch transaction/provenance boundary.
+
+    A real SQLite trigger rejecting the second matched row rolls back the entire wordfill
+    batch atomically so neither target row commits partial fields or provenance and no
+    uncommitted fields leak into published updates.
+    """
+    with translation_service(ItemAwareTranslationHandler) as translator:
+        config, resolved_paths, db, _ = _setup_cli_sqlite_env(
+            tmp_path, translator, wordfill_enabled=True, custom_roles=True
+        )
+        corpus_zid = "20261119085341"
+        target_zid = "20261119085342"
+
+        db.save_session_bundle(
+            session={
+                "zid": corpus_zid,
+                "slug": "wf-corpus-atomic",
+                "source_language": "de",
+                "target_language": "ru",
+                "text_mode": "single",
+                "source_raw_text": "Der Apfel.",
+            },
+            sentences=[
+                {"session_zid": corpus_zid, "sentence_index": 1, "sentence_source": "Der Apfel.", "sentence_destination": "Яблоко."},
+            ],
+            words=[
+                {
+                    "session_zid": corpus_zid,
+                    "sentence_index": 1,
+                    "token_order": 0,
+                    "quotation": "Apfel",
+                    "lemma": "Apfel",
+                    "word_destination": "яблоко",
+                    "ipa": "ˈapfəl",
+                    "morphology": "Subst.Masc.Nom.Sg",
+                    "pos": "NOUN",
+                    "gender": "m",
+                    "selected": 1,
+                }
+            ],
+        )
+        db.save_session_bundle(
+            session={
+                "zid": target_zid,
+                "slug": "wf-target-atomic",
+                "source_language": "de",
+                "target_language": "ru",
+                "text_mode": "multi",
+                "source_raw_text": "Das Haus.\nDer Apfel und der Apfel.",
+            },
+            sentences=[
+                {"session_zid": target_zid, "sentence_index": 1, "sentence_source": "Das Haus.", "sentence_destination": "Дом."},
+                {"session_zid": target_zid, "sentence_index": 2, "sentence_source": "Der Apfel und der Apfel.", "sentence_destination": "Яблоко."},
+            ],
+            words=[
+                {
+                    "session_zid": target_zid,
+                    "sentence_index": 1,
+                    "token_order": 0,
+                    "quotation": "Haus",
+                    "lemma": "Haus",
+                    "word_destination": "altes Haus",
+                    "ipa": "haʊ̯s",
+                    "word_provenance": "live:google",
+                },
+                {
+                    "session_zid": target_zid,
+                    "sentence_index": 2,
+                    "token_order": 0,
+                    "quotation": "Apfel",
+                    "lemma": "Apfel",
+                    "word_destination": "",
+                },
+                {
+                    "session_zid": target_zid,
+                    "sentence_index": 2,
+                    "token_order": 1,
+                    "quotation": "Apfel",
+                    "lemma": "Apfel",
+                    "word_destination": "",
+                },
+            ],
+        )
+        words_before = _cold_words_by_coord(resolved_paths["sqlite_db_path"], target_zid)
+
+        with db.get_connection() as conn:
+            conn.execute(
+                "CREATE TRIGGER reject_second_wordfill_row "
+                "BEFORE UPDATE OF word_destination ON words "
+                "WHEN NEW.sentence_index = 2 AND NEW.token_order = 1 "
+                "BEGIN SELECT RAISE(ABORT, 'owned trigger rejected wordfill batch'); END"
+            )
+
+        tsv_path = resolved_paths["results_dir"] / f"{target_zid}-wf-target-atomic.de.tsv"
+        data_rows = [
+            ["0", "Haus", "Haus", "altes Haus", "haʊ̯s", "", "", "", "1", "Das Haus.", "Дом."],
+            ["0", "Apfel", "Apfel", "", "", "", "", "", "2", "Der Apfel und der Apfel.", "Яблоко."],
+            ["1", "Apfel", "Apfel", "", "", "", "", "", "2", "Der Apfel und der Apfel.", "Яблоко."],
+        ]
+        args = SimpleNamespace(language="de", target_lang="ru", text_mode="multi", zid=target_zid, trace_id=f"{target_zid}:test")
+
+        res = desk._progressive_worker_stage_translation_impl(
+            tsv_path=tsv_path,
+            args=args,
+            config=config,
+            resolved_paths=resolved_paths,
+            data_rows=data_rows,
+            headers=list(WORDFILL_HEADERS),
+            role_fields=dict(WORDFILL_ROLE_FIELDS),
+            zid=target_zid,
+            trace_id=f"{target_zid}:test",
+            row_provenances={},
+        )
+
+        assert res.error is not None
+        assert "owned trigger rejected wordfill batch" in res.error["message"]
+        assert translator.provider_calls == []
+        assert _cold_words_by_coord(resolved_paths["sqlite_db_path"], target_zid) == words_before
+        for payload in _read_update_payloads(tsv_path):
+            serialized = json.dumps(payload, ensure_ascii=False)
+            assert "яблоко" not in serialized
+            assert "ˈapfəl" not in serialized
+            assert "Subst.Masc.Nom.Sg" not in serialized
+            assert "corpus:wordfill" not in serialized
+
+
+def test_cli_progressive_whitespace_lemma_and_deterministic_async_worker(tmp_path):
+    """Task 2.1 & 2.2: deterministic async coordination of cmd_progressive_worker with repeated token 0 and padded lemma."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    class CoordinatedTranslationHandler(ItemAwareTranslationHandler):
+        def translate(self, provider, text, source, target):
+            entered.set()
+            assert release.wait(10), "Background CLI progressive worker was not released"
+            return super().translate(provider, text, source, target)
+
+    with translation_service(CoordinatedTranslationHandler) as translator:
+        config, resolved_paths, db, cfg_path = _setup_cli_sqlite_env(tmp_path, translator)
+        zid = "20261119085343"
+
+        db.save_session_bundle(
+            session={
+                "zid": zid,
+                "slug": "async-cli-repeated",
+                "source_language": "de",
+                "target_language": "ru",
+                "text_mode": "multi",
+                "source_raw_text": "Das Haus.\nDer Baum.",
+            },
+            sentences=[
+                {"session_zid": zid, "sentence_index": 1, "sentence_source": "Das Haus.", "sentence_destination": "Дом."},
+                {"session_zid": zid, "sentence_index": 2, "sentence_source": "Der Baum.", "sentence_destination": "Дерево."},
+            ],
+            words=[
+                {"session_zid": zid, "sentence_index": 1, "token_order": 0, "quotation": "Haus", "lemma": " Haus ", "word_destination": ""},
+                {"session_zid": zid, "sentence_index": 2, "token_order": 0, "quotation": "Baum", "lemma": "Baum", "word_destination": ""},
+            ],
+        )
+
+        tsv_path = resolved_paths["results_dir"] / f"{zid}-async-cli-repeated.de.tsv"
+        worker_args = SimpleNamespace(
+            tsv=str(tsv_path),
+            zid=zid,
+            config=str(cfg_path),
+            language="de",
+            target_lang="ru",
+            text_mode="multi",
+            skip_intellifiller=True,
+            trace_id=f"{zid}:async",
+        )
+        errors = []
+
+        def run_worker():
+            try:
+                desk.cmd_progressive_worker(worker_args)
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=run_worker)
+        thread.start()
+        try:
+            assert entered.wait(10), "CLI progressive worker did not reach translation service"
+            # While paused before provider response, neither occurrence has been mutated in SQLite
+            mid_words = _cold_words_by_coord(resolved_paths["sqlite_db_path"], zid)
+            assert (mid_words[(1, 0)]["word_destination"] or "") == ""
+            assert (mid_words[(2, 0)]["word_destination"] or "") == ""
+            release.set()
+            thread.join(timeout=15)
+            assert not thread.is_alive()
+            assert errors == []
+        finally:
+            release.set()
+            thread.join(timeout=5)
+
+        reopened = KardenwortDB(db_path=resolved_paths["sqlite_db_path"], migrations_dir=MIGRATIONS_DIR)
+        by_coord = {(w["sentence_index"], w["token_order"]): dict(w) for w in reopened.get_words_by_session(zid)}
+        assert by_coord[(1, 0)]["word_destination"] == "google: Haus"
+        assert by_coord[(1, 0)]["word_provenance"] == "live:google"
+        assert by_coord[(2, 0)]["word_destination"] == "google: Baum"
+        assert by_coord[(2, 0)]["word_provenance"] == "live:google"
+        assert reopened.get_worker_status(zid)["worker_status"] == "finished"
+
+
+def test_cli_progressive_word_write_helpers_respect_complexity_ceiling():
+    """Architectural governance: every added CLI progressive word-write helper enforces CC <= 7."""
+    tree = ast.parse(Path(desk.__file__).read_text(encoding="utf-8-sig"))
+    checked = {
+        "_translation_stage_error",
+        "_resolve_cli_progressive_occurrence_keys",
+        "_seed_cli_occurrence_provenances",
+        "_sync_cli_row_provenances",
+        "_set_cli_row_cell",
+        "_build_cli_wordfill_update_dict",
+        "_plan_single_cli_wordfill_row",
+        "_plan_cli_wordfill_matches",
+        "_apply_cli_wordfill_entries",
+        "_run_cli_progressive_wordfill",
+        "_collect_cli_eligible_lemma_rows",
+        "_plan_cli_lemma_chunk_updates",
+        "_apply_cli_lemma_chunk_patches",
+    }
+    measured = {node.name: complexity(node) for node in functions(tree) if node.name in checked}
+    assert set(measured) == checked
+    assert max(measured.values()) <= 7, measured
+

@@ -1,5 +1,6 @@
 import sys
 import kardenwort_reword as reword
+import kardenwort_progressive_completion as progressive
 from kardenwort_alignment import display_sentence_text
 from kardenwort_restore_projection import case_insensitive_fields
 from kardenwort_theme import resolve_theme_colors, theme_style
@@ -16993,6 +16994,178 @@ def _translation_stage_error(error, failed_lemmas=()):
         'details': {'failed_lemmas': list(failed_lemmas)},
     }
 
+
+def _resolve_cli_progressive_occurrence_keys(data_rows, headers, role_fields, is_sqlite):
+    if not is_sqlite:
+        return None
+    sentence_field = role_fields.get('sentence_index', 'SentenceSourceIndex')
+    return reword.row_keys(data_rows, headers, sentence_field, min_sentence=0)
+
+
+def _seed_cli_occurrence_provenances(storage_adapter, zid, is_sqlite):
+    provenances = {}
+    if not is_sqlite:
+        return provenances
+    try:
+        db_words = storage_adapter.db.get_words_by_session(zid)
+        for w in db_words:
+            w_prov = w.get("word_provenance")
+            if w_prov:
+                provenances[(str(w.get("sentence_index", "")), str(w.get("token_order", "")))] = w_prov
+    except Exception:
+        pass
+    return provenances
+
+
+def _sync_cli_row_provenances(row_provenances, occurrence_keys, occurrence_provenances):
+    if not occurrence_keys:
+        return
+    projected = progressive.indexed_provenances(occurrence_keys, occurrence_provenances)
+    row_provenances.clear()
+    row_provenances.update(projected)
+
+
+def _set_cli_row_cell(row, col_index, value):
+    if col_index < 0:
+        return
+    while len(row) <= col_index:
+        row.append("")
+    row[col_index] = value
+
+
+def _build_cli_wordfill_update_dict(patch, match):
+    field_updates = {field: value for field, _, value in patch}
+    wf_prov = match.get('_provenance', 'corpus:wordfill')
+    if 'word_destination' in field_updates and wf_prov:
+        field_updates['word_provenance'] = wf_prov
+    return field_updates, wf_prov
+
+
+def _plan_single_cli_wordfill_row(row_idx, row, headers, role_fields, col_lemma, col_word_dest,
+                                  lang, wordfill_cfg, tsv_path, occurrence_keys, is_sqlite):
+    if not progressive.eligible_wordfill(row, col_lemma, col_word_dest, is_unfinished=is_unfinished_translation):
+        return None, None
+    match = find_wordfill_match(row[col_lemma].strip(), lang, wordfill_cfg, exclude_path=tsv_path)
+    if not match:
+        return None, None
+    patch = progressive.wordfill_patch(row, headers, role_fields, match, is_failure=is_stored_translation_failure)
+    field_updates, wf_prov = _build_cli_wordfill_update_dict(patch, match)
+    if is_sqlite and not field_updates:
+        return None, None
+    key = occurrence_keys[row_idx] if is_sqlite else None
+    entry = (row_idx, match, patch, wf_prov, key)
+    sqlite_item = {"sentence_index": key[0], "token_order": key[1], "updates": field_updates} if is_sqlite else None
+    return entry, sqlite_item
+
+
+def _plan_cli_wordfill_matches(data_rows, headers, role_fields, col_lemma, col_word_dest,
+                               lang, wordfill_cfg, tsv_path, occurrence_keys, is_sqlite):
+    matched_entries = []
+    sqlite_updates = []
+    for row_idx, row in enumerate(data_rows):
+        entry, sqlite_item = _plan_single_cli_wordfill_row(
+            row_idx, row, headers, role_fields, col_lemma, col_word_dest,
+            lang, wordfill_cfg, tsv_path, occurrence_keys, is_sqlite,
+        )
+        if entry is not None:
+            matched_entries.append(entry)
+        if sqlite_item is not None:
+            sqlite_updates.append(sqlite_item)
+    return matched_entries, sqlite_updates
+
+
+def _apply_cli_wordfill_entries(data_rows, headers, matched_entries, col_token_order,
+                                row_provenances, occurrence_provenances, occurrence_keys, is_sqlite):
+    for row_idx, match, patch, wf_prov, key in matched_entries:
+        row = data_rows[row_idx]
+        for _, col_idx, val in patch:
+            _set_cli_row_cell(row, col_idx, val)
+        apply_wordfill_to_rows([row], headers, match)
+        if is_sqlite and key is not None:
+            occurrence_provenances[(str(key[0]), str(key[1]))] = wf_prov
+        else:
+            t_ord = progressive.current_value(row, col_token_order) or str(row_idx)
+            row_provenances[row_idx] = wf_prov
+            row_provenances[t_ord] = wf_prov
+    if is_sqlite:
+        _sync_cli_row_provenances(row_provenances, occurrence_keys, occurrence_provenances)
+
+
+def _run_cli_progressive_wordfill(tsv_path, config, resolved_paths, storage_adapter, zid, is_sqlite,
+                                  data_rows, headers, role_fields, occurrence_keys, col_lemma,
+                                  col_word_dest, col_token_order, lang, row_provenances, occurrence_provenances):
+    wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
+    if not (wordfill_cfg and wordfill_cfg.get('enabled', False)):
+        return
+    matched_entries, sqlite_updates = _plan_cli_wordfill_matches(
+        data_rows, headers, role_fields, col_lemma, col_word_dest,
+        lang, wordfill_cfg, tsv_path, occurrence_keys, is_sqlite,
+    )
+    if not matched_entries:
+        return
+    if is_sqlite:
+        if sqlite_updates:
+            storage_adapter.batch_update_words(session_zid=zid, updates_list=sqlite_updates, zid=zid)
+        _apply_cli_wordfill_entries(
+            data_rows, headers, matched_entries, col_token_order,
+            row_provenances, occurrence_provenances, occurrence_keys, True,
+        )
+        return
+    _apply_cli_wordfill_entries(
+        data_rows, headers, matched_entries, col_token_order,
+        row_provenances, occurrence_provenances, occurrence_keys, False,
+    )
+    with file_lock(tsv_path):
+        comments, _h_curr, _ = load_tsv_rows(tsv_path)
+        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+
+
+def _collect_cli_eligible_lemma_rows(data_rows, col_lemma, col_word_dest):
+    eligible_rows = set()
+    lemmas = []
+    seen = set()
+    for row_idx, row in enumerate(data_rows):
+        if not progressive.eligible_wordfill(row, col_lemma, col_word_dest, is_unfinished=is_unfinished_translation):
+            continue
+        eligible_rows.add(row_idx)
+        val = row[col_lemma].strip()
+        if val not in seen:
+            seen.add(val)
+            lemmas.append(val)
+    return eligible_rows, lemmas
+
+
+def _plan_cli_lemma_chunk_updates(data_rows, col_lemma, col_word_dest, eligible_rows,
+                                  occurrence_keys, lemma_translations, fast_prov):
+    if col_lemma < 0 or col_word_dest < 0:
+        return [], []
+    patches = []
+    sqlite_updates = []
+    for row_idx in sorted(eligible_rows):
+        lemma_val = progressive.current_value(data_rows[row_idx], col_lemma)
+        if lemma_val not in lemma_translations:
+            continue
+        trans_val = lemma_translations[lemma_val]
+        key = occurrence_keys[row_idx]
+        patches.append((row_idx, trans_val, key))
+        sqlite_updates.append({
+            "sentence_index": key[0],
+            "token_order": key[1],
+            "updates": {
+                "word_destination": trans_val,
+                "word_provenance": fast_prov,
+            },
+        })
+    return patches, sqlite_updates
+
+
+def _apply_cli_lemma_chunk_patches(data_rows, col_word_dest, patches, fast_prov,
+                                   row_provenances, occurrence_provenances, occurrence_keys):
+    for row_idx, trans_val, key in patches:
+        _set_cli_row_cell(data_rows[row_idx], col_word_dest, trans_val)
+        occurrence_provenances[(str(key[0]), str(key[1]))] = fast_prov
+    _sync_cli_row_provenances(row_provenances, occurrence_keys, occurrence_provenances)
+
 def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, row_provenances=None):
     m = re.match(r'^(\d{14})', tsv_path.name)
     zid = getattr(args, 'zid', None) or (m.group(1) if m else "unknown")
@@ -17120,20 +17293,11 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             if row_provenances is None:
                 row_provenances = {}
             col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+            occurrence_keys = _resolve_cli_progressive_occurrence_keys(data_rows, headers, role_fields, is_sqlite)
+            occurrence_provenances = _seed_cli_occurrence_provenances(storage_adapter, zid, is_sqlite)
             if is_sqlite:
-                try:
-                    db_words = storage_adapter.db.get_words_by_session(zid)
-                    for w in db_words:
-                        w_prov = w.get("word_provenance")
-                        if w_prov:
-                            t_ord = str(w.get("token_order", ""))
-                            if t_ord not in row_provenances:
-                                row_provenances[t_ord] = w_prov
-                                if t_ord.isdigit():
-                                    row_provenances[int(t_ord)] = w_prov
-                except Exception:
-                    pass
-            if col_word_dest != -1:
+                _sync_cli_row_provenances(row_provenances, occurrence_keys, occurrence_provenances)
+            elif col_word_dest != -1:
                 for r_i, r in enumerate(data_rows):
                     if len(r) > col_word_dest and r[col_word_dest].strip() and "skeleton-loader" not in r[col_word_dest]:
                         t_ord_str = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
@@ -17141,63 +17305,15 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                             row_provenances[t_ord_str] = "cached:sqlite"
                             if t_ord_str.isdigit():
                                 row_provenances[int(t_ord_str)] = "cached:sqlite"
-            wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
-            if wordfill_cfg and wordfill_cfg.get('enabled', False):
-                try:
-                    wf_applied = False
-                    for i, row in enumerate(data_rows):
-                        if len(row) > col_lemma and row[col_lemma].strip():
-                            lemma_val = row[col_lemma].strip()
-                            is_translated = (col_word_dest != -1 and len(row) > col_word_dest and bool(row[col_word_dest].strip()))
-                            if not is_translated:
-                                match = find_wordfill_match(lemma_val, lang, wordfill_cfg, exclude_path=tsv_path)
-                                if match:
-                                    apply_wordfill_to_rows([row], headers, match)
-                                    wf_applied = True
-                                    wf_prov = match.get('_provenance', 'corpus:wordfill')
-                                    t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(i)
-                                    row_provenances[i] = wf_prov
-                                    row_provenances[t_ord] = wf_prov
-                                    logger.info(
-                                        f"wordfill (progressive): pre-filled {len(match)} field(s) for lemma '{lemma_val}' from corpus."
-                                    )
-                    if wf_applied:
-                        if is_sqlite:
-                            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-                            updates = []
-                            for row_idx, row in enumerate(data_rows):
-                                if col_lemma != -1 and len(row) > col_lemma:
-                                    if col_word_dest != -1 and len(row) > col_word_dest and row[col_word_dest].strip():
-                                        t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
-                                        wf_p = row_provenances.get(t_ord) or row_provenances.get(str(t_ord)) or row_provenances.get(row_idx)
-                                        update_item = {
-                                            "token_order": t_ord,
-                                            "updates": {
-                                                "word_destination": row[col_word_dest],
-                                            }
-                                        }
-                                        if wf_p:
-                                            update_item["updates"]["word_provenance"] = wf_p
-                                        updates.append(update_item)
-                            if updates:
-                                storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
-                        else:
-                            with file_lock(tsv_path):
-                                comments, h_curr, _ = load_tsv_rows(tsv_path)
-                                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-                except Exception as wf_err:
-                    logger.warning(f"wordfill (progressive): translation pre-fill step failed: {wf_err}")
 
-            lemmas_to_translate = []
-            seen = set()
-            for row in data_rows:
-                if len(row) > col_lemma and row[col_lemma].strip():
-                    val = row[col_lemma].strip()
-                    is_translated = (col_word_dest != -1 and len(row) > col_word_dest and bool(row[col_word_dest].strip()))
-                    if not is_translated and val not in seen:
-                        seen.add(val)
-                        lemmas_to_translate.append(val)
+            _run_cli_progressive_wordfill(
+                tsv_path, config, resolved_paths, storage_adapter, zid, is_sqlite,
+                data_rows, headers, role_fields, occurrence_keys, col_lemma,
+                col_word_dest, col_token_order, lang, row_provenances, occurrence_provenances,
+            )
 
+            eligible_rows, lemmas_to_translate = _collect_cli_eligible_lemma_rows(data_rows, col_lemma, col_word_dest)
+            provider = None
             translation_order = config.get(SEC_TRANSLATION, 'translation_order', fallback='top_to_bottom').strip().lower()
             if translation_order == 'bottom_to_top':
                 lemmas_to_translate = list(reversed(lemmas_to_translate))
@@ -17223,7 +17339,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         )
                     else:
                         sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter)
+                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, occurrence_provenances=occurrence_provenances if is_sqlite else None, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter)
                 else:
                     chunk_size = config.getint(SEC_TRANSLATION, 'translation_chunk_size', fallback=0)
                     if chunk_size == 0:
@@ -17246,35 +17362,23 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                 provider = p_from_prov
 
                         if is_sqlite:
-                            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-                            updates = []
-                            for row_idx, row in enumerate(data_rows):
-                                if col_lemma != -1 and len(row) > col_lemma:
-                                    lemma_val = row[col_lemma]
-                                    if lemma_val in lemma_translations and col_word_dest != -1:
-                                        trans_val = lemma_translations[lemma_val]
-                                        while len(row) <= col_word_dest:
-                                            row.append("")
-                                        row[col_word_dest] = trans_val
-                                        t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_idx)
-                                        row_provenances[row_idx] = fast_prov
-                                        row_provenances[t_ord] = fast_prov
-                                        updates.append({
-                                            "token_order": int(t_ord) if t_ord.isdigit() else row_idx,
-                                            "updates": {
-                                                "word_destination": trans_val,
-                                                "word_provenance": fast_prov,
-                                            },
-                                        })
+                            patches, updates = _plan_cli_lemma_chunk_updates(
+                                data_rows, col_lemma, col_word_dest, eligible_rows,
+                                occurrence_keys, lemma_translations, fast_prov,
+                            )
                             if updates:
                                 storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
+                            _apply_cli_lemma_chunk_patches(
+                                data_rows, col_word_dest, patches, fast_prov,
+                                row_provenances, occurrence_provenances, occurrence_keys,
+                            )
                         else:
                             col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
                             with file_lock(tsv_path):
                                 comments, headers, current_rows = load_tsv_rows(tsv_path)
                                 for r_idx, row in enumerate(current_rows):
                                     if col_lemma != -1 and len(row) > col_lemma:
-                                        lemma_val = row[col_lemma]
+                                        lemma_val = row[col_lemma].strip()
                                         if col_word_dest != -1:
                                             while len(row) <= col_word_dest:
                                                 row.append("")
@@ -17287,13 +17391,13 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                 data_rows = current_rows
 
                         sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id, row_provenances=row_provenances, provider=provider, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter)
+                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id, row_provenances=row_provenances, occurrence_provenances=occurrence_provenances if is_sqlite else None, provider=provider, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter)
 
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov, provider=provider, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, occurrence_provenances=occurrence_provenances if is_sqlite else None, text_provenance=active_text_prov, provider=provider, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter)
             else:
                 sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov, provider=provider, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, occurrence_provenances=occurrence_provenances if is_sqlite else None, text_provenance=active_text_prov, provider=provider, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter)
         else:
             lang = getattr(args, 'language', 'en')
             sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
