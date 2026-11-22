@@ -3014,10 +3014,15 @@ class SessionArbiter:
 
     def _cache_retext_result(self, session_zid, result, raw):
         with self._lock:
-            session = self.sessions.setdefault(session_zid, {})
+            session = self.sessions.get(session_zid)
+            if session is None:
+                return
             session.update({key: result[key] for key in ('data_rows', 'fingerprint', 'translated_text', 'translatedText', 'text_provenance', 'textProvenance', 'active_text_provider')})
+            if result.get('headers'):
+                session['headers'] = result['headers']
             session['sentence_translation'] = raw
             session['active_provider'] = result['active_text_provider']
+            session.pop('sentences', None)
 
     @staticmethod
     def _read_retext_sentences(adapter, session_zid):
