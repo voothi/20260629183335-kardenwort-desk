@@ -6173,6 +6173,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             if action == 'process':
                 raw_lang = body.get('chosen_source_lang') or body.get('selected_language') or body.get('target_language') or draft.get("language") or "und"
+                if not isinstance(raw_lang, str):
+                    with _DRAFT_SESSIONS_LOCK:
+                        _DRAFT_SESSIONS[session_zid] = draft
+                    raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Invalid concrete study language')
                 chosen_source_lang = raw_lang.strip().lower() if raw_lang else "und"
             elif action == 'switch':
                 raw_detected = draft.get("mismatch_info", {}).get("detected_language") or draft.get("language")
@@ -6192,6 +6196,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         lang_res = set_language(self.server, chosen_source_lang)
                         _sync_request_language(operation_configuration(self.server.config), self.server.config, lang_res)
                         spawn_ahk(['--set-language', chosen_source_lang], base_dir=self.server.resolved_paths.get('base_dir'))
+                except ValueError as error:
+                    with _DRAFT_SESSIONS_LOCK:
+                        _DRAFT_SESSIONS[session_zid] = draft
+                    raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(error)) from error
+                except (sqlite3.Error, QueryExecutionError) as error:
+                    with _DRAFT_SESSIONS_LOCK:
+                        _DRAFT_SESSIONS[session_zid] = draft
+                    raise StructuredError(ErrorCode.CONFIGURATION_ERROR, 'SQLite state is unavailable') from error
                 except Exception:
                     with _DRAFT_SESSIONS_LOCK:
                         _DRAFT_SESSIONS[session_zid] = draft
