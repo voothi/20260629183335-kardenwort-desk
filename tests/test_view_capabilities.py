@@ -76,6 +76,9 @@ def test_viewless_compatibility_still_requires_typed_preference_ack(page, world)
     page.unroute('**/api/v1/config')
     button.click()
     expect(button).to_have_attribute('data-preference-state', 'saved')
+    assert preference_store(world.config, world.paths).snapshot()['values']['highlight_same_lemma'] is True
+    button.click()
+    expect(button).to_have_attribute('data-preference-state', 'saved')
     assert preference_store(world.config, world.paths).snapshot()['values']['highlight_same_lemma'] is False
     assert calls == []
     assert errors == []
