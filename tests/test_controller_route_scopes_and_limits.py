@@ -337,3 +337,25 @@ def test_tag_route_reads_no_sqlite_preferences_control(scope_world):
         body={'session_zid': ZID, 'language': 'de', 'row_id': 0, 'status': True, 'fingerprint': fp},
         token='wrong',
     )[0] == 403
+
+
+def test_render_alias_retains_legacy_tsv_backend_without_sqlite_file(tmp_path):
+    with controller_lifetime(tmp_path, SimpleNamespace(server_port=59999), backend='tsv') as (url, server):
+        server.config.set('ui', 'theme', 'light')
+        server.config.set('rendering', 'default_zoom', '115')
+        tsv_path = server.resolved_paths['results_dir'] / f'{ZID}-haus.de.tsv'
+        tsv_path.write_text(
+            'WordSource\tWordSourceInflectedForm\tTokenOrder\tSentenceSourceIndex\tSentenceSource\n'
+            'Haus\tHaus\t0\t1\tHaus.\n',
+            encoding='utf-8',
+        )
+        assert not server.resolved_paths['sqlite_db_path'].exists()
+        status, body = _http_request(
+            url, '/render', method='POST',
+            body={'session_zid': ZID, 'language': 'de', 'text': 'Haus.', 'tsv': str(tsv_path), 'bypass_lang_check': True},
+        )
+        assert status == 200, body
+        html = _data(body)['html']
+        assert 'theme-light' in html.split('<body', 1)[1].split('>', 1)[0]
+        assert 'zoom: 115%' in html
+        assert not server.resolved_paths['sqlite_db_path'].exists()

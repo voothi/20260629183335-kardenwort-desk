@@ -14,7 +14,7 @@ import kardenwort_reword as reword
 from kardenwort_client_views import ClientViewConflict
 from kardenwort_state_http import STATE_ROUTES, dispatch_state, set_language
 from kardenwort_sqlite_preferences import PreferenceConflict
-from kardenwort_state_runtime import refresh_preferences, preference_store
+from kardenwort_state_runtime import project_preferences, refresh_preferences, preference_store
 from kardenwort_audio import AudioError
 from kardenwort_audio_runtime import execute_audio
 from kardenwort_controller_lifetime import ControllerHTTPServer, run_cleanup, stop_owned_process
@@ -4154,7 +4154,34 @@ def generate_server_zid(server) -> str:
 
 
 def request_preference_scope(path):
-    return path.startswith('/session') or path in ('/', '/api/v1/render', '/lookup', '/verify-language')
+    return path.startswith('/session') or path in (
+        '/',
+        '/api/v1/render',
+        '/render',
+        '/lookup',
+        '/api/v1/lookup',
+        '/verify-language',
+        '/api/v1/export',
+        '/api/v1/confirm-language',
+        '/api/v1/admin/projects/export-deck',
+        '/api/v1/admin/projects/synthesize',
+    )
+
+
+def _sync_request_language(req_cfg, shared_cfg, lang_res):
+    if req_cfg is None or req_cfg is shared_cfg:
+        return
+    snap = getattr(req_cfg, '_sqlite_preferences_snapshot', None)
+    if snap is not None:
+        updated = {
+            'values': dict(snap['values'], default_language=lang_res['language']),
+            'revisions': dict(snap['revisions'], default_language=lang_res['revision']),
+        }
+        project_preferences(req_cfg, updated)
+        return
+    if not req_cfg.has_section(SEC_SETTINGS):
+        req_cfg.add_section(SEC_SETTINGS)
+    req_cfg.set(SEC_SETTINGS, 'default_language', lang_res['language'])
 
 
 class ControllerRequestHandler(BaseHTTPRequestHandler):
@@ -6113,7 +6140,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
-        if path in ('/api/v1/export', '/session/export'):
+        if path == '/api/v1/export':
             self._handle_export_request(method, path, require_selected_field=True)
             return
 
@@ -6160,9 +6187,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             # Commit concrete language before launching a tray or session effect.
             if chosen_source_lang and chosen_source_lang != 'und':
                 try:
-                    current = preference_store(operation_configuration(self.server.config), self.server.resolved_paths).get('default_language')
+                    current = preference_store(self.server.config, self.server.resolved_paths).get('default_language')
                     if chosen_source_lang != current:
-                        set_language(self.server, chosen_source_lang)
+                        lang_res = set_language(self.server, chosen_source_lang)
+                        _sync_request_language(operation_configuration(self.server.config), self.server.config, lang_res)
                         spawn_ahk(['--set-language', chosen_source_lang], base_dir=self.server.resolved_paths.get('base_dir'))
                 except Exception:
                     with _DRAFT_SESSIONS_LOCK:
