@@ -151,11 +151,13 @@ def test_current_conflict_keeps_unsaved_intent_until_explicit_retry(preference_p
     with page.expect_request('**/api/v1/config'):
         control.click()
     retry = held.pop(0)
+    assert retry.request.post_data_json['value'] == 'true'
     assert retry.request.post_data_json['expected_revision'] == 2
     retry.fulfill(response=retry.fetch())
     expect(control).to_have_attribute('data-preference-state', 'saved')
     page.evaluate('flushPendingSaves()')
-    assert page.evaluate('field => AppState[field]', field) is False
+    assert page.evaluate('field => AppState[field]', field) is True
+    assert preference_store(server.config, server.resolved_paths).get(key) is True
     assert preference_store(server.config, server.resolved_paths).snapshot()['revisions'][key] == 3
 
 

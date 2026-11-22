@@ -6,11 +6,17 @@
             if (keys.some(function(key) { return slots[key].phase === 'failed'; })) throw new Error('Preferences remain unsaved');
         });
     }
+    function failedTarget(slots, key) {
+        var slot = slots[key];
+        if (!slot || slot.phase !== 'failed') return undefined;
+        return slot.value;
+    }
     function create(send, project) {
         var slots = {};
         function settle(slot, generation, key, phase, value, error) {
             if (slot.generation !== generation) return;
             slot.phase = phase;
+            slot.value = value;
             project(key, phase, value, error);
         }
         function submit(key, value) {
@@ -32,7 +38,7 @@
         }
         function current(key, generation) { return !!slots[key] && slots[key].generation === generation; }
         function unresolved(key) { return !!slots[key] && (slots[key].phase === 'pending' || slots[key].phase === 'failed'); }
-        return {submit: submit, flush: flush, current: current, unresolved: unresolved};
+        return {submit: submit, flush: flush, current: current, unresolved: unresolved, retryValue: failedTarget.bind(null, slots)};
     }
     window.PreferenceCommands = {create: create};
 })();

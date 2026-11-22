@@ -11412,9 +11412,14 @@
         }
         window.setHighlightSameLemma = setHighlightSameLemma;
 
+        function nextPreferenceToggle(key, current) {
+            var retry = preferenceCommands.retryValue(key);
+            return retry === undefined ? !current : retry;
+        }
+
         function toggleHighlightSameLemma() {
             var cur = (window.AppState && window.AppState.highlightSameLemma) ? true : false;
-            var next = !cur;
+            var next = nextPreferenceToggle('highlight_same_lemma', cur);
             setHighlightSameLemma(next);
             if (typeof window.showToast === 'function') {
                 window.showToast(next ? "Lemma highlighting enabled" : "Lemma highlighting disabled", "info");
@@ -11459,7 +11464,7 @@
 
         function toggleFilterSelectedOnly() {
             var cur = (window.AppState && window.AppState.filterSelectedOnly) ? true : false;
-            var next = !cur;
+            var next = nextPreferenceToggle('filter_selected_only', cur);
             setFilterSelectedOnly(next);
             if (typeof window.showToast === 'function') {
                 window.showToast(next ? "Selected rows filter enabled" : "Selected rows filter disabled", "info");

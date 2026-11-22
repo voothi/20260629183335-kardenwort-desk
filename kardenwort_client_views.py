@@ -9,6 +9,23 @@ RETENTION_SECONDS = 30 * 24 * 60 * 60
 TOUCH_RENEWAL_SECONDS = 3600
 
 
+class ClientViewConflict(ValueError):
+    def __init__(self, current):
+        super().__init__('Client view revision changed')
+        self.current = current
+
+
+def _current_view_snapshot(row):
+    if row is None:
+        return empty_view()
+    return dict(
+        active_card=row['active_card'],
+        active_tokens=json.loads(row['active_tokens']),
+        revision=row['revision'],
+        cleared=False,
+    )
+
+
 def empty_view(browser_imported=None):
     result = dict(active_card=1, active_tokens=[], revision=0, cleared=False)
     return with_import_flag(result, browser_imported)
@@ -68,10 +85,10 @@ def write_view(connection, zid, client, active_card, tokens, expected=None, now=
     client = client_identity(client)
     _require_expected_revision(expected)
     active_card, serialized = checked_view(connection, zid, active_card, tokens)
-    row = connection.execute('SELECT revision FROM client_view_state WHERE session_zid=? AND client_id=?', (zid, client)).fetchone()
+    row = fetch_view_row(connection, zid, client)
     revision = row['revision'] if row else 0
     if expected is not None and expected != revision:
-        raise ValueError('Client view revision changed')
+        raise ClientViewConflict(_current_view_snapshot(row))
     stamp = int(time.time() if now is None else now)
     connection.execute('INSERT INTO client_view_state(session_zid,client_id,active_card,active_tokens,revision,touched_at) '
         'VALUES(?,?,?,?,1,?) ON CONFLICT(session_zid,client_id) DO UPDATE SET active_card=excluded.active_card,'

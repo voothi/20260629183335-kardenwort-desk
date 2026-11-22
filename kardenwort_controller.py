@@ -11,6 +11,7 @@ import kardenwort_desk as _desk_module
 import kardenwort_enrichment as _enrichment_core
 from kardenwort_db import QueryExecutionError
 import kardenwort_reword as reword
+from kardenwort_client_views import ClientViewConflict
 from kardenwort_state_http import STATE_ROUTES, dispatch_state, set_language
 from kardenwort_sqlite_preferences import PreferenceConflict
 from kardenwort_state_runtime import refresh_preferences, preference_store
@@ -4322,7 +4323,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if not getattr(self.server, 'ui_cfg', None):
                 self.server.ui_cfg = resolve_ui_config(self.server.config)
             result = dispatch_state(self.server, path, method, body)
-        except PreferenceConflict as error:
+        except (PreferenceConflict, ClientViewConflict) as error:
             self._send_json(409, dict(ok=False, error_code='ROW_STALE', current=error.current))
             return
         except ValueError as error:
