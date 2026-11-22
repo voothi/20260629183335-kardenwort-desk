@@ -424,3 +424,60 @@ def test_view_writer_escalation_revalidates_against_dispose_and_set_races(prefer
     finally:
         cv.inspect_view = orig_inspect
 
+
+def test_stale_client_view_revision_returns_409_row_stale_with_current_state(preference_world):
+    url, server, path = preference_world
+    seed(server)
+    snapshot(url)
+    client = 'd' * 32
+    focus = [dict(sentence_idx=1, token_order=0, visual_idx=1, atomic_id=0, row_ids=[0], lemma='Haus')]
+
+    # Missing row with non-zero expected_revision returns 409 ROW_STALE with empty current view.
+    status, empty_conflict = post(url, '/api/v1/client-view', dict(
+        session_zid=ZID, client_id=client, active_card=2, active_tokens=focus, expected_revision=1,
+    ))
+    assert status == 409, empty_conflict
+    empty_payload = data(empty_conflict)
+    assert empty_payload['ok'] is False
+    assert empty_payload['error_code'] == 'ROW_STALE'
+    assert empty_payload['current'] == dict(active_card=1, active_tokens=[], revision=0, cleared=False)
+
+    # Create revision 1, then advance to revision 2.
+    status, created = post(url, '/api/v1/client-view', dict(
+        session_zid=ZID, client_id=client, active_card=2, active_tokens=focus, expected_revision=0,
+    ))
+    assert status == 200 and data(created)['revision'] == 1, created
+    status, updated = post(url, '/api/v1/client-view', dict(
+        session_zid=ZID, client_id=client, active_card=3, active_tokens=[], expected_revision=1,
+    ))
+    assert status == 200 and data(updated)['revision'] == 2, updated
+
+    # Posting stale expected_revision=1 returns 409 ROW_STALE with current revision 2 view.
+    status, conflict = post(url, '/api/v1/client-view', dict(
+        session_zid=ZID, client_id=client, active_card=1, active_tokens=focus, expected_revision=1,
+    ))
+    assert status == 409, conflict
+    conflict_payload = data(conflict)
+    assert conflict_payload['ok'] is False
+    assert conflict_payload['error_code'] == 'ROW_STALE'
+    assert conflict_payload['current'] == dict(active_card=3, active_tokens=[], revision=2, cleared=False)
+
+    # Persisted SQLite view remains unmodified at revision 2.
+    status, current = post(url, '/api/v1/client-view', dict(session_zid=ZID, client_id=client))
+    assert status == 200
+    assert data(current)['active_card'] == 3
+    assert data(current)['active_tokens'] == []
+    assert data(current)['revision'] == 2
+
+    # Genuine malformed payloads continue returning HTTP 400 INVALID_PAYLOAD.
+    for bad_body in (
+        dict(session_zid=ZID, client_id=client, active_card=0, active_tokens=[], expected_revision=2),
+        dict(session_zid=ZID, client_id=client, active_card=2, active_tokens=[], expected_revision=-1),
+        dict(session_zid=ZID, client_id=client, active_card=2, active_tokens=[], expected_revision='2'),
+        dict(session_zid=ZID, client_id=client, active_card=2, active_tokens=[dict(sentence_idx=1, token_order=999)], expected_revision=2),
+    ):
+        bad_status, bad_result = post(url, '/api/v1/client-view', bad_body)
+        assert bad_status == 400, (bad_body, bad_result)
+        assert data(bad_result)['error_code'] == 'INVALID_PAYLOAD', bad_result
+
+

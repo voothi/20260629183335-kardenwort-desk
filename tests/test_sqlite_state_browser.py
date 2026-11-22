@@ -9,6 +9,7 @@ from playwright.sync_api import expect
 import kardenwort_desk as desk
 from kardenwort_state_http import config_snapshot
 from scripts.benchmark_release_interactions import render_fixture, payload, HEADERS, ZID
+from tests.test_preference_acknowledgments import preference_page  # noqa: F401
 from tests.test_preference_commands import preference_world  # noqa: F401
 from tests.test_release_boundary_contracts import post, data
 
@@ -204,3 +205,146 @@ def test_client_slot_uses_available_crypto_in_non_secure_document(page):
     assert re.fullmatch(r'#kw-client=[0-9a-f]{32}',first)
     page.evaluate("SqliteState.create({ui:{state_authority:'sqlite'}})")
     assert page.evaluate('location.hash') != first
+
+
+@pytest.mark.parametrize('key,button,field,active_class', [
+    ('highlight_same_lemma', 'kw-btn-same-lemma', 'highlightSameLemma', 'active'),
+    ('filter_selected_only', 'kw-btn-filter-selected', 'filterSelectedOnly', 'btn-filter-active'),
+])
+def test_409_preference_retry_submits_intended_value_and_resumes_sse(
+    preference_page, key, button, field, active_class
+):
+    from kardenwort_state_runtime import preference_store
+    from tests.test_release_state_convergence import observe_preferences, remote_write
+
+    page, path, held, server = preference_page
+    observe_preferences(page)
+    control = page.locator('#' + button)
+
+    # User toggles false -> true; independent writer advances revision before commit.
+    with page.expect_request(lambda req: req.url.endswith('/api/v1/config') and req.method == 'POST'):
+        control.click()
+    remote_write(page, key, True, 0)
+    remote_write(page, key, False, 1)
+
+    first = held.pop(0)
+    first_resp = first.fetch()
+    assert first_resp.status == 409
+    first.fulfill(response=first_resp)
+
+    expect(control).to_have_attribute('data-preference-state', 'failed')
+    assert page.evaluate('field => AppState[field]', field) is True
+
+    # Newer SSE committed revisions arrive while intent is unresolved:
+    # metadata advances monotonically without discarding unresolved intent.
+    remote_write(page, key, True, 2)
+    remote_write(page, key, False, 3)
+    expect(control).to_have_attribute('data-preference-state', 'failed')
+    assert page.evaluate('field => AppState[field]', field) is True
+
+    # Clicking the failed button retries the user's intended boolean ('true')
+    # against the latest SSE committed revision (4), NOT the inverted boolean.
+    with page.expect_request(lambda req: req.url.endswith('/api/v1/config') and req.method == 'POST'):
+        control.click()
+    expect(control).to_have_attribute('data-preference-state', 'pending')
+    retry = held.pop(0)
+    assert retry.request.post_data_json['value'] == 'true', retry.request.post_data_json
+    assert retry.request.post_data_json['expected_revision'] == 4, retry.request.post_data_json
+    retry.fulfill(response=retry.fetch())
+
+    expect(control).to_have_attribute('data-preference-state', 'saved')
+    page.evaluate('flushPendingSaves()')
+    assert page.evaluate('field => AppState[field]', field) is True
+    assert preference_store(server.config, server.resolved_paths).get(key) is True
+    assert preference_store(server.config, server.resolved_paths).snapshot()['revisions'][key] == 5
+
+    # Once settled, cross-tab SSE broadcasts converge normally.
+    remote_write(page, key, False, 5)
+    assert page.evaluate('field => AppState[field]', field) is False
+    expect(control).not_to_have_class(re.compile(r'\b' + active_class + r'\b'))
+
+    # A new click after settlement behaves as a normal toggle (false -> true).
+    with page.expect_request(lambda req: req.url.endswith('/api/v1/config') and req.method == 'POST'):
+        control.click()
+    expect(control).to_have_attribute('data-preference-state', 'pending')
+    follow_up = held.pop(0)
+    assert follow_up.request.post_data_json['value'] == 'true'
+    assert follow_up.request.post_data_json['expected_revision'] == 6
+    follow_up.fulfill(response=follow_up.fetch())
+    expect(control).to_have_attribute('data-preference-state', 'saved')
+    assert preference_store(server.config, server.resolved_paths).get(key) is True
+
+
+@pytest.mark.parametrize('key,button,field,setter', [
+    ('highlight_same_lemma', 'kw-btn-same-lemma', 'highlightSameLemma', 'setHighlightSameLemma'),
+    ('filter_selected_only', 'kw-btn-filter-selected', 'filterSelectedOnly', 'setFilterSelectedOnly'),
+])
+def test_409_explicit_reconciliation_and_newer_generation_isolation(
+    preference_page, key, button, field, setter
+):
+    from kardenwort_state_runtime import preference_store
+    from tests.test_release_state_convergence import observe_preferences, remote_write
+
+    page, path, held, server = preference_page
+    observe_preferences(page)
+    control = page.locator('#' + button)
+
+    # Part A: older 409 response must never clobber a newer in-flight generation.
+    with page.expect_request(lambda req: req.url.endswith('/api/v1/config') and req.method == 'POST'):
+        control.click()  # gen 1: true
+    expect(control).to_have_attribute('data-preference-state', 'pending')
+    remote_write(page, key, True, 0)
+    remote_write(page, key, False, 1)
+    control.click()  # gen 2: false (queued while gen 1 is in flight)
+    assert len(held) == 1
+
+    gen1 = held.pop(0)
+    gen1_resp = gen1.fetch()
+    assert gen1_resp.status == 409
+    with page.expect_request(lambda req: req.url.endswith('/api/v1/config') and req.method == 'POST'):
+        gen1.fulfill(response=gen1_resp)
+
+    expect(control).to_have_attribute('data-preference-state', 'pending')
+    assert page.evaluate('field => AppState[field]', field) is False
+    gen2 = held.pop(0)
+    assert gen2.request.post_data_json['value'] == 'false'
+    assert gen2.request.post_data_json['expected_revision'] == 2
+    gen2.fulfill(response=gen2.fetch())
+    expect(control).to_have_attribute('data-preference-state', 'saved')
+    assert preference_store(server.config, server.resolved_paths).snapshot()['revisions'][key] == 3
+
+    # Part B: explicit reconciliation to committed value settles intent and resumes SSE without retry loop.
+    with page.expect_request(lambda req: req.url.endswith('/api/v1/config') and req.method == 'POST'):
+        control.click()  # gen 3: true against rev 3
+    expect(control).to_have_attribute('data-preference-state', 'pending')
+    remote_write(page, key, True, 3)
+    remote_write(page, key, False, 4)
+    gen3 = held.pop(0)
+    gen3_resp = gen3.fetch()
+    assert gen3_resp.status == 409
+    gen3.fulfill(response=gen3_resp)
+    expect(control).to_have_attribute('data-preference-state', 'failed')
+    assert page.evaluate('field => AppState[field]', field) is True
+
+    # SSE arrives while unresolved (rev 6 = false): metadata advances, unresolved intent retained.
+    remote_write(page, key, False, 5)
+    expect(control).to_have_attribute('data-preference-state', 'failed')
+    assert page.evaluate('field => AppState[field]', field) is True
+
+    # User explicitly chooses committed value (false): settles without automatic retry loop.
+    with page.expect_request(lambda req: req.url.endswith('/api/v1/config') and req.method == 'POST'):
+        page.evaluate('setter => window[setter](false)', setter)
+    expect(control).to_have_attribute('data-preference-state', 'pending')
+    reconcile = held.pop(0)
+    assert reconcile.request.post_data_json['value'] == 'false'
+    assert reconcile.request.post_data_json['expected_revision'] == 6
+    reconcile.fulfill(response=reconcile.fetch())
+    expect(control).to_have_attribute('data-preference-state', 'saved')
+    page.evaluate('flushPendingSaves()')
+    assert held == []
+    assert page.evaluate('field => AppState[field]', field) is False
+
+    # Subsequent SSE broadcast projects normally now that intent is settled.
+    remote_write(page, key, True, 7)
+    assert page.evaluate('field => AppState[field]', field) is True
+
