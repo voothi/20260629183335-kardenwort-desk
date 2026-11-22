@@ -91,8 +91,9 @@ def test_3_1_sink1_multiline_ass_nonword_token_is_inert_and_exact(browser, tmp_p
     source_text = f"Das Haus {ass_payload} ist alt."
     zid = "20261119103101"
     tsv = tmp_path / f"{zid}-ass.de.tsv"
+    tsv_sent = source_text.replace("\n", " ")
     tsv.write_text(
-        "\t".join(HEADERS) + "\n" + "\t".join(["0", "Haus", "Haus", "1", source_text, "house", "house", "0"]) + "\n",
+        "\t".join(HEADERS) + "\n" + "\t".join(["0", "Haus", "Haus", "1", tsv_sent, "house", "house", "0"]) + "\n",
         encoding="utf-8",
     )
 

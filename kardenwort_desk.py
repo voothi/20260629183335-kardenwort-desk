@@ -10476,10 +10476,12 @@ def render_verify_language_html(
     is_light = theme in ("light", "white")
     theme_class = "theme-light" if is_light else "theme-dark"
 
-    verify_token_json = serialize_json_island({"api_token": str(api_token or "")})
-    zid_json = json.dumps(zid)
-    det_code_json = json.dumps(det_code)
-    exp_code_json = json.dumps(exp_code)
+    verify_bootstrap_json = serialize_json_island({
+        "session_zid": str(zid or ""),
+        "api_token": str(api_token or ""),
+        "detected_language": str(det_code or ""),
+        "expected_language": str(exp_code or ""),
+    })
 
     default_selected = det_code if det_code in ("en", "de") else "und"
     if det_code and det_code not in ("en", "de"):
@@ -10625,9 +10627,9 @@ body {{
 <body class="{theme_class}">
 <div class="kw-verify-card" id="kw-lang-modal">
     <div class="kw-verify-title" id="kw-lang-modal-title">Language Verification</div>
-    <div class="kw-verify-body" id="kw-lang-modal-body">{prompt_text}</div>
+    <div class="kw-verify-body" id="kw-lang-modal-body">{html.escape(prompt_text)}</div>
     <select id="kw-verify-lang-select" class="kw-select">
-        <option value="und"{' selected="selected"' if default_selected == "und" else ""}>{und_label}</option>
+        <option value="und"{' selected="selected"' if default_selected == "und" else ""}>{html.escape(und_label)}</option>
         <option value="en"{' selected="selected"' if default_selected == "en" else ""}>English (en)</option>
         <option value="de"{' selected="selected"' if default_selected == "de" else ""}>Deutsch (de)</option>
     </select>
@@ -10640,20 +10642,21 @@ body {{
     </div>
     <div id="kw-status-msg" class="kw-status-msg"></div>
 </div>
-<script id="verify-language-bootstrap" type="application/json">{verify_token_json}</script>
+<script id="verify-language-bootstrap" type="application/json">{verify_bootstrap_json}</script>
 <script>
-const sessionZid = {zid_json};
-const apiToken = (function() {{
+const verifyBootstrap = (function() {{
     const el = document.getElementById('verify-language-bootstrap');
-    if (!el) return '';
+    if (!el) return {{}};
     try {{
-        return (JSON.parse(el.textContent || '{{}}').api_token) || '';
+        return JSON.parse(el.textContent || '{{}}') || {{}};
     }} catch (_e) {{
-        return '';
+        return {{}};
     }}
 }})();
-const detCode = {det_code_json};
-const expCode = {exp_code_json};
+const sessionZid = verifyBootstrap.session_zid || '';
+const apiToken = verifyBootstrap.api_token || '';
+const detCode = verifyBootstrap.detected_language || '';
+const expCode = verifyBootstrap.expected_language || '';
 let submitted = false;
 
 function setButtonsDisabled(disabled) {{
@@ -12426,7 +12429,7 @@ html, body {{
                 delim_span = f'<br data-sentence-idx="{tok_sent_idx}">'
                 current_a_idx += 1
             elif "\n" in tok_text or "\r" in tok_text:
-                normalized = tok_text.replace("\r\n", "\n").replace("\r", "\n")
+                normalized = text_escaped.replace("\r\n", "\n").replace("\r", "\n")
                 parts = normalized.split("\n")
                 current_a_idx += len(parts) - 1
                 delim_span = f'<span class="sentence-delimiter" data-sentence-idx="{tok_sent_idx}">' + "<br>".join(parts) + '</span>'
@@ -13974,13 +13977,13 @@ def render_section(token, ctx):
         if h_text == '__default__':
             h_text = default_text
         if h_text:
-            return f"<h3>{h_text}</h3>\n"
+            return f"<h3>{html.escape(h_text)}</h3>\n"
         return ""
 
     if token == "source":
         heading = make_heading("source", "Source Text")
         normalized_text = normalize_blank_lines(ctx["text"])
-        safe_text = normalized_text.replace('\r', '')
+        safe_text = html.escape(normalized_text.replace('\r', ''))
         html_output += f'<section class="kw-section source-section" id="source-section">{heading}<div class="kw-source-text source-text" id="source-container">{safe_text}</div></section>\n'
 
     elif token == "translation":
@@ -14265,6 +14268,15 @@ def get_web_index_html(reload=False):
     return read_required_asset(Path(__file__).resolve().parent / "web" / "index.html")
 
 
+_SUPPORTED_SHELL_THEMES = frozenset(("dark", "light", "white", "compact"))
+
+
+def _sanitize_shell_theme(theme, default: str = "compact") -> str:
+    raw = str(theme or "").strip().lower()
+    validated = raw if raw in _SUPPORTED_SHELL_THEMES else default
+    return html.escape(validated, quote=True)
+
+
 def render_declarative_web_shell(
     bootstrap_payload,
     theme="compact",
@@ -14293,7 +14305,9 @@ def render_declarative_web_shell(
     if favicon_href:
         base_html = re.sub(r'<link\s+rel=["\']icon["\'][^>]*>', f'<link rel="icon" type="image/x-icon" href="{favicon_href}">', base_html)
 
-    base_html = base_html.replace('<body>', f'<body class="theme-{theme}{dock_body_class}">')
+    safe_theme = _sanitize_shell_theme(theme, default="compact")
+    safe_dock_class = html.escape(str(dock_body_class or ""), quote=True)
+    base_html = base_html.replace('<body>', f'<body class="theme-{safe_theme}{safe_dock_class}">')
 
     # Configurable Zoom (Task 3.1)
     eff_zoom = zoom_level or bootstrap_payload.get("zoom_level", "100")
@@ -14623,7 +14637,7 @@ def render_declarative_web_shell(
         if combined_css:
             base_html = re.sub(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
             base_html = base_html.replace('</head>', f'<style id="modular-css">\n{combined_css}\n</style>\n<style id="hl-mvp-style"></style>\n</head>')
-        base_html = base_html.replace('</head>', theme_style(bootstrap_payload.get("theme_colors", {}), theme) + '</head>')
+        base_html = base_html.replace('</head>', theme_style(bootstrap_payload.get("theme_colors", {}), safe_theme) + '</head>')
 
     # Inlined modular component scripts for offline WebView2 execution (Task 1.3)
     for script_rel in (
@@ -14765,7 +14779,8 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     base_html = raw_template
 
     # Inject theme class into <body>
-    base_html = base_html.replace('<body>', f'<body class="theme-{theme}">')
+    safe_theme = _sanitize_shell_theme(theme, default="compact")
+    base_html = base_html.replace('<body>', f'<body class="theme-{safe_theme}">')
 
     # Replace title
     base_html = re.sub(r'<title>.*?</title>', '<title>Kardenwort Lookup</title>', base_html)
@@ -14888,7 +14903,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             else:
                 base_html = re.sub(r'<h3>Source Text</h3>\s*', '', base_html)
             normalized_text = normalize_blank_lines(ctx["text"])
-            safe_text = normalized_text.replace('\r', '')
+            safe_text = html.escape(normalized_text.replace('\r', ''))
             base_html = base_html.replace('<!-- SOURCE_TEXT -->', safe_text)
 
         # 4. Translation Section Slot (Task 2.7, 2.8, R33, R44)
@@ -14961,7 +14976,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             # Strip external /css/ link tags to prevent 404 errors in offline/GoldenDict mode
             base_html = re.sub(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
             base_html = base_html.replace('</head>', f'<style id="modular-css">\n{combined_css}\n</style>\n</head>')
-        base_html = base_html.replace('</head>', theme_style(resolve_theme_colors(config, theme), theme) + '</head>')
+        base_html = base_html.replace('</head>', theme_style(resolve_theme_colors(config, safe_theme), safe_theme) + '</head>')
 
     # Strip external /favicon.ico to prevent 404s in standalone/GoldenDict mode
     base_html = re.sub(r'<link\b[^>]*\bhref=["\'][^"\']*favicon\.ico["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
