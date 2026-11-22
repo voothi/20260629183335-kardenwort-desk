@@ -495,7 +495,8 @@ def test_phase3_concurrent_live_event_prevents_stale_read_overwrite(page, tmp_pa
     page.route("**/internal/selection", hold_read)
     page.evaluate("window.__selectionReadHeld = false")
 
-    # Trigger recovery via SSEBridge connect
+    # Trigger recovery via SSEBridge disconnect + connect
+    page.evaluate("SSEBridge.disconnect()")
     page.evaluate(f"() => SSEBridge.connect('{zid}', '{url}')")
     page.wait_for_function("window.__selectionReadHeld", timeout=2500)
     assert len(held_reads) >= 1
