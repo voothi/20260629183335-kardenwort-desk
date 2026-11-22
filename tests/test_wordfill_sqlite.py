@@ -621,3 +621,149 @@ def test_progressive_wordfill_persists_all_fields_via_custom_roles_and_exact_coo
     assert sents[1]["sentence_destination"] == "Дом."
     assert sents[2]["sentence_destination"] == "Яблоко."
 
+
+def test_controller_progressive_wordfill_persists_word_provenance_across_reload(tmp_path, monkeypatch):
+    """Controller progressive wordfill persists word_provenance in SQLite, preserves untouched rows, and avoids fabricated provenance."""
+    import configparser
+    import kardenwort_controller as controller
+    import kardenwort_reword as reword
+    from kardenwort_controller import SessionArbiter, format_storage_update_rows
+    from kardenwort_desk import SqliteStorageAdapter
+
+    db_file = tmp_path / "wordfill_provenance_reload.db"
+    cfg = configparser.ConfigParser()
+    cfg.add_section("storage")
+    cfg.set("storage", "backend", "sqlite")
+    cfg.set("storage", "sqlite_db_path", str(db_file))
+    cfg.add_section("settings")
+    cfg.set("settings", "default_language", "de")
+    cfg.set("settings", "default_target_language", "ru")
+    cfg.add_section("triggers")
+    cfg.set("triggers", "run_text_translation", "manual")
+    cfg.set("triggers", "run_lemma_base_translation", "auto")
+    cfg.set("triggers", "run_lemma_enrichment", "manual")
+
+    mapping_file = tmp_path / "anki-mapping.ini"
+    mapping_file.write_text(
+        "[fields]\nTokenOrder\nQuotation\nWordSource\nWordDestination\nWordSourceIPA\nWordSourceMorphologyAI\nWordSourcePOS\nWordSourceGender\nSentenceSourceIndex\nSentenceSource\nSentenceDestination\n"
+        "[roles]\nlemma=WordSource\nword_translation=WordDestination\nipa=WordSourceIPA\nmorphology=WordSourceMorphologyAI\npos=WordSourcePOS\ngender=WordSourceGender\nsentence_index=SentenceSourceIndex\nsentence_source=SentenceSource\nsentence_destination=SentenceDestination\n",
+        encoding="utf-8",
+    )
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    resolved_paths = {
+        "storage_backend": "sqlite",
+        "sqlite_db_path": str(db_file),
+        "anki_mapping_file": str(mapping_file),
+        "results_dir": results_dir,
+        "kardenwort_workspace": str(tmp_path),
+    }
+
+    mig_dir = Path(__file__).resolve().parent.parent / "schemas" / "migrations"
+    db = KardenwortDB(db_path=db_file, migrations_dir=mig_dir)
+    db.run_migrations()
+
+    # Corpus session supplying full lexical enrichment for Apfel and Haus
+    db.save_session_bundle(
+        {"zid": "20261119102731", "slug": "wf-prov-corpus", "source_language": "de", "target_language": "ru", "text_mode": "single", "source_raw_text": "Haus. Apfel."},
+        [{"session_zid": "20261119102731", "sentence_index": 1, "sentence_source": "Haus. Apfel.", "sentence_destination": "Дом. Яблоко."}],
+        [
+            {"session_zid": "20261119102731", "sentence_index": 1, "token_order": 0, "quotation": "Haus", "lemma": "Haus",
+             "word_destination": "корпусный дом", "ipa": "haʊ̯s", "morphology": "Subst.Neut.Nom.Sg", "pos": "NOUN", "gender": "n", "selected": 1},
+            {"session_zid": "20261119102731", "sentence_index": 1, "token_order": 1, "quotation": "Apfel", "lemma": "Apfel",
+             "word_destination": "яблоко", "ipa": "ˈapfəl", "morphology": "Subst.Masc.Nom.Sg", "pos": "NOUN", "gender": "m", "selected": 1},
+        ],
+    )
+
+    # Target session:
+    # - (1, 0) Haus already translated with live:deepl provenance (must remain untouched)
+    # - (2, 0) Apfel empty (matched by wordfill corpus -> must persist corpus:wordfill)
+    # - (2, 1) Unbekannt empty and absent from corpus (must not get fabricated provenance)
+    target_zid = "20261119102732"
+    db.save_session_bundle(
+        {"zid": target_zid, "slug": "wf-prov-target", "source_language": "de", "target_language": "ru", "text_mode": "single", "source_raw_text": "Das Haus. Der Apfel Unbekannt."},
+        [
+            {"session_zid": target_zid, "sentence_index": 1, "sentence_source": "Das Haus.", "sentence_destination": "Дом."},
+            {"session_zid": target_zid, "sentence_index": 2, "sentence_source": "Der Apfel Unbekannt.", "sentence_destination": "Яблоко Неизвестно."},
+        ],
+        [
+            {"session_zid": target_zid, "sentence_index": 1, "token_order": 0, "quotation": "Haus", "lemma": "Haus",
+             "word_destination": "дом", "ipa": None, "morphology": None, "word_provenance": "live:deepl", "selected": 1},
+            {"session_zid": target_zid, "sentence_index": 2, "token_order": 0, "quotation": "Apfel", "lemma": "Apfel",
+             "word_destination": "", "ipa": None, "morphology": None, "pos": None, "gender": None, "word_provenance": None, "selected": 0},
+            {"session_zid": target_zid, "sentence_index": 2, "token_order": 1, "quotation": "Unbekannt", "lemma": "Unbekannt",
+             "word_destination": "", "ipa": None, "morphology": None, "pos": None, "gender": None, "word_provenance": None, "selected": 0},
+        ],
+    )
+
+    fast_path_calls = []
+
+    def _offline_fast_path(lemmas, *args, **kwargs):
+        fast_path_calls.append(list(lemmas))
+        raise RuntimeError("offline provider in wordfill provenance test")
+
+    monkeypatch.setattr(controller, "translate_lemmas_fast_path", _offline_fast_path)
+
+    wf_cfg = {
+        "enabled": True,
+        "db": db,
+        "sqlite_db_path": db_file,
+        "storage_backend": "sqlite",
+        "scan_roots": [tmp_path / "empty"],
+        "target_quality": "full",
+        "target_fallback": True,
+        "scan_match_language": True,
+    }
+    arbiter = SessionArbiter(config=cfg, resolved_paths=resolved_paths, wordfill_cfg=wf_cfg)
+    try:
+        arbiter.enrichment_queue._execute_progressive_task(target_zid, arbiter, "de", "ru", skip_intellifiller=True)
+    finally:
+        arbiter.enrichment_queue.shutdown()
+        desk.unregister_failover_callback(arbiter._on_global_failover)
+
+    # Confirm Apfel was served by wordfill and only Unbekannt fell through to live lemma translation
+    assert fast_path_calls == [["Unbekannt"]]
+
+    # 1. Direct real-SQLite readback after reopening DB
+    reopened = KardenwortDB(db_path=db_file, migrations_dir=mig_dir)
+    by_coord = {(w["sentence_index"], w["token_order"]): w for w in reopened.get_words_by_session(target_zid)}
+
+    apfel = by_coord[(2, 0)]
+    assert apfel["word_destination"] == "яблоко"
+    assert apfel["ipa"] == "ˈapfəl"
+    assert apfel["morphology"] == "Subst.Masc.Nom.Sg"
+    assert apfel["pos"] == "NOUN"
+    assert apfel["gender"] == "m"
+    assert apfel["word_provenance"] == "corpus:wordfill"
+
+    haus = by_coord[(1, 0)]
+    assert haus["word_destination"] == "дом"
+    assert haus["word_provenance"] == "live:deepl"
+
+    unbekannt = by_coord[(2, 1)]
+    assert not (unbekannt.get("word_destination") or "").strip()
+    assert not unbekannt.get("word_provenance")
+
+    # 2. Cold restore_session + cold status projection
+    cold_adapter = SqliteStorageAdapter(config=cfg, resolved_paths=resolved_paths)
+    restored = cold_adapter.restore_session(target_zid)
+    restored_words = {(w["sentence_index"], w["token_order"]): w for w in restored["words"]}
+    assert restored_words[(2, 0)]["word_provenance"] == "corpus:wordfill"
+    assert restored_words[(1, 0)]["word_provenance"] == "live:deepl"
+    assert not restored_words[(2, 1)].get("word_provenance")
+
+    restored_headers, restored_rows = reword.restored_manifest_rows(restored)
+    mapping = desk.load_anki_mapping(mapping_file)
+    role_fields = desk.get_role_fields(mapping, restored_headers)
+    projected = format_storage_update_rows(cold_adapter, target_zid, restored_rows, restored_headers, role_fields, {})
+    by_projected_coord = {
+        (row["sentence_idx"], row["token_order"]): row
+        for key, row in projected.items()
+        if isinstance(key, int)
+    }
+    assert by_projected_coord[("2", "0")]["trans"] == "яблоко"
+    assert by_projected_coord[("2", "0")].get("provenance") == "corpus:wordfill"
+    assert by_projected_coord[("1", "0")].get("provenance") == "live:deepl"
+    assert not by_projected_coord[("2", "1")].get("provenance")
+
+
