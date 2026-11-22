@@ -503,7 +503,10 @@
             setStatusMessage('Export failed: ' + (err && err.message ? err.message : String(err)), true);
             return;
         }
-        var btn = (document.getElementById('kw-export-btn'));
+        var btn = document.getElementById('kw-btn-export') || document.getElementById('kw-export-btn');
+        var settleExportButton = function () {
+            if (btn) btn.disabled = false;
+        };
         if (btn) btn.disabled = true;
         setStatusMessage('Exporting...', false);
 
@@ -526,10 +529,12 @@
             body: JSON.stringify(payload)
         })
         .then(function (res) {
-            if (btn) btn.disabled = false;
+            settleExportButton();
             if (!res.ok) {
                 return res.json().then(function (data) {
-                    setStatusMessage('Export failed: ' + (data.message || res.statusText), true);
+                    setStatusMessage('Export failed: ' + ((data && data.message) || res.statusText), true);
+                }, function () {
+                    setStatusMessage('Export failed: ' + (res.statusText || String(res.status)), true);
                 });
             }
             return res.json().then(function () {
@@ -538,7 +543,7 @@
             });
         })
         .catch(function () {
-            if (btn) btn.disabled = false;
+            settleExportButton();
             setStatusMessage('Offline (export failed)', true);
         });
     };
