@@ -153,7 +153,7 @@ def flush_microtasks(page):
 
 def test_active_audio_playback_past_75s_is_not_aborted(audio_page):
     page = audio_page
-    page.clock.install()
+    page.clock.pause_at('2026-01-01T00:00:00Z')
     page.evaluate("player.play('long sentence', 'de')")
     resolve_audio(page, 0)
     flush_microtasks(page)
@@ -172,7 +172,7 @@ def test_active_audio_playback_past_75s_is_not_aborted(audio_page):
 
 def test_chained_segments_reset_fetch_timeout_per_segment_and_survive_past_75s(audio_page):
     page = audio_page
-    page.clock.install()
+    page.clock.pause_at('2026-01-01T00:00:00Z')
     page.evaluate("player.play('eins ||| zwei ||| drei', 'de')")
     for idx, (fetch_ms, play_ms) in enumerate([(50000, 40000), (50000, 40000), (10000, 10000)]):
         assert page.evaluate('requests.length') == idx + 1
@@ -194,7 +194,7 @@ def test_chained_segments_reset_fetch_timeout_per_segment_and_survive_past_75s(a
 
 def test_chained_later_segment_hung_fetch_aborts_after_own_75s_window(audio_page):
     page = audio_page
-    page.clock.install()
+    page.clock.pause_at('2026-01-01T00:00:00Z')
     page.evaluate("player.play('eins ||| zwei', 'de')")
     page.clock.fast_forward(30000)
     resolve_audio(page, 0)
@@ -217,7 +217,7 @@ def test_chained_later_segment_hung_fetch_aborts_after_own_75s_window(audio_page
 
 def test_new_playback_cancels_prior_timer_and_completes_past_75s(audio_page):
     page = audio_page
-    page.clock.install()
+    page.clock.pause_at('2026-01-01T00:00:00Z')
     page.evaluate("player.play('old', 'de')")
     page.clock.fast_forward(50000)
     page.evaluate("player.play('new', 'de')")
