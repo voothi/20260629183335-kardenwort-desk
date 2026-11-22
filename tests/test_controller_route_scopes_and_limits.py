@@ -1,6 +1,7 @@
 """Real HTTP tests for controller route preference scopes, error mapping, and body limits."""
 from concurrent.futures import ThreadPoolExecutor
 import json
+import sqlite3
 import threading
 from types import SimpleNamespace
 from urllib.error import HTTPError
@@ -365,3 +366,89 @@ def test_render_alias_retains_legacy_tsv_backend_without_sqlite_file(tmp_path):
         assert 'theme-light' in html.split('<body', 1)[1].split('>', 1)[0]
         assert 'zoom: 115%' in html
         assert not server.resolved_paths['sqlite_db_path'].exists()
+
+
+@pytest.mark.parametrize('bad_lang', ['english', '123'])
+def test_confirm_language_invalid_language_returns_400_without_committing(scope_world, monkeypatch, bad_lang):
+    url, server, _ = scope_world
+    store = preference_store(server.config, server.resolved_paths)
+    before_snapshot = store.snapshot()
+    host_calls = []
+    monkeypatch.setattr(controller, 'spawn_ahk', lambda *args, **kwargs: host_calls.append(args))
+    monkeypatch.setattr(controller.webbrowser, 'open_new_tab', lambda *args, **kwargs: True)
+    monkeypatch.setattr(controller, 'run_render_flow', lambda *args, **kwargs: ('<html><body>ok</body></html>', []))
+
+    draft_zid = '20261122172001'
+    draft = {'text': 'Hello world.', 'language': 'de', 'text_mode': 'single'}
+    with controller._DRAFT_SESSIONS_LOCK:
+        controller._DRAFT_SESSIONS[draft_zid] = draft
+    try:
+        # Auth control: unauthenticated request still rejected before validation.
+        unauth_status, _ = _http_request(
+            url, '/api/v1/confirm-language', method='POST',
+            body={'session_zid': draft_zid, 'action': 'process', 'chosen_source_lang': bad_lang},
+            token='wrong',
+        )
+        assert unauth_status == 403
+
+        status, body = _http_request(
+            url, '/api/v1/confirm-language', method='POST',
+            body={'session_zid': draft_zid, 'action': 'process', 'chosen_source_lang': bad_lang},
+        )
+        assert status == 400, body
+        assert body['error_code'] == 'INVALID_PAYLOAD'
+        assert store.snapshot() == before_snapshot
+        assert not host_calls
+        with controller._DRAFT_SESSIONS_LOCK:
+            assert controller._DRAFT_SESSIONS.get(draft_zid) == draft
+    finally:
+        with controller._DRAFT_SESSIONS_LOCK:
+            controller._DRAFT_SESSIONS.pop(draft_zid, None)
+
+
+def test_confirm_language_storage_failure_and_valid_controls(scope_world, monkeypatch):
+    url, server, _ = scope_world
+    store = preference_store(server.config, server.resolved_paths)
+    store.db.busy_timeout_ms = 10
+    before_snapshot = store.snapshot()
+    host_calls = []
+    monkeypatch.setattr(controller, 'spawn_ahk', lambda *args, **kwargs: host_calls.append(args))
+    monkeypatch.setattr(controller.webbrowser, 'open_new_tab', lambda *args, **kwargs: True)
+    monkeypatch.setattr(controller, 'run_render_flow', lambda *args, **kwargs: ('<html><body>ok</body></html>', []))
+
+    draft_zid = '20261122172002'
+    draft = {'text': 'Bonjour.', 'language': 'de', 'text_mode': 'single'}
+    with controller._DRAFT_SESSIONS_LOCK:
+        controller._DRAFT_SESSIONS[draft_zid] = draft
+
+    blocker = sqlite3.connect(store.db.db_path, isolation_level=None)
+    try:
+        blocker.execute('BEGIN IMMEDIATE')
+        fail_status, fail_body = _http_request(
+            url, '/api/v1/confirm-language', method='POST',
+            body={'session_zid': draft_zid, 'action': 'process', 'chosen_source_lang': 'fr'},
+        )
+        assert fail_status == 500, fail_body
+        assert fail_body['error_code'] == 'CONFIGURATION_ERROR'
+        assert not host_calls
+        with controller._DRAFT_SESSIONS_LOCK:
+            assert controller._DRAFT_SESSIONS.get(draft_zid) == draft
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+    try:
+        assert store.snapshot() == before_snapshot
+        ok_status, ok_body = _http_request(
+            url, '/api/v1/confirm-language', method='POST',
+            body={'session_zid': draft_zid, 'action': 'process', 'chosen_source_lang': 'fr'},
+        )
+        assert ok_status == 200, ok_body
+        assert _data(ok_body)['language'] == 'fr'
+        assert store.get('default_language') == 'fr'
+        assert len(host_calls) == 1
+        with controller._DRAFT_SESSIONS_LOCK:
+            assert draft_zid not in controller._DRAFT_SESSIONS
+    finally:
+        with controller._DRAFT_SESSIONS_LOCK:
+            controller._DRAFT_SESSIONS.pop(draft_zid, None)
