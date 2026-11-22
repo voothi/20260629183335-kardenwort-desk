@@ -62,7 +62,8 @@ def controlled_event_stream_script():
     window.__sseInstances = [];
     const previousFetch = window.fetch;
     window.fetch = function(url, options) {
-        if (new URL(url, 'http://fixture.invalid').pathname !== '/events') {
+        const pathname = new URL(url, 'http://fixture.invalid').pathname;
+        if (pathname !== '/events' && pathname !== '/api/v1/events') {
             return previousFetch(url, options);
         }
         const connection = {closed:false, failed:false};

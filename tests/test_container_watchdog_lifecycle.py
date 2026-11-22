@@ -300,24 +300,17 @@ def test_resolution_stops_polling_and_closes_sse(page):
     page.evaluate(extract_desk_js())
 
     assert page.evaluate("window._kwSkeletonPollTimer !== null") is True
-    assert page.evaluate("window._kwEvtSource !== null") is True
+    assert page.evaluate("window.SSEBridge.getActiveSource() !== null") is True
 
-    # Deliver terminal finished status
+    # Deliver terminal finished status through shared SSEBridge stream
     page.evaluate("""() => {
-        window.receiveUpdate({
-            stage: "finished",
-            is_finished: true,
-            translatedText: "The house is big.",
-            rows: {
-                "0": { "trans": "house", "token_order": 0 },
-                "1": { "trans": "big", "token_order": 1 }
-            }
-        });
-        if (window._kwEvtSource && window._kwEvtSource.onmessage) {
-            window._kwEvtSource.onmessage({
+        var src = window.SSEBridge.getActiveSource();
+        if (src && src.onmessage) {
+            src.onmessage({
                 data: JSON.stringify({
                     stage: "finished",
                     is_finished: true,
+                    translatedText: "The house is big.",
                     rows: {
                         "0": { "trans": "house", "token_order": 0 },
                         "1": { "trans": "big", "token_order": 1 }
@@ -328,7 +321,8 @@ def test_resolution_stops_polling_and_closes_sse(page):
     }""")
 
     assert page.evaluate("window._kwSkeletonPollTimer === null") is True
-    assert page.evaluate("window._kwEvtSource === null") is True
+    assert page.evaluate("window._kwWatchdogResolved === true") is True
+    assert page.evaluate("window.SSEBridge.getActiveZid() === '20261008172019'") is True
     assert page.evaluate("window.countPendingSkeletons()") == 0
 
 

@@ -543,11 +543,21 @@
         });
     };
 
+    function resolveInitSseToken() {
+        if (typeof window.getApiToken === 'function') return window.getApiToken();
+        if (API_TOKEN && API_TOKEN !== '__API_TOKEN__') return API_TOKEN;
+        if (window.API_TOKEN) return window.API_TOKEN;
+        if (window.AppState && window.AppState.bootstrap && window.AppState.bootstrap.session_data && window.AppState.bootstrap.session_data.api_token) {
+            return window.AppState.bootstrap.session_data.api_token;
+        }
+        return '';
+    }
+
     /** @param {string} sessionZid */
     function initSSE(sessionZid) {
         if (isServerDisabled()) return;
         if (!window.SSEBridge) throw new Error('Required SSE bridge is unavailable');
-        window.SSEBridge.connect(sessionZid, SERVER_URL, getApiToken());
+        return window.SSEBridge.connect(sessionZid, SERVER_URL, resolveInitSseToken());
     }
     window.initSSE = initSSE;
 
@@ -3974,7 +3984,7 @@
             }
             if (!isWebMode || !curZid) return;
 
-            var isRunning = !!(window._kwSkeletonPollTimer || (window._kwEvtSource && window._kwEvtSource.readyState !== 2));
+            var isRunning = Boolean(window._kwSkeletonPollTimer);
             if (isRunning && !window._kwWatchdogResolved) {
                 if (_ensureDebounceTimer) clearTimeout(_ensureDebounceTimer);
                 _ensureDebounceTimer = setTimeout(function() {
@@ -4020,13 +4030,9 @@
                 clearTimeout(window._kwWatchdogMaxTimer);
                 window._kwWatchdogMaxTimer = null;
             }
-            if (window._kwSseSafetyTimer) {
-                clearTimeout(window._kwSseSafetyTimer);
-                window._kwSseSafetyTimer = null;
-            }
-            if (window._kwEvtSource) {
-                try { if (window._kwEvtSource) window._kwEvtSource.close(); } catch(e) { console.debug("[EventSource] Close failed:", e); }
-                window._kwEvtSource = null;
+            if (window._kwWatchdogUnsubscribe) {
+                window._kwWatchdogUnsubscribe();
+                window._kwWatchdogUnsubscribe = null;
             }
 
             var isWebMode = (window.location.protocol !== 'file:') || (document.body && document.body.getAttribute('data-web-mode') === 'true');
@@ -4094,8 +4100,7 @@
                             enterHeartbeatFallback();
                             cleanupOrphanSkeletons();
                         } else {
-                            closeEvtSource();
-                            stopPolling();
+                            stopWatchdogTimers();
                             cleanupOrphanSkeletons();
                         }
                     } else {
@@ -4106,8 +4111,7 @@
                                     enterHeartbeatFallback();
                                     cleanupOrphanSkeletons();
                                 } else {
-                                    closeEvtSource();
-                                    stopPolling();
+                                    stopWatchdogTimers();
                                     cleanupOrphanSkeletons();
                                 }
                             }
@@ -4199,23 +4203,10 @@
 
                                 var isDone = sData ? (sData.is_finished === true || sData.stage === 'finished' || (sData.status && (sData.status.is_finished === true || sData.status === 'finished'))) : false;
                                 if (isDone) {
-                                    resolved = true;
-                                    window._kwWatchdogResolved = true;
-                                    closeEvtSource();
-                                    stopPolling();
-                                    if (window._kwWatchdogMaxTimer) {
-                                        clearTimeout(window._kwWatchdogMaxTimer);
-                                        window._kwWatchdogMaxTimer = null;
-                                    }
                                     if ((sData.rows || sData.translatedText || sData.translated_text || sData.sentences) && window.receiveUpdate) {
                                         window.receiveUpdate(sData);
                                     }
-                                    if (typeof window.normalizeCardSkeletons === 'function') {
-                                        window.normalizeCardSkeletons('finished');
-                                    }
-                                    if (window.onSessionReload) {
-                                        window.onSessionReload();
-                                    }
+                                    completeWatchdog(true);
                                     return;
                                 }
 
@@ -4242,18 +4233,27 @@
                     }
                 };
 
-                var closeEvtSource = function() {
-                    if (window._kwEvtSource) {
-                        try { if (window._kwEvtSource) window._kwEvtSource.close(); } catch(e) { console.debug("[EventSource] Close failed:", e); }
-                        window._kwEvtSource = null;
+                var stopWatchdogTimers = function() {
+                    stopPolling();
+                    if (window._kwWatchdogMaxTimer) {
+                        clearTimeout(window._kwWatchdogMaxTimer);
+                        window._kwWatchdogMaxTimer = null;
                     }
-                    if (window._kwSseSafetyTimer) {
-                        clearTimeout(window._kwSseSafetyTimer);
-                        window._kwSseSafetyTimer = null;
+                    if (window._kwWatchdogUnsubscribe) {
+                        window._kwWatchdogUnsubscribe();
+                        window._kwWatchdogUnsubscribe = null;
                     }
-                    if (window._kwSseReconnectTimer) {
-                        clearTimeout(window._kwSseReconnectTimer);
-                        window._kwSseReconnectTimer = null;
+                };
+
+                var completeWatchdog = function(isDone) {
+                    resolved = true;
+                    window._kwWatchdogResolved = true;
+                    stopWatchdogTimers();
+                    if (isDone && typeof window.normalizeCardSkeletons === 'function') {
+                        window.normalizeCardSkeletons('finished');
+                    }
+                    if (window.onSessionReload) {
+                        window.onSessionReload();
                     }
                 };
 
@@ -4327,20 +4327,7 @@
                                 var remaining = countPendingSkeletons();
                                 var isDone = (data.is_finished === true || data.stage === 'finished' || (data.status && (data.status.is_finished === true || data.status === 'finished' || data.status.stage === 'finished')));
                                 if (isDone || remaining === 0) {
-                                    resolved = true;
-                                    window._kwWatchdogResolved = true;
-                                    if (window._kwWatchdogMaxTimer) {
-                                        clearTimeout(window._kwWatchdogMaxTimer);
-                                        window._kwWatchdogMaxTimer = null;
-                                    }
-                                    closeEvtSource();
-                                    stopPolling();
-                                    if (isDone && typeof window.normalizeCardSkeletons === 'function') {
-                                        window.normalizeCardSkeletons('finished');
-                                    }
-                                    if (window.onSessionReload) {
-                                        window.onSessionReload();
-                                    }
+                                    completeWatchdog(isDone);
                                 }
                             }
                         })
@@ -4410,121 +4397,42 @@
                     startWatchdogPolling();
                 }
 
-                var sseBackoffMs = 1000;
                 var connectSse = /** @param {boolean=} forceReconnect */ function(forceReconnect) {
-                    if (resolved) return;
-                    if (typeof EventSource === 'undefined') return;
-                    if (window._kwEvtSource) {
-                        if (!forceReconnect && window._kwEvtSource.readyState !== 2) {
-                            return;
-                        }
-                        try { if (window._kwEvtSource) window._kwEvtSource.close(); } catch(e) { console.debug("[EventSource] Close failed:", e); }
-                        window._kwEvtSource = null;
-                    }
-                    if (forceReconnect) {
-                        sseBackoffMs = 1000;
-                        if (window._kwSseReconnectTimer) {
-                            clearTimeout(window._kwSseReconnectTimer);
-                            window._kwSseReconnectTimer = null;
-                        }
-                    }
+                    if (resolved || !window.SSEBridge) return;
                     try {
-                        var sseUrl = resolveBackendUrl("/events?zid=" + encodeURIComponent(curZid));
-                        var evtSource = window.SSEBridge.createSource(sseUrl, getApiToken());
-                        window._kwEvtSource = evtSource;
-
-                        if (evtSource.addEventListener) {
-                            evtSource.addEventListener('provider_failover', function(e) {
-                                try {
-                                    var failoverData = JSON.parse(e.data);
-                                    if (failoverData && typeof window.updateActiveProvider === 'function') {
-                                        var tType = failoverData.task_type || failoverData.task;
-                                        var nProv = failoverData.new_provider || failoverData.to || failoverData.provider;
-                                        if (nProv) {
-                                            window.updateActiveProvider(tType, nProv);
-                                        }
-                                    }
-                                } catch(err) { console.debug("[Diagnostic] Handled exception:", err); }
-                            });
+                        if (forceReconnect && window.SSEBridge.getActiveZid() === curZid && typeof window.SSEBridge.reconnect === 'function') {
+                            window.SSEBridge.reconnect(true);
+                        } else {
+                            window.SSEBridge.connect(curZid, SERVER_URL, getApiToken());
                         }
-
-                        if (window._kwSseSafetyTimer) {
-                            clearTimeout(window._kwSseSafetyTimer);
-                            window._kwSseSafetyTimer = null;
-                        }
-                        window._kwSseSafetyTimer = setTimeout(function() {
-                            closeEvtSource();
-                        }, maxBudgetMs);
-
-                        evtSource.onopen = function() {
-                            sseBackoffMs = 1000;
-                        };
-
-                        evtSource.onerror = function(err) {
-                            closeEvtSource();
-                            if (resolved) return;
-                            var remaining = countPendingSkeletons();
-                            if (remaining === 0) return;
-                            if (!window._kwSseReconnectTimer) {
-                                var delay = sseBackoffMs;
-                                sseBackoffMs = Math.min(sseBackoffMs * 2, 16000);
-                                window._kwSseReconnectTimer = setTimeout(function() {
-                                    window._kwSseReconnectTimer = null;
-                                    if (!resolved && countPendingSkeletons() > 0) {
-                                        connectSse(true);
-                                    }
-                                }, delay);
-                            }
-                        };
-
-                        evtSource.onmessage = function(e) {
-                            sseBackoffMs = 1000;
-                            try {
-                                var parsed = JSON.parse(e.data);
-                                if (parsed && parsed.type === 'provider_failover' && typeof window.updateActiveProvider === 'function') {
-                                    var pfType = parsed.task_type || parsed.task;
-                                    var pfProv = parsed.new_provider || parsed.to || parsed.provider;
-                                    if (pfProv) {
-                                        window.updateActiveProvider(pfType, pfProv);
-                                    }
-                                }
-                                if (parsed && (parsed.type === 'stage' || parsed.type === 'update' || parsed.rows || parsed.stage || parsed.is_finished)) {
-                                    if (window.receiveUpdate) {
-                                        window.receiveUpdate(parsed);
-                                    }
-                                    var remaining = countPendingSkeletons();
-                                    var isDone = (parsed.is_finished === true || parsed.stage === 'finished' || (parsed.status && (parsed.status.is_finished === true || parsed.status === 'finished' || parsed.status.stage === 'finished')));
-                                    if (isDone || remaining === 0) {
-                                        resolved = true;
-                                        window._kwWatchdogResolved = true;
-                                        if (window._kwWatchdogMaxTimer) {
-                                            clearTimeout(window._kwWatchdogMaxTimer);
-                                            window._kwWatchdogMaxTimer = null;
-                                        }
-                                        closeEvtSource();
-                                        stopPolling();
-                                        if (isDone && typeof window.normalizeCardSkeletons === 'function') {
-                                            window.normalizeCardSkeletons('finished');
-                                        }
-                                        if (window.onSessionReload) {
-                                            window.onSessionReload();
-                                        }
-                                    }
-                                }
-                            } catch(err) { console.debug("[Diagnostic] Handled exception:", err); }
-                        };
-                    } catch(sseErr) {
-                        closeEvtSource();
+                    } catch (sseErr) {
+                        console.debug("[SSE] Watchdog stream attach failed:", sseErr);
                     }
                 };
 
-                // Channel: EventSource (SSE) running concurrently with watchdog polling
-                connectSse();
+                var onWatchdogStreamEvent = function(parsed) {
+                    if (resolved || !parsed) return;
+                    if (parsed.type === 'stage' || parsed.type === 'update' || parsed.rows || parsed.stage || parsed.is_finished) {
+                        var remaining = countPendingSkeletons();
+                        var isDone = (parsed.is_finished === true || parsed.stage === 'finished' ||
+                            (parsed.status && (parsed.status.is_finished === true || parsed.status === 'finished' || parsed.status.stage === 'finished')));
+                        if (isDone || remaining === 0) {
+                            completeWatchdog(isDone);
+                        }
+                    }
+                };
 
                 window.startPolling = startWatchdogPolling;
                 window._kwStartWatchdogPolling = startWatchdogPolling;
                 window._kwPollSessionStatus = pollSessionStatus;
                 window._kwConnectSse = connectSse;
+
+                if (window.SSEBridge && typeof window.SSEBridge.subscribe === 'function') {
+                    window._kwWatchdogUnsubscribe = window.SSEBridge.subscribe(onWatchdogStreamEvent);
+                }
+
+                // Channel: Shared persistent SSEBridge stream running concurrently with watchdog polling
+                connectSse(false);
 
                 if (!window._kwNetworkListenersAttached) {
                     window._kwNetworkListenersAttached = true;
@@ -4537,13 +4445,10 @@
                             if (typeof window._kwPollSessionStatus === 'function') {
                                 window._kwPollSessionStatus();
                             }
-                            if (typeof window._kwConnectSse === 'function') {
-                                window._kwConnectSse(true);
-                            }
                         }
                     });
 
-                     var focusDebounceTimer = null;
+                    var focusDebounceTimer = null;
                     window.addEventListener('focus', function() {
                         var remaining = countPendingSkeletons();
                         if (remaining > 0) {
@@ -4555,8 +4460,8 @@
                                 if (typeof window._kwPollSessionStatus === 'function') {
                                     window._kwPollSessionStatus();
                                 }
-                                if (typeof window._kwConnectSse === 'function') {
-                                    window._kwConnectSse(false);
+                                if (window.SSEBridge && typeof window.SSEBridge.reconnect === 'function') {
+                                    window.SSEBridge.reconnect(false);
                                 }
                             }, 150);
                         }

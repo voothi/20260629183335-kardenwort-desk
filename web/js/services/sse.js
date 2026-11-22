@@ -17,41 +17,73 @@
 
     var activeEventSource = null;
 
+    var activeConnectionOpen = false;
+
     var activeSessionZid = null;
 
     var activeServerUrl = null;
+
+    var activeToken = '';
 
     var connectionCounter = 0;
 
     var activeConnectionId = 0;
 
+    var reconnectTimer = null;
+
+    var reconnectBackoffMs = 1000;
+
+    var persistedResumeState = null;
+
+    var eventSubscribers = [];
+
     function authenticatedSource(url, token) {
-        var source = {readyState: 0, onopen: null, onerror: null, onmessage: null};
-        var controller = null, timer = null, closed = false, delay = 1000;
+        var source = {readyState: 0, onopen: null, onerror: null, onmessage: null, __isAuthenticatedSource: true};
+        var controller = null, timer = null, closed = false, delay = 1000, attemptId = 0;
         var listeners = {};
         source.addEventListener = function(type, listener) {
             (listeners[type] = listeners[type] || []).push(listener);
         };
+        source.hasPendingReconnect = function() {
+            return !closed && timer !== null;
+        };
         source.close = function() {
             closed = true;
+            attemptId++;
             source.readyState = 2;
             clearTimeout(timer);
-            if (controller) controller.abort();
+            timer = null;
+            if (controller) {
+                try { controller.abort(); } catch (e) {}
+                controller = null;
+            }
         };
-        function failed(error) {
-            if (closed) return;
+        source.reconnectNow = function() {
+            if (closed || source.readyState === 1) return;
+            clearTimeout(timer);
+            timer = null;
+            delay = 1000;
+            attemptId++;
+            if (controller) {
+                try { controller.abort(); } catch (e) {}
+                controller = null;
+            }
+            start();
+        };
+        function failed(myAttempt, error) {
+            if (closed || myAttempt !== attemptId) return;
             source.readyState = error.terminal ? 2 : 0;
             if (error.terminal && controller) controller.abort();
             if (source.onerror) source.onerror(error);
-            if (!error.terminal) {
+            if (!error.terminal && !closed && myAttempt === attemptId) {
                 timer = setTimeout(start, delay);
                 delay = Math.min(delay * 2, 16000);
             }
         }
-        function consume(reader) {
+        function consume(myAttempt, reader) {
             var decoder = new TextDecoder('utf-8'), buffer = '', data = [], eventType = 'message';
             function dispatch() {
-                if (!data.length || closed) return;
+                if (!data.length || closed || myAttempt !== attemptId) return;
                 var event = {data: data.join('\n')};
                 if (eventType === 'message' && source.onmessage) source.onmessage(event);
                 (listeners[eventType] || []).forEach(function(listener) { listener(event); });
@@ -70,7 +102,7 @@
             }
             function read() {
                 return reader.read().then(function(chunk) {
-                    if (closed) return;
+                    if (closed || myAttempt !== attemptId) return;
                     if (chunk.done) throw new Error('Event stream closed');
                     buffer += decoder.decode(chunk.value, {stream: true});
                     var lines = buffer.split('\n');
@@ -83,17 +115,19 @@
         }
         function start() {
             if (closed) return;
+            timer = null;
+            var myAttempt = ++attemptId;
             if (typeof AbortController === 'undefined' || typeof TextDecoder === 'undefined' || typeof fetch !== 'function') {
                 var unavailable = new Error('Authenticated event streaming is unavailable in this host');
                 unavailable.terminal = true;
-                failed(unavailable);
+                failed(myAttempt, unavailable);
                 return;
             }
             controller = new AbortController();
             var options = {headers: {'Accept': 'text/event-stream', 'X-API-Token': token}, cache: 'no-store'};
             options.signal = controller.signal;
             Promise.resolve().then(function() { return fetch(url, options); }).then(function(response) {
-                if (closed) return;
+                if (closed || myAttempt !== attemptId) return;
                 if (!response.ok || !response.body || !response.body.getReader || typeof TextDecoder === 'undefined') {
                     var error = new Error('Authenticated event stream unavailable' + (response.status ? ' (' + response.status + ')' : ''));
                     error.terminal = true;
@@ -102,8 +136,10 @@
                 source.readyState = 1;
                 delay = 1000;
                 if (source.onopen) source.onopen({});
-                return consume(response.body.getReader());
-            }).catch(failed);
+                return consume(myAttempt, response.body.getReader());
+            }).catch(function(error) {
+                failed(myAttempt, error);
+            });
         }
         timer = setTimeout(start, 0);
         return source;
@@ -112,6 +148,58 @@
     function createSource(url, token) {
         token = token || (window.getApiToken ? window.getApiToken() : window.API_TOKEN) || '';
         return token ? authenticatedSource(url, token) : new EventSource(url);
+    }
+
+    function clearReconnectTimer() {
+        if (reconnectTimer !== null) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+    }
+
+    function releaseSource(es) {
+        if (!es) return;
+        es.onopen = null;
+        es.onerror = null;
+        es.onmessage = null;
+        try { es.close(); } catch (e) { console.warn('[SSE] Error closing active EventSource:', e); }
+    }
+
+    function normalizeServerBase(serverUrl, bootstrapSession) {
+        var base = (serverUrl || '').replace(/\/+$/, '');
+        if (base === 'null' || base.indexOf('about:') === 0) base = '';
+        if (!base && (!bootstrapSession || bootstrapSession.server_enabled !== false)) {
+            if (window.location && (window.location.protocol === 'http:' || window.location.protocol === 'https:')) {
+                base = (window.location.origin || '').replace(/\/+$/, '');
+            }
+        }
+        return base;
+    }
+
+    function currentDocumentZid(fallback) {
+        var el = typeof document !== 'undefined' && document.getElementById ? document.getElementById('session-zid') : null;
+        var zid = el ? (el.textContent || el.innerText || '').trim() : '';
+        return zid || fallback || '';
+    }
+
+    function subscribe(listener) {
+        if (typeof listener !== 'function') {
+            throw new TypeError('SSE event subscriber must be a function');
+        }
+        if (eventSubscribers.indexOf(listener) === -1) {
+            eventSubscribers.push(listener);
+        }
+        return function unsubscribe() {
+            var idx = eventSubscribers.indexOf(listener);
+            if (idx !== -1) eventSubscribers.splice(idx, 1);
+        };
+    }
+
+    function notifyEventSubscribers(data) {
+        var snapshot = eventSubscribers.slice();
+        for (var i = 0; i < snapshot.length; i++) {
+            snapshot[i](data);
+        }
     }
 
     function invalidateMembership() {
@@ -161,62 +249,78 @@
         }
     }
 
+    function scheduleNativeReconnect(sessionZid, serverUrl, token) {
+        if (reconnectTimer !== null) return;
+        var delay = reconnectBackoffMs;
+        reconnectBackoffMs = Math.min(reconnectBackoffMs * 2, 16000);
+        reconnectTimer = setTimeout(function () {
+            reconnectTimer = null;
+            if (activeSessionZid === sessionZid && !activeEventSource) {
+                connect(sessionZid, serverUrl, token, true);
+            }
+        }, delay);
+    }
+
     /**
      * Connect to SSE streaming endpoint for session
      * @param {string} sessionZid
      * @param {string} [serverUrl]
      */
     function connect(sessionZid, serverUrl, token, recoverCommitted) {
-        if (!sessionZid || typeof window.EventSource === 'undefined') return;
+        if (!sessionZid || typeof window.EventSource === 'undefined') return null;
 
         var w = (window);
         var bootstrapSession = (w.__BOOTSTRAP__ && (w.__BOOTSTRAP__.session_data || w.__BOOTSTRAP__)) || null;
-        if (bootstrapSession && bootstrapSession.server_enabled === false) return;
+        if (bootstrapSession && bootstrapSession.server_enabled === false) return null;
         if (!serverUrl && bootstrapSession && bootstrapSession.server_url) {
             serverUrl = bootstrapSession.server_url;
         }
 
         // Guard against file:/// filesystem URI errors
-        if (window.location.protocol === 'file:' && !serverUrl) return;
+        if (window.location.protocol === 'file:' && !serverUrl) return null;
 
-        // Repeated mounts preserve the existing session subscription.
-        if (activeEventSource && activeSessionZid === sessionZid) return;
+        persistedResumeState = null;
+
+        // Repeated mounts or startup paths share the existing live session subscription.
+        if (activeEventSource && activeSessionZid === sessionZid && activeEventSource.readyState !== 2) {
+            return activeEventSource;
+        }
+        clearReconnectTimer();
         if (activeEventSource) {
             invalidateMembership();
-            try { activeEventSource.close(); } catch (e) { console.warn('[SSE] Error closing active EventSource:', e); }
+            releaseSource(activeEventSource);
             activeEventSource = null;
+            activeConnectionOpen = false;
             activeSessionZid = null;
             activeServerUrl = null;
+            activeToken = '';
             activeConnectionId = 0;
             w.__sseActiveZid = null;
         }
 
         try {
-            var base = (serverUrl || '').replace(/\/+$/, '');
-            if (!base && (!bootstrapSession || bootstrapSession.server_enabled !== false)) {
-                if (window.location && (window.location.protocol === 'http:' || window.location.protocol === 'https:')) {
-                    base = (window.location.origin || '').replace(/\/+$/, '');
-                }
-            }
+            var base = normalizeServerBase(serverUrl, bootstrapSession);
             var sseUrl = (base ? base : '') + '/api/v1/events?session=' + encodeURIComponent(sessionZid);
             var es = createSource(sseUrl, token);
 
             activeConnectionId = ++connectionCounter;
             activeEventSource = es;
+            activeConnectionOpen = false;
             activeSessionZid = sessionZid;
             activeServerUrl = serverUrl || null;
+            activeToken = token || '';
             w.__sseActiveZid = sessionZid;
 
-            var isConnectionOpen = false;
             es.recoveryMode = recoverCommitted ? 'committed' : 'membership';
 
             updateConnectionIndicator('reconnecting');
 
             function notifyConnectionReady() {
                 if (activeEventSource !== es) return;
+                reconnectBackoffMs = 1000;
                 updateConnectionIndicator('connected');
-                if (!isConnectionOpen) {
-                    isConnectionOpen = true;
+                if (!activeConnectionOpen) {
+                    activeConnectionOpen = true;
                     if (typeof w.reconcileStreamMembership === 'function') {
                         w.reconcileStreamMembership({
                             session: sessionZid,
@@ -236,17 +340,23 @@
 
             es.onerror = function () {
                 if (activeEventSource !== es) return;
-                isConnectionOpen = false;
+                activeConnectionOpen = false;
                 es.recoveryMode = 'committed';
                 invalidateMembership();
                 activeConnectionId = ++connectionCounter;
+                if (es.__isAuthenticatedSource) {
+                    updateConnectionIndicator(es.readyState === 0 ? 'reconnecting' : 'disconnected');
+                    return;
+                }
+                if (typeof es.readyState === 'number' && es.readyState !== 0) {
+                    releaseSource(es);
+                    activeEventSource = null;
+                    updateConnectionIndicator('reconnecting');
+                    scheduleNativeReconnect(sessionZid, serverUrl, token);
+                    return;
+                }
                 if (es.readyState === EventSource.CONNECTING) {
                     updateConnectionIndicator('reconnecting');
-                    var indicator = document.getElementById('sse-status-indicator');
-                    if (indicator) {
-                        indicator.removeAttribute('data-sync');
-                        indicator.removeAttribute('data-sync-message');
-                    }
                 } else {
                     updateConnectionIndicator('disconnected');
                 }
@@ -282,47 +392,49 @@
                     disconnect();
                     return;
                 }
-                    if (!data) return;
+                if (!data) return;
 
-                    if (data.type === 'connected') {
-                        notifyConnectionReady();
-                        return;
+                if (data.type === 'connected') {
+                    notifyConnectionReady();
+                    return;
+                }
+
+                if (data.type === 'provider_failover') {
+                    if (typeof w.updateActiveProvider === 'function') {
+                        var tType = data.task_type || data.task;
+                        var nProv = data.new_provider || data.to || data.provider;
+                        if (nProv) w.updateActiveProvider(tType, nProv);
                     }
+                    return;
+                }
 
-                    if (data.type === 'provider_failover') {
-                        if (typeof w.updateActiveProvider === 'function') {
-                            var tType = data.task_type || data.task;
-                            var nProv = data.new_provider || data.to || data.provider;
-                            if (nProv) w.updateActiveProvider(tType, nProv);
+                if (data.type === 'tag_updated') {
+                    var cb = (document.querySelector('.kw-tag-checkbox[data-token-order="' + data.row_id + '"]'));
+                    if (cb && cb.checked !== data.status) {
+                        cb.checked = data.status;
+                        var r = cb.closest ? cb.closest('tr') : cb.parentElement ? cb.parentElement.parentElement : null;
+                        if (r) {
+                            if (data.status) r.classList.add('kw-row-selected');
+                            else r.classList.remove('kw-row-selected');
                         }
-                        return;
                     }
+                    return;
+                }
 
-                    if (data.type === 'tag_updated') {
-                        var cb = (document.querySelector('.kw-tag-checkbox[data-token-order="' + data.row_id + '"]'));
-                        if (cb && cb.checked !== data.status) {
-                            cb.checked = data.status;
-                            var r = cb.closest ? cb.closest('tr') : cb.parentElement ? cb.parentElement.parentElement : null;
-                            if (r) {
-                                if (data.status) r.classList.add('kw-row-selected');
-                                else r.classList.remove('kw-row-selected');
-                            }
-                        }
-                        return;
-                    }
-
-                    // The canonical update command applies each event once.
-                    if (data.type === 'preferences_updated') {
-                        if (w.receivePreferenceSnapshot) w.receivePreferenceSnapshot(data.preferences);
-                        return;
-                    }
-                    if (typeof w.noteStreamMutation === 'function') w.noteStreamMutation();
-                    if (typeof w.receiveUpdate === 'function') {
-                        w.receiveUpdate(data);
-                    } else if (w.AppStore) {
-                        w.AppStore.applyDeltas(data);
-                    }
+                // The canonical update command applies each event once.
+                if (data.type === 'preferences_updated') {
+                    if (w.receivePreferenceSnapshot) w.receivePreferenceSnapshot(data.preferences);
+                    return;
+                }
+                if (typeof w.noteStreamMutation === 'function') w.noteStreamMutation();
+                if (typeof w.receiveUpdate === 'function') {
+                    w.receiveUpdate(data);
+                } else if (w.AppStore) {
+                    w.AppStore.applyDeltas(data);
+                }
+                notifyEventSubscribers(data);
             }
+            return es;
 
         } catch (e) {
             updateConnectionIndicator('error');
@@ -331,16 +443,51 @@
         }
     }
 
+    function reconnect(force) {
+        if (!activeSessionZid) return null;
+        if (activeEventSource && activeEventSource.__isAuthenticatedSource) {
+            if (force && activeEventSource.readyState !== 1) {
+                activeEventSource.reconnectNow();
+            }
+            return activeEventSource;
+        }
+        var needsReconnect = !activeEventSource || activeEventSource.readyState === 2 || reconnectTimer !== null;
+        if (!needsReconnect && (!force || activeConnectionOpen)) {
+            return activeEventSource;
+        }
+        var zid = activeSessionZid;
+        var url = activeServerUrl;
+        var tok = activeToken;
+        clearReconnectTimer();
+        reconnectBackoffMs = 1000;
+        if (activeEventSource) {
+            releaseSource(activeEventSource);
+            activeEventSource = null;
+            activeConnectionOpen = false;
+        }
+        return connect(zid, url, tok, true);
+    }
+
     /**
      * Disconnect active SSE connection
+     * @param {boolean} [preserveResume]
      */
-    function disconnect() {
-        if (activeEventSource) {
+    function disconnect(preserveResume) {
+        clearReconnectTimer();
+        reconnectBackoffMs = 1000;
+        if (!preserveResume) {
+            persistedResumeState = null;
+        }
+        if (activeEventSource || activeSessionZid) {
             invalidateMembership();
-            try { activeEventSource.close(); } catch (e) { console.warn('[SSEBridge] Error closing active EventSource:', e); }
+            if (activeEventSource) {
+                releaseSource(activeEventSource);
+            }
             activeEventSource = null;
+            activeConnectionOpen = false;
             activeSessionZid = null;
             activeServerUrl = null;
+            activeToken = '';
             activeConnectionId = 0;
             var w = (window);
             w.__sseActiveZid = null;
@@ -353,13 +500,48 @@
         }
     }
 
+    function handlePageHide(event) {
+        if (event && event.persisted) {
+            if (activeSessionZid) {
+                persistedResumeState = {
+                    sessionZid: activeSessionZid,
+                    serverUrl: activeServerUrl,
+                    token: activeToken
+                };
+            }
+            disconnect(true);
+        } else {
+            persistedResumeState = null;
+            disconnect(false);
+        }
+    }
+
+    function handlePageShow(event) {
+        if (!event || !event.persisted || !persistedResumeState) return;
+        var resume = persistedResumeState;
+        persistedResumeState = null;
+        var targetZid = currentDocumentZid(resume.sessionZid);
+        if (!targetZid) return;
+        connect(targetZid, resume.serverUrl, resume.token, true);
+    }
+
+    function handleOnline() {
+        reconnect(true);
+    }
+
     var SSEBridge = {
         createSource: createSource,
         connect: connect,
+        reconnect: reconnect,
         disconnect: disconnect,
+        subscribe: subscribe,
         updateConnectionIndicator: updateConnectionIndicator,
         getActiveZid: function () { return activeSessionZid; },
         getActiveConnectionId: function () { return activeConnectionId; },
+        getActiveSource: function () { return activeEventSource; },
+        hasReconnectTimer: function () {
+            return reconnectTimer !== null || Boolean(activeEventSource && activeEventSource.hasPendingReconnect && activeEventSource.hasPendingReconnect());
+        },
         needsCommittedRecovery: function () { return activeEventSource && activeEventSource.recoveryMode === 'committed'; },
         getServerUrl: function () { return activeServerUrl; }
     };
@@ -368,6 +550,12 @@
     if (w) {
         w.SSEBridge = SSEBridge;
         w.initSSE = connect;
+        if (w.addEventListener && !w.__sseLifecycleAttached) {
+            w.__sseLifecycleAttached = true;
+            w.addEventListener('pagehide', handlePageHide);
+            w.addEventListener('pageshow', handlePageShow);
+            w.addEventListener('online', handleOnline);
+        }
     }
 
     if (typeof module !== 'undefined' && module.exports) {

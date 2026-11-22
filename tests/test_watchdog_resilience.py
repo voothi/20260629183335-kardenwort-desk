@@ -295,17 +295,19 @@ def test_watchdog_sse_exponential_backoff_and_reconnect(page):
     page.evaluate(extract_desk_js())
     assert page.evaluate("window.__sseConnectCount") == 1
 
-    # Simulate SSE error
+    # Simulate SSE error on the shared SSEBridge source
     page.evaluate("""
-        if (window._kwEvtSource && typeof window._kwEvtSource.onerror === 'function') {
-            window._kwEvtSource.onerror(new Event('error'));
+        var src = window.SSEBridge && window.SSEBridge.getActiveSource();
+        if (src && typeof src.onerror === 'function') {
+            src.onerror(new Event('error'));
         }
     """)
 
-    # Socket closed and reconnect timer scheduled
-    assert page.evaluate("window._kwEvtSource === null") is True
-    assert page.evaluate("window._kwSseReconnectTimer !== null") is True
+    # Socket closed and reconnect timer scheduled by SSEBridge
+    assert page.evaluate("window.SSEBridge.getActiveSource() === null") is True
+    assert page.evaluate("window.SSEBridge.hasReconnectTimer() === true") is True
 
-    # Online event cancels backoff timer and immediately reconnects
+    # Online event cancels backoff timer and immediately reconnects once
     page.evaluate("window.dispatchEvent(new Event('online'));")
     assert page.evaluate("window.__sseConnectCount") == 2
+    assert page.evaluate("window.SSEBridge.hasReconnectTimer() === false") is True

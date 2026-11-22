@@ -650,12 +650,12 @@ def test_eventsource_auto_closure_on_finished_event(page, tmp_path):
     html_with_skeleton = html_with_skeleton.replace("<head>", f"<head>\n{mock_sse_script}")
     page.set_content(html_with_skeleton)
 
-    page.wait_for_function("window.__sseInstances.length === 1 && window._kwEvtSource.readyState === 1")
+    page.wait_for_function("window.__sseInstances.length === 1 && window.SSEBridge.getActiveSource().readyState === 1")
 
-    # Verify EventSource was created and is active
+    # Verify single shared SSEBridge EventSource was created and is active
     instances = page.evaluate("window.__sseInstances.length")
     assert instances == 1
-    # Concurrent polling: watchdog poll timer runs concurrently with EventSource
+    # Concurrent polling: watchdog poll timer runs concurrently with shared EventSource
     assert page.evaluate("window._kwSkeletonPollTimer !== null") is True
 
     # Simulate SSE message with is_finished: true
@@ -670,13 +670,12 @@ def test_eventsource_auto_closure_on_finished_event(page, tmp_path):
                 }
         });
     """)
-    page.wait_for_function("window.__sseInstances[0].closed && window._kwEvtSource === null && !window._kwSkeletonPollTimer")
+    page.wait_for_function("window._kwWatchdogResolved === true && !window._kwSkeletonPollTimer")
 
-    # Verify EventSource was closed, reference cleared, and poll timer stopped
-    is_closed = page.evaluate("window.__sseInstances[0].closed")
-    assert is_closed is True
-    assert page.evaluate("window._kwEvtSource === null") is True
+    # Watchdog poll timer stopped, while persistent SSEBridge stream stays open for remote sync
     assert page.evaluate("!window._kwSkeletonPollTimer") is True
+    assert page.evaluate("window.__sseInstances[0].closed") is False
+    assert page.evaluate("window.SSEBridge.getActiveZid() !== null") is True
 
 
 def test_eventsource_error_fallback_to_watchdog_polling(page, tmp_path):
@@ -686,16 +685,14 @@ def test_eventsource_error_fallback_to_watchdog_polling(page, tmp_path):
     html_with_skeleton = html_with_skeleton.replace("<head>", f"<head>\n{mock_sse_error_script}")
     page.set_content(html_with_skeleton)
 
-    page.wait_for_function("window.__sseInstances.length === 1 && window._kwEvtSource.readyState === 1")
+    page.wait_for_function("window.__sseInstances.length === 1 && window.SSEBridge.getActiveSource().readyState === 1")
     page.evaluate("window.__sseInstances[0].fail()")
-    page.wait_for_function("window.__sseInstances[0].closed && window._kwEvtSource === null")
+    page.wait_for_function("window.SSEBridge.getActiveSource().readyState === 0 && window.SSEBridge.hasReconnectTimer()")
 
-    # EventSource must be closed immediately on error
-    is_closed = page.evaluate("window.__sseInstances[0].closed")
-    assert is_closed is True
-    assert page.evaluate("window._kwEvtSource === null") is True
+    # SSEBridge entered reconnecting state with scheduled backoff retry
+    assert page.evaluate("window.SSEBridge.hasReconnectTimer()") is True
 
-    # Watchdog polling should have engaged as fallback
+    # Watchdog polling remains engaged as fallback
     has_timer = page.evaluate("window._kwSkeletonPollTimer !== null && window._kwSkeletonPollTimer !== undefined")
     assert has_timer is True
 
