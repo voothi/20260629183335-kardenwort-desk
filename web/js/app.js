@@ -1105,6 +1105,41 @@
     }
     window.wireActionToolbar = wireActionToolbar;
 
+    var DEFAULT_POS_DISPLAY_ORDER = {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3};
+
+    function getConfiguredLemmaColName() {
+        var cfg = window.__CONFIG__ || {};
+        return (typeof cfg.lemma_col_name === 'string' && cfg.lemma_col_name.trim())
+            ? cfg.lemma_col_name.trim()
+            : 'WordSource';
+    }
+
+    function getConfiguredInflectedColName() {
+        var cfg = window.__CONFIG__ || {};
+        return (typeof cfg.inflected_col_name === 'string' && cfg.inflected_col_name.trim())
+            ? cfg.inflected_col_name.trim()
+            : 'WordSourceInflectedForm';
+    }
+
+    function getConfiguredTransColName() {
+        var cfg = window.__CONFIG__ || {};
+        return (typeof cfg.trans_col_name === 'string' && cfg.trans_col_name.trim())
+            ? cfg.trans_col_name.trim()
+            : 'WordDestination';
+    }
+
+    function getConfiguredPosDisplayOrder() {
+        var cfg = window.__CONFIG__ || {};
+        if (cfg.pos_display_order && typeof cfg.pos_display_order === 'object' && !Array.isArray(cfg.pos_display_order)) {
+            return cfg.pos_display_order;
+        }
+        var boot = window.AppState && window.AppState.bootstrap;
+        if (boot && boot.pos_display_order && typeof boot.pos_display_order === 'object' && !Array.isArray(boot.pos_display_order)) {
+            return boot.pos_display_order;
+        }
+        return DEFAULT_POS_DISPLAY_ORDER;
+    }
+
     /** @param {string[]} headers @param {string} configuredName @param {string[]} aliases @param {boolean} required @param {string} label */
     function resolveHydrationColumnIndex(headers, configuredName, aliases, required, label) {
         var candidates = [];
@@ -1315,6 +1350,7 @@
                 window.AppStore.dispatch({ type: 'INIT_SESSION', payload: bootstrapPayload || session });
                 window.__CONFIG__ = window.AppStore.getState().config;
             }
+            window.POS_DISPLAY_ORDER_MAP = getConfiguredPosDisplayOrder();
 
             SESSION_ZID = session.session_zid || session.zid || '';
             API_TOKEN = session.api_token || '';
@@ -2934,11 +2970,7 @@
         var rmbFlipMode = true;
          var initialFlippedMap = null;
 
-        var pos_display_order_json;
-        var POS_DISPLAY_ORDER_MAP = ((window.__CONFIG__ && window.__CONFIG__.pos_display_order) || {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3});
-        if (!POS_DISPLAY_ORDER_MAP || POS_DISPLAY_ORDER_MAP['art.'] === undefined) {
-            POS_DISPLAY_ORDER_MAP = (window.__CONFIG__ && window.__CONFIG__.pos_display_order) || {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3};
-        }
+        var POS_DISPLAY_ORDER_MAP = getConfiguredPosDisplayOrder();
         window.POS_DISPLAY_ORDER_MAP = POS_DISPLAY_ORDER_MAP;
          var tokenMap = [];
         try {
@@ -5670,9 +5702,9 @@
                 var trans = "";
                 for (var m = 0; m < tds.length; m++) {
                     var col = tds[m].getAttribute('data-col');
-                    if (col === '{lemma_col_name}' || col === 'WordSource') {
+                    if (col === getConfiguredLemmaColName() || col === 'WordSource') {
                         lemma = (tds[m].textContent || tds[m].innerText || "").trim();
-                    } else if (col === 'WordDestination') {
+                    } else if (col === getConfiguredTransColName() || col === 'WordDestination') {
                         if ( (tds[m].querySelector('.skeleton-loader')) ||  (tds[m].querySelector('[data-pending="true"]')) || tds[m].classList.contains('skeleton-loader')) {
                             trans = "";
                         } else {
@@ -5958,7 +5990,7 @@
 
         function isTranslationColumnCell(td) {
             var col = td.getAttribute('data-col');
-            if (col === '{trans_col_name}' || col === 'WordDestination' || col === 'word_translation') return true;
+            if (col === getConfiguredTransColName() || col === 'WordDestination' || col === 'word_translation') return true;
             return Boolean(td.classList && td.classList.contains('col-translation'));
         }
 
@@ -6024,9 +6056,9 @@
             var inflection = "";
             for (var m = 0; m < tds.length; m++) {
                 var col = tds[m].getAttribute('data-col');
-                if (col === '{lemma_col_name}' || col === 'WordSource') {
+                if (col === getConfiguredLemmaColName() || col === 'WordSource') {
                     lemma = (tds[m].textContent || tds[m].innerText || "").trim();
-                } else if (col === '{inflected_col_name}' || col === 'WordSourceInflectedForm') {
+                } else if (col === getConfiguredInflectedColName() || col === 'WordSourceInflectedForm') {
                     inflection = (tds[m].textContent || tds[m].innerText || "").trim();
                 }
             }
@@ -6086,9 +6118,9 @@
                 var inflected = "";
                 for (var m = 0; m < tds.length; m++) {
                     var col = tds[m].getAttribute('data-col');
-                    if (col === '{lemma_col_name}' || col === 'WordSource') {
+                    if (col === getConfiguredLemmaColName() || col === 'WordSource') {
                         lemma = (tds[m].textContent || tds[m].innerText || "").trim();
-                    } else if (col === '{inflected_col_name}' || col === 'WordSourceInflectedForm') {
+                    } else if (col === getConfiguredInflectedColName() || col === 'WordSourceInflectedForm') {
                         inflected = (tds[m].textContent || tds[m].innerText || "").trim();
                     }
                 }
@@ -6164,9 +6196,9 @@
                     var inflected = "";
                     for (var m = 0; m < tds.length; m++) {
                         var col = tds[m].getAttribute('data-col');
-                        if (col === '{lemma_col_name}' || col === 'WordSource') {
+                        if (col === getConfiguredLemmaColName() || col === 'WordSource') {
                             lemma = (tds[m].textContent || tds[m].innerText || "").trim();
-                        } else if (col === '{inflected_col_name}' || col === 'WordSourceInflectedForm') {
+                        } else if (col === getConfiguredInflectedColName() || col === 'WordSourceInflectedForm') {
                             inflected = (tds[m].textContent || tds[m].innerText || "").trim();
                         }
                     }
@@ -6190,9 +6222,9 @@
                     var inflected = "";
                     for (var m = 0; m < tds.length; m++) {
                         var col = tds[m].getAttribute('data-col');
-                        if (col === '{lemma_col_name}' || col === 'WordSource') {
+                        if (col === getConfiguredLemmaColName() || col === 'WordSource') {
                             lemma = (tds[m].textContent || tds[m].innerText || "").trim();
-                        } else if (col === '{inflected_col_name}' || col === 'WordSourceInflectedForm') {
+                        } else if (col === getConfiguredInflectedColName() || col === 'WordSourceInflectedForm') {
                             inflected = (tds[m].textContent || tds[m].innerText || "").trim();
                         }
                     }
@@ -6248,9 +6280,9 @@
                             var inflected = "";
                             for (var m = 0; m < tds.length; m++) {
                                 var col = tds[m].getAttribute('data-col');
-                                if (col === '{lemma_col_name}' || col === 'WordSource') {
+                                if (col === getConfiguredLemmaColName() || col === 'WordSource') {
                                     lemma = (tds[m].textContent || tds[m].innerText || "").trim();
-                                } else if (col === '{inflected_col_name}' || col === 'WordSourceInflectedForm') {
+                                } else if (col === getConfiguredInflectedColName() || col === 'WordSourceInflectedForm') {
                                     inflected = (tds[m].textContent || tds[m].innerText || "").trim();
                                 }
                             }
@@ -7931,7 +7963,7 @@
                 } else {
                     var newTooltip = '';
                     if (cls === 'col-pos') {
-                        var posOrder = POS_DISPLAY_ORDER_MAP;
+                        var posOrder = getConfiguredPosDisplayOrder();
                         vals.sort(function(a, b) {
                             var oa = (posOrder[a] !== undefined) ? posOrder[a] : 99;
                             var ob = (posOrder[b] !== undefined) ? posOrder[b] : 99;

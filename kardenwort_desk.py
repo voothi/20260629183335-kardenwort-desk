@@ -13595,6 +13595,10 @@ html, body {{
     ui_cfg["audio_anki_tts_cli"] = anki_tts_cli_path
     ui_cfg["audio_python_exe"] = python_exe_path
     ui_cfg["has_highlight_col"] = bool(col_highlighted != -1)
+    ui_cfg["pos_display_order"] = POS_DISPLAY_ORDER
+    ui_cfg["lemma_col_name"] = lemma_col_name
+    ui_cfg["inflected_col_name"] = inflected_col_name
+    ui_cfg["trans_col_name"] = trans_col_name
 
     # Stage 2: Format Title and Favicon (Task 1.4)
     mode_label = "multi" if (eff_mode == "multi" or text_mode == "multi") else "single"
@@ -14480,7 +14484,11 @@ def render_declarative_web_shell(
         base_html = base_html.replace('<!-- KARDENWORT_BOOTSTRAP -->', '')
 
     # Legacy & contract data islands for backward compatibility
-    ui_cfg_val = bootstrap_payload.get("ui_config", {})
+    ui_cfg_val = dict(bootstrap_payload.get("ui_config") or {})
+    ui_cfg_val.setdefault("pos_display_order", bootstrap_payload.get("pos_display_order") or POS_DISPLAY_ORDER)
+    ui_cfg_val.setdefault("lemma_col_name", lemma_col_name)
+    ui_cfg_val.setdefault("inflected_col_name", inflected_col_name)
+    ui_cfg_val.setdefault("trans_col_name", trans_col_name)
     ui_cfg_json = serialize_json_island(ui_cfg_val)
     base_html = re.sub(
         r'<script id="ui-config" type="application/json">.*?</script>',
@@ -14778,9 +14786,6 @@ def render_declarative_web_shell(
             s_code = s_code.replace('audioPythonExe + "\\\\n"', 'audioPythonExe + "\\n"')
             s_code = s_code.replace('audioAnkiTtsCli + "\\\\n"', 'audioAnkiTtsCli + "\\n"')
             s_code = s_code.replace('lang + "\\\\n"', 'lang + "\\n"')
-            s_code = s_code.replace("{lemma_col_name}", lemma_col_name)
-            s_code = s_code.replace("{inflected_col_name}", inflected_col_name)
-            s_code = s_code.replace("{trans_col_name}", trans_col_name)
             s_code = s_code.replace("{has_highlight_col}", "true" if ui_cfg.get("has_highlight_col") else "false")
         tag_to_replace = f'<script src="/js/{script_rel}"></script>'
         if tag_to_replace in base_html:
@@ -14917,6 +14922,10 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         lookup_ui_config.pop("server_api_key", None)
     lookup_ui_config["grammar"] = get_grammar_payload()
     lookup_ui_config["has_highlight_col"] = role_fields.get('selected') in headers
+    lookup_ui_config.setdefault("pos_display_order", POS_DISPLAY_ORDER)
+    lookup_ui_config["lemma_col_name"] = role_fields.get("lemma", "WordSource")
+    lookup_ui_config["inflected_col_name"] = role_fields.get("inflected", "WordSourceInflectedForm")
+    lookup_ui_config["trans_col_name"] = role_fields.get("word_translation", "WordDestination")
     lookup_bootstrap = {
         "ui_config": lookup_ui_config,
         "session_data": session_payload,
@@ -15116,10 +15125,6 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     ):
         p_script = web_dir / "js" / script_rel
         s_code = read_required_asset(p_script)
-        if script_rel == "app.js":
-            s_code = s_code.replace("{lemma_col_name}", role_fields.get("lemma", "WordSource"))
-            s_code = s_code.replace("{inflected_col_name}", role_fields.get("inflected", "WordSourceInflectedForm"))
-            s_code = s_code.replace("{trans_col_name}", role_fields.get("word_translation", "WordDestination"))
         tag_to_replace = f'<script src="/js/{script_rel}"></script>'
         if tag_to_replace in base_html:
             base_html = base_html.replace(tag_to_replace, f'<script>\n{s_code}\n</script>')
