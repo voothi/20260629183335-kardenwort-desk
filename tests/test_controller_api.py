@@ -284,7 +284,14 @@ def test_verify_language_get_endpoint(running_controller):
         }
 
     url = f"{server_url}/verify-language?session_zid={session_zid}&theme=dark"
-    req = urllib.request.Request(url)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Site": "none",
+        },
+    )
     with urllib.request.urlopen(req, timeout=5.0) as resp:
         assert resp.status == 200
         content_type = resp.headers.get("Content-Type")

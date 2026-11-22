@@ -4208,6 +4208,17 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if origin == 'null' and self.command != 'OPTIONS':
             self._authenticate_token()
 
+    def _is_credential_bearing_request(self) -> bool:
+        raw_path = getattr(self, 'path', '') or ''
+        parsed = urllib.parse.urlparse(raw_path)
+        path = parsed.path
+        if path in ('/api/v1/render', '/render', '/verify-language', '/api/v1/lookup', '/lookup', '/session/render'):
+            return True
+        if path == '/':
+            qs = urllib.parse.parse_qs(parsed.query)
+            return any(qs.get(k, [None])[0] for k in ('text', 'session_zid', 'zid', 'project_id', 'project'))
+        return False
+
     def do_OPTIONS(self):
         try:
             self._validate_request_origin()
@@ -4215,7 +4226,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._send_error_json(403, error.error_code, error.message)
             return
         self.send_response(204)
-        self._send_cors_headers()
+        if self._is_credential_bearing_request():
+            self._send_credential_cors_headers(allow_opaque=True)
+        else:
+            self._send_cors_headers()
         self.end_headers()
 
     def _send_json(self, status_code: int, data_obj: dict, *, credential_bearing: bool = False):
@@ -4232,24 +4246,31 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if details:
             payload["details"] = details
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-        self._send_bytes(status_code, body, 'application/json; charset=utf-8')
+        is_cred = self._is_credential_bearing_request()
+        self._send_bytes(
+            status_code,
+            body,
+            'application/json; charset=utf-8',
+            credential_bearing=is_cred,
+            allow_opaque_cors=False,
+        )
 
-    def _send_credential_cors_headers(self):
+    def _send_credential_cors_headers(self, *, allow_opaque: bool = True):
         origin = self._single_header('Origin')
         host_val = self._single_header('Host')
         if isinstance(origin, str) and isinstance(host_val, str):
             host_l = host_val.lower()
-            if origin == 'null' or origin.lower() in (f'http://{host_l}', f'https://{host_l}'):
+            if (allow_opaque and origin == 'null') or origin.lower() in (f'http://{host_l}', f'https://{host_l}'):
                 self.send_header('Access-Control-Allow-Origin', origin)
                 self.send_header('Vary', 'Origin')
         self.send_header('Access-Control-Allow-Headers', 'X-API-Token, X-ZID, Content-Type, Authorization')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
 
-    def _send_bytes(self, status_code, body, content_type, *, credential_bearing: bool = False):
+    def _send_bytes(self, status_code, body, content_type, *, credential_bearing: bool = False, allow_opaque_cors: bool = True):
         try:
             self.send_response(status_code)
             if credential_bearing:
-                self._send_credential_cors_headers()
+                self._send_credential_cors_headers(allow_opaque=allow_opaque_cors)
                 self.send_header('Cache-Control', 'no-store')
                 self.send_header('Referrer-Policy', 'no-referrer')
             else:
@@ -5491,9 +5512,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if path == '/verify-language':
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            admitted_token = self._require_credential_admission(
+                method, query_params=qs, allow_browser_nav=True
+            )
             session_zid = qs.get('session_zid', [None])[0] or qs.get('zid', [None])[0]
             req_theme = qs.get('theme', [None])[0] or 'dark'
-            token = qs.get('token', [''])[0] or getattr(self.server, 'api_key', '')
             with _DRAFT_SESSIONS_LOCK:
                 draft = _DRAFT_SESSIONS.get(session_zid)
             mismatch_info = draft.get("mismatch_info") if draft else {
@@ -5503,16 +5526,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             html = render_verify_language_html(
                 mismatch_info=mismatch_info,
                 theme=req_theme,
-                api_token=token,
+                api_token=admitted_token,
                 session_zid=session_zid or "",
             )
-            body = html.encode('utf-8')
-            self.send_response(200)
-            self._send_cors_headers()
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
-            self.send_header('Content-Length', str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_credential_html(html)
             return
 
         # 4. Consolidated Legacy & Reader Endpoints (from http_server.py & web reader)
@@ -5521,13 +5538,17 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
 
-            admitted_token = self._require_credential_admission(
-                method, query_params=qs, allow_browser_nav=True
-            )
             session_zid = qs.get('session_zid', [None])[0] or qs.get('zid', [None])[0]
             project_id = qs.get('project_id', [None])[0] or qs.get('project', [None])[0]
             text = qs.get('text', [None])[0]
             language = qs.get('language', [None])[0]
+
+            # Effectful text-to-new-session lookup requires explicit configured-key auth;
+            # passive browser navigation must never authorize creation/translation effects.
+            is_effectful_text_get = bool(not project_id and not session_zid and text)
+            admitted_token = self._require_credential_admission(
+                method, query_params=qs, allow_browser_nav=not is_effectful_text_get
+            )
 
             if project_id:
                 req_zid = generate_unique_zid()
@@ -5639,10 +5660,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         rewritten = [
                             (k, aliased_zid if k in ('session_zid', 'zid') else v)
                             for k, v in params
+                            if k.lower() not in ('token', 'api_token')
                         ]
                         location = urllib.parse.urlunsplit(('', '', split_url.path, urllib.parse.urlencode(rewritten), ''))
                         self.send_response(302)
-                        self._send_cors_headers()
+                        self.send_header('Cache-Control', 'no-store')
+                        self.send_header('Referrer-Policy', 'no-referrer')
                         self.send_header('Location', location)
                         self.send_header('Content-Length', '0')
                         self.end_headers()
@@ -5848,6 +5871,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     qs.get('force-language', ['false'])[0].lower() in ('true', '1')
                 )
 
+                lookup_gd = dict(self.server.goldendict) if self.server.goldendict else {}
+                lookup_gd['server_enabled'] = True
+                lookup_gd['server_api_key'] = admitted_token
                 res = core_lookup(
                     text=text,
                     language=language,
@@ -5861,7 +5887,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     disable_css='disable-css' in qs,
                     config=operation_configuration(self.server.config),
                     resolved_paths=self.server.resolved_paths,
-                    goldendict=self.server.goldendict,
+                    goldendict=lookup_gd,
                     bypass_lang_check=bypass_lang_check,
                 )
                 self._send_credential_html(res["html"])
@@ -5877,6 +5903,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if path == '/api/v1/lookup':
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            admitted_token = self._require_credential_admission(
+                method, query_params=qs, allow_browser_nav=False
+            )
             session_zid = qs.get('session_zid', [None])[0] or qs.get('zid', [None])[0]
             project_id = qs.get('project_id', [None])[0] or qs.get('project', [None])[0]
             text = qs.get('text', [None])[0]
@@ -5921,7 +5950,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 goldendict.setdefault('heading_lemmas', '__default__')
                 goldendict.setdefault('run_intellifiller', False)
                 goldendict['server_enabled'] = True
-                goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
+                goldendict['server_api_key'] = admitted_token
 
                 html = render_lookup_html(
                     text=source_text,
@@ -5936,7 +5965,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     data_rows=data_rows,
                     sentence_translation=sentence_translation,
                     session_zid=synth_zid,
-                    api_token=getattr(self.server, 'api_key', ''),
+                    api_token=admitted_token,
                     server_enabled=True,
                     fingerprint=fingerprint,
                 )
@@ -5949,7 +5978,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     "fingerprint": fingerprint,
                     "total_sessions": synthesized.get("total_sessions", 0),
                     "total_words": synthesized.get("total_words", 0),
-                })
+                }, credential_bearing=True)
                 return
 
             if session_zid:
@@ -5995,7 +6024,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 goldendict.setdefault('heading_lemmas', '__default__')
                 goldendict.setdefault('run_intellifiller', False)
                 goldendict['server_enabled'] = True
-                goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
+                goldendict['server_api_key'] = admitted_token
 
                 html = render_lookup_html(
                     text=source_text,
@@ -6010,7 +6039,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     data_rows=data_rows,
                     sentence_translation=sentence_translation,
                     session_zid=session_zid,
-                    api_token=getattr(self.server, 'api_key', ''),
+                    api_token=admitted_token,
                     server_enabled=True,
                     fingerprint=fingerprint,
                 )
@@ -6020,7 +6049,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     "session_zid": session_zid,
                     "language": sess_lang,
                     "fingerprint": fingerprint
-                })
+                }, credential_bearing=True)
                 return
 
             if not text:
@@ -6033,6 +6062,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 qs.get('force-language', ['false'])[0].lower() in ('true', '1')
             )
 
+            lookup_gd = dict(self.server.goldendict) if self.server.goldendict else {}
+            lookup_gd['server_enabled'] = True
+            lookup_gd['server_api_key'] = admitted_token
             res = core_lookup(
                 text=text,
                 language=language,
@@ -6046,10 +6078,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 disable_css='disable-css' in qs,
                 config=operation_configuration(self.server.config),
                 resolved_paths=self.server.resolved_paths,
-                goldendict=self.server.goldendict,
+                goldendict=lookup_gd,
                 bypass_lang_check=bypass_lang_check,
             )
-            self._send_json(200, res)
+            self._send_json(200, res, credential_bearing=True)
             return
 
         if path == '/api/v1/tag':
@@ -6177,10 +6209,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             theme = draft.get("theme", "dark")
 
             def build_browser_url(s_zid, s_num):
-                u = f"http://{host}:{port}/?session_zid={urllib.parse.quote(str(s_zid))}&seq_num={urllib.parse.quote(str(s_num))}&theme={urllib.parse.quote(str(theme))}"
-                if api_token:
-                    u += f"&token={urllib.parse.quote(str(api_token))}"
-                return u
+                return f"http://{host}:{port}/?session_zid={urllib.parse.quote(str(s_zid))}&seq_num={urllib.parse.quote(str(s_num))}&theme={urllib.parse.quote(str(theme))}"
 
             parent_mode = "full"
             delivery_mode = "container"

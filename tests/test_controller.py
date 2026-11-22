@@ -122,9 +122,9 @@ def test_controller_health_endpoint(running_controller):
 
 
 def test_controller_lookup_endpoint(running_controller):
-    server_url, _ = running_controller
+    server_url, server = running_controller
     url = f"{server_url}/api/v1/lookup?text=apple&language=en&bypass-lang-check=true"
-    req = urllib.request.Request(url)
+    req = urllib.request.Request(url, headers={"X-API-Token": server.api_key})
     with urllib.request.urlopen(req, timeout=30.0) as resp:
         assert resp.status == 200
         res = json.loads(resp.read().decode('utf-8'))

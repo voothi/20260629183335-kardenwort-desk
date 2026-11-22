@@ -106,7 +106,7 @@ class TestHTTPServerRunning(unittest.TestCase):
 
     def test_05_lookup_json_endpoint(self):
         url = f"http://127.0.0.1:{TEST_PORT}/api/v1/lookup?text=apple&language=en"
-        req = urllib.request.Request(url)
+        req = urllib.request.Request(url, headers={"X-API-Token": TEST_TOKEN})
         with urllib.request.urlopen(req) as resp:
             self.assertEqual(resp.status, 200)
             data = json.loads(resp.read().decode('utf-8'))
@@ -116,7 +116,7 @@ class TestHTTPServerRunning(unittest.TestCase):
 
     def test_06_tag_endpoint(self):
         url_lk = f"http://127.0.0.1:{TEST_PORT}/api/v1/lookup?text=apple&language=en"
-        with urllib.request.urlopen(url_lk) as resp:
+        with urllib.request.urlopen(urllib.request.Request(url_lk, headers={"X-API-Token": TEST_TOKEN})) as resp:
             lk_data = json.loads(resp.read().decode('utf-8'))["data"]
 
         session_zid = lk_data["session_zid"]
@@ -147,7 +147,7 @@ class TestHTTPServerRunning(unittest.TestCase):
 
     def test_07_stale_fingerprint_rejected(self):
         url_lk = f"http://127.0.0.1:{TEST_PORT}/api/v1/lookup?text=banana&language=en"
-        with urllib.request.urlopen(url_lk) as resp:
+        with urllib.request.urlopen(urllib.request.Request(url_lk, headers={"X-API-Token": TEST_TOKEN})) as resp:
             lk_data = json.loads(resp.read().decode('utf-8'))["data"]
 
         url_tag = f"http://127.0.0.1:{TEST_PORT}/api/v1/tag"

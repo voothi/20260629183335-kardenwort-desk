@@ -1300,34 +1300,22 @@ function renderSessionsExplorerTable(sessions) {
 }
 
 function openSessionInDesk(zid) {
-    let url = `/?session_zid=${encodeURIComponent(zid)}&theme=dark`;
-    if (state.token) {
-        url += `&token=${encodeURIComponent(state.token)}`;
-    }
+    const url = `/?session_zid=${encodeURIComponent(zid)}&theme=dark`;
     window.open(url, '_blank');
 }
 
 function openSessionInDict(zid) {
-    let url = `/?session_zid=${encodeURIComponent(zid)}&view=goldendict&theme=dark`;
-    if (state.token) {
-        url += `&token=${encodeURIComponent(state.token)}`;
-    }
+    const url = `/?session_zid=${encodeURIComponent(zid)}&view=goldendict&theme=dark`;
     window.open(url, '_blank');
 }
 
 function openProjectInDesk(projectId) {
-    let url = `/?project_id=${encodeURIComponent(projectId)}&theme=dark`;
-    if (state.token) {
-        url += `&token=${encodeURIComponent(state.token)}`;
-    }
+    const url = `/?project_id=${encodeURIComponent(projectId)}&theme=dark`;
     window.open(url, '_blank');
 }
 
 function openProjectInDict(projectId) {
-    let url = `/?project_id=${encodeURIComponent(projectId)}&view=goldendict&theme=dark`;
-    if (state.token) {
-        url += `&token=${encodeURIComponent(state.token)}`;
-    }
+    const url = `/?project_id=${encodeURIComponent(projectId)}&view=goldendict&theme=dark`;
     window.open(url, '_blank');
 }
 

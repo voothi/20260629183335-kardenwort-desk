@@ -10476,7 +10476,7 @@ def render_verify_language_html(
     is_light = theme in ("light", "white")
     theme_class = "theme-light" if is_light else "theme-dark"
 
-    token_json = json.dumps(api_token)
+    verify_token_json = serialize_json_island({"api_token": str(api_token or "")})
     zid_json = json.dumps(zid)
     det_code_json = json.dumps(det_code)
     exp_code_json = json.dumps(exp_code)
@@ -10640,9 +10640,18 @@ body {{
     </div>
     <div id="kw-status-msg" class="kw-status-msg"></div>
 </div>
+<script id="verify-language-bootstrap" type="application/json">{verify_token_json}</script>
 <script>
 const sessionZid = {zid_json};
-const apiToken = {token_json};
+const apiToken = (function() {{
+    const el = document.getElementById('verify-language-bootstrap');
+    if (!el) return '';
+    try {{
+        return (JSON.parse(el.textContent || '{{}}').api_token) || '';
+    }} catch (_e) {{
+        return '';
+    }}
+}})();
 const detCode = {det_code_json};
 const expCode = {exp_code_json};
 let submitted = false;

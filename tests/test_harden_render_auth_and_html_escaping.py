@@ -829,12 +829,17 @@ def test_1_4_positive_authenticated_native_ahk_goldendict_and_file_host_handoffs
     )
     assert stage_denied == 403
 
-    # 5. Documented read-only health readiness (bare & Origin: null) without key disclosure
-    for hdrs in ({}, {"Origin": "null"}):
+    # 5. Documented read-only health readiness (bare & authenticated Origin: null) without key disclosure
+    for hdrs in ({}, {"Origin": "null", "X-API-Token": expected_key}):
         h_status, h_headers, h_body = _http_request(f"{server_url}/api/v1/health", method="GET", headers=hdrs)
         assert h_status == 200
         assert json.loads(h_body)["data"]["ok"] is True
         assert _contains_credential(expected_key, h_headers, h_body) is False
+    h_unauth_null, h_unauth_headers, h_unauth_body = _http_request(
+        f"{server_url}/api/v1/health", method="GET", headers={"Origin": "null"}
+    )
+    assert h_unauth_null == 403
+    assert _contains_credential(expected_key, h_unauth_headers, h_unauth_body) is False
 
 
 @pytest.mark.parametrize(
