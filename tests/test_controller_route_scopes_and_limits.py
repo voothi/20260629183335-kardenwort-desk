@@ -570,3 +570,17 @@ def test_import_tsv_raw_absent_zero_and_exact_limit_controls(scope_world):
     assert _data(body_exact)['words_count'] == 1
     bundle = db.get_session_bundle('20261122173013')
     assert bundle is not None and bundle['words'][0]['lemma'] == 'Vogel'
+
+
+def test_import_tsv_raw_oversized_rejected_without_reading_body(scope_world):
+    _, server, _ = scope_world
+    db = KardenwortDB(config=server.config, resolved_paths=server.resolved_paths)
+    db.run_migrations()
+    # Keep write half open with zero body bytes: server must reject from Content-Length alone without blocking on rfile.read.
+    status, body = _raw_http_post(
+        server.server_port, '/api/v1/admin/sessions/import-tsv?session_zid=20261122173014&language=de',
+        content_length=str(MAX_IMPORT_TSV_BYTES + 1), body_bytes=b'', shutdown_write=False,
+    )
+    assert status == 400, body
+    assert body['error_code'] == 'INVALID_PAYLOAD'
+    assert db.get_session_bundle('20261122173014') is None

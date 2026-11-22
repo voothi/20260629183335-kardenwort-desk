@@ -4153,6 +4153,9 @@ def generate_server_zid(server) -> str:
     return f"{now:%Y%m%d%H%M%S}-{seq:04d}"
 
 
+MAX_IMPORT_TSV_BYTES = 10 * 1024 * 1024
+
+
 def request_preference_scope(path):
     return path.startswith('/session') or path in (
         '/',
@@ -4363,6 +4366,26 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
     def _project_state_effect(self, path, result):
         if path == '/api/v1/set-language':
             spawn_ahk(['--set-language', result['language']], base_dir=self.server.resolved_paths.get('base_dir'))
+
+    def _parse_bounded_content_length(self, max_bytes: int) -> int:
+        raw_header = self._single_header('Content-Length')
+        if raw_header is None:
+            return 0
+        if raw_header is False or not raw_header.isascii() or not raw_header.isdigit():
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Invalid Content-Length header")
+        content_length = int(raw_header)
+        if content_length > max_bytes:
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Payload size exceeds {max_bytes} byte limit")
+        return content_length
+
+    def _read_bounded_body(self, max_bytes: int) -> bytes:
+        content_length = self._parse_bounded_content_length(max_bytes)
+        if content_length == 0:
+            return b""
+        raw_body = self.rfile.read(content_length)
+        if len(raw_body) != content_length:
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Incomplete request body")
+        return raw_body
 
     def _read_json_body(self) -> dict:
         content_length_str = self.headers.get('Content-Length', '0')
@@ -6783,8 +6806,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 slug = body.get('slug') or slug
             else:
                 self._authenticate_token(query_params=qs, require_configured=True)
-                content_len = int(self.headers.get('Content-Length', 0))
-                tsv_bytes = self.rfile.read(content_len)
+                tsv_bytes = self._read_bounded_body(MAX_IMPORT_TSV_BYTES)
                 tsv_content = tsv_bytes.decode('utf-8', errors='replace')
 
             if not tsv_content:
