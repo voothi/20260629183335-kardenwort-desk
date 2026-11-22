@@ -5279,9 +5279,10 @@ class SqliteStorageAdapter(StorageAdapter):
         selection = resolve_reword_request(rows, headers, roles, source, self.config,
             targets=target_coordinates, selected_rows=selected_rows, token_orders=token_orders,
             visual_indices=visual_indices, all_rows=selected_rows is None)
+        from kardenwort_enrichment import eligible_selection, enrich_rows
+        selection = eligible_selection(rows, headers, selection, roles, prompt_name, reprocess)
         if not selection.rows:
             return True
-        from kardenwort_enrichment import enrich_rows
         scratch = reword_scratch_rows(rows, headers, roles, selection, source)
         updated_headers, updated_rows, fields = enrich_rows(
             scratch, headers, selection, restored.get('source_language'), prompt_name,

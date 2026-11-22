@@ -135,5 +135,5 @@ def test_legacy_row_and_token_select_only_the_resolved_sentence(world):
 @pytest.mark.parametrize('provider_name', ['intellifiller'])
 @pytest.mark.parametrize('targets', [None, []], ids=['none', 'empty-list'])
 def test_intentional_whole_session_adapter_call_keeps_its_scope(world, targets):
-    assert world.adapter.enrich_session_intellifiller(ZID, 'fixture', target_coordinates=targets)
+    assert world.adapter.enrich_session_intellifiller(ZID, 'fixture', target_coordinates=targets, reprocess=True)
     assert world.values() == {(1, 0): 'fresh-Haus', (2, 0): 'fresh-Baum'}

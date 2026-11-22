@@ -380,3 +380,154 @@ def test_provider_failure_on_eligible_row_preserves_persisted_state(tmp_path):
     assert len(engine.requests) == 1
     assert _cold_words_by_key(config, paths) == before
     assert prohibited(writes) == []
+
+
+def test_prompt_specific_ipa_extraction_uses_ipa_target_column_and_keeps_translation(tmp_path):
+    """Prompt-specific ipa_extraction checks WordSourceIPA, not WordDestination."""
+    config, paths, adapter = _build_sqlite_env(tmp_path)
+    _seed_session(
+        adapter,
+        tmp_path,
+        [
+            ["0", "Haus", "Haus", "house", "1", "Haus.", "", "noun"],
+            ["0", "Baum", "Baum", "", "2", "Baum.", "/baum/", ""],
+        ],
+        text="Haus. Baum.",
+        provenances={0: "fixture:initial", 1: "fixture:initial"},
+    )
+    before_baum = _cold_words_by_key(config, paths)[(2, 0)]
+
+    def respond_ipa(rows):
+        return [{"row_id": row["row_id"], "WordSourceIPA": "/ipa_" + row["WordSource"] + "/"} for row in rows]
+
+    with enrichment_engine(config, response=respond_ipa) as engine:
+        engine.release.set()
+        with control_writes() as writes:
+            ok = adapter.enrich_session_intellifiller(
+                session_zid=ZID,
+                prompt_name="ipa_extraction",
+                reprocess=False,
+            )
+
+    assert ok is True
+    assert len(engine.requests) == 1
+    assert [row["WordSource"] for row in engine.requests[0]["rows"]] == ["Haus"]
+    after = _cold_words_by_key(config, paths)
+    assert after[(1, 0)]["word_destination"] == "house"
+    assert after[(1, 0)]["ipa"] == "/ipa_Haus/"
+    assert after[(1, 0)]["word_provenance"] == "live:intellifiller"
+    assert after[(2, 0)] == before_baum
+    assert prohibited(writes) == []
+
+
+def test_async_mixed_enrichment_filters_before_dispatch_and_commits_only_eligible_rows(tmp_path):
+    """Deterministic async coordination: filled row is excluded before HTTP dispatch and survives concurrent edit."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    config, paths, adapter = _build_sqlite_env(tmp_path)
+    _seed_session(
+        adapter,
+        tmp_path,
+        [
+            ["0", "Haus", "Haus", "house", "1", "Haus.", "/haus/", "noun"],
+            ["0", "Baum", "Baum", "", "2", "Baum.", "/baum/", ""],
+            ["0", "Wald", "Wald", "forest", "3", "Wald.", "/wald/", "noun"],
+        ],
+        text="Haus. Baum. Wald.",
+        provenances={0: "fixture:initial", 1: "fixture:initial", 2: "fixture:initial"},
+    )
+    before = _cold_words_by_key(config, paths)
+
+    with enrichment_engine(config) as engine:
+        with control_writes() as writes:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(
+                    adapter.enrich_session_intellifiller,
+                    session_zid=ZID,
+                    prompt_name="fixture",
+                    reprocess=False,
+                )
+                try:
+                    with engine.changed:
+                        assert engine.changed.wait_for(lambda: len(engine.requests) == 1, 5)
+                    # Only unfinished Baum (sentence 2, token 0) is dispatched while engine is held
+                    assert [row["WordSource"] for row in engine.requests[0]["rows"]] == ["Baum"]
+                    # Concurrent edit to skipped filled Haus persists without being clobbered
+                    adapter.db.update_word(before[(1, 0)]["id"], {"word_destination": "manual-house"})
+                finally:
+                    engine.release.set()
+                assert pending.result(timeout=10) is True
+
+    after = _cold_words_by_key(config, paths)
+    assert after[(1, 0)]["word_destination"] == "manual-house"
+    assert after[(1, 0)]["word_provenance"] == "fixture:initial"
+    assert after[(2, 0)]["word_destination"] == "trans_Baum"
+    assert after[(2, 0)]["word_provenance"] == "live:intellifiller"
+    assert after[(3, 0)] == before[(3, 0)]
+    assert prohibited(writes) == []
+
+
+def test_complete_batch_validation_applies_to_filtered_eligible_subset(tmp_path):
+    """Provider returning skipped row_id or omitting eligible row_id is rejected with zero DB writes."""
+    config, paths, adapter = _build_sqlite_env(tmp_path)
+    _seed_session(
+        adapter,
+        tmp_path,
+        [
+            ["0", "Haus", "Haus", "house", "1", "Haus.", "/haus/", "noun"],
+            ["0", "Baum", "Baum", "", "2", "Baum.", "", ""],
+        ],
+        text="Haus. Baum.",
+    )
+    before = _cold_words_by_key(config, paths)
+
+    # Return wrong row_id (0, which was skipped) instead of eligible row_id (1)
+    def wrong_row_id_response(rows):
+        return [{"row_id": 0, "WordDestination": "wrong_Haus"}]
+
+    with enrichment_engine(config, response=wrong_row_id_response) as engine:
+        engine.release.set()
+        with control_writes() as writes:
+            with pytest.raises(reword.InvalidRewordTarget, match="Provider changed the requested row batch"):
+                adapter.enrich_session_intellifiller(
+                    session_zid=ZID,
+                    prompt_name="fixture",
+                    reprocess=False,
+                )
+
+    assert len(engine.requests) == 1
+    assert [row["row_id"] for row in engine.requests[0]["rows"]] == [1]
+    assert _cold_words_by_key(config, paths) == before
+    assert prohibited(writes) == []
+
+
+def test_pure_eligible_selection_lockstep_and_unfinished_sentinels():
+    """Pure functional core: lockstep rows/keys/visuals filtering and unfinished sentinel handling."""
+    import kardenwort_enrichment as enrichment
+
+    headers = ["WordSource", "WordDestination", "WordSourceIPA"]
+    rows = [
+        ["Haus", "house", "/haus/"],
+        ["Baum", "", "/baum/"],
+        ["Wald", "   ", ""],
+        ["Berg", "[FAILED]", ""],
+        ["See", "[Error: timeout]", ""],
+        ["Fluss", "HTTP 429 Too Many Requests", ""],
+        ["Dorf", "<span class='skeleton-loader'></span>", ""],
+    ]
+    selection = reword.RewordSelection(
+        keys=tuple((i + 1, 0) for i in range(len(rows))),
+        rows=tuple(range(len(rows))),
+        visuals=(0, 2, 4),
+        visual_keys=(((1, 0), 0), ((2, 0), 2), ((4, 0), 4)),
+    )
+    roles = {"word_translation": "WordDestination", "ipa": "WordSourceIPA"}
+
+    filtered = enrichment.eligible_selection(rows, headers, selection, roles, prompt="fixture", reprocess=False)
+    assert filtered.rows == (1, 2, 3, 4, 5, 6)
+    assert filtered.keys == ((2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0))
+    assert filtered.visuals == (2, 4)
+    assert filtered.visual_keys == (((2, 0), 2), ((4, 0), 4))
+
+    explicit = enrichment.eligible_selection(rows, headers, selection, roles, prompt="fixture", reprocess=True)
+    assert explicit == selection

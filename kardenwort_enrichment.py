@@ -59,6 +59,48 @@ def normalized_gender(value):
     return value if value in ('m', 'f', 'n') else ''
 
 
+PROMPT_TARGET_ROLES = {
+    'ipa_extraction': ('ipa', 'WordSourceIPA'),
+    'lemma_extraction': ('pos', 'WordSourcePOS'),
+}
+
+
+def target_column(roles, prompt=''):
+    """Resolve the configured target column for ordinary (reprocess=False) eligibility."""
+    key = str(prompt or '').strip().lower().replace(' ', '_').replace('-', '_')
+    role, default = PROMPT_TARGET_ROLES.get(key, ('word_translation', 'WordDestination'))
+    return (roles or {}).get(role, default)
+
+
+def row_needs_enrichment(row, headers, column):
+    if column not in headers:
+        return True
+    index = headers.index(column)
+    value = row[index] if index < len(row) else ''
+    return reword.is_unfinished_translation(value)
+
+
+def _filtered_visuals(selection, retained_keys):
+    if not selection.visual_keys:
+        return (), ()
+    visual_keys = tuple((key, visual) for key, visual in selection.visual_keys if key in retained_keys)
+    visuals = tuple(dict.fromkeys(visual for _, visual in visual_keys))
+    return visuals, visual_keys
+
+
+def eligible_selection(rows, headers, selection, roles, prompt='', reprocess=False):
+    """Filter selection rows, keys, and visuals in lockstep before provider dispatch."""
+    if reprocess:
+        return selection
+    column = target_column(roles, prompt)
+    kept = [(index, key) for index, key in zip(selection.rows, selection.keys)
+            if row_needs_enrichment(rows[index], headers, column)]
+    keys = tuple(key for _, key in kept)
+    indices = tuple(index for index, _ in kept)
+    visuals, visual_keys = _filtered_visuals(selection, set(keys))
+    return reword.RewordSelection(keys, indices, visuals, visual_keys)
+
+
 def enrich_rows(rows, headers, selection, language, prompt, config, query, zid=None, trace_id=None):
     batch = [dict(zip(headers, rows[index]), row_id=index) for index in selection.rows]
     patches = request_batch(batch, prompt, language, config, query, zid, trace_id)

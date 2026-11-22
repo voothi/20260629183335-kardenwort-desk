@@ -199,6 +199,7 @@ de_prompt=test
             session_zid=sess_zid,
             prompt_name="standard_enrichment",
             selected_rows=[0],
+            reprocess=True,
         )
 
     # Assert enrichment parameters were NOT hijacked by the sentence content
