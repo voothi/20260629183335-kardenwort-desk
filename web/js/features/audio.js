@@ -1,6 +1,8 @@
 /* Client-owned playback. Engine, browser policy and device errors stay visible. */
 (function (global) {
     'use strict';
+    var FETCH_TIMEOUT_MS = 75000;
+
     function AudioPlayback(options) {
         var current = null;
         var state = 'idle';
@@ -9,6 +11,13 @@
         function publish(next, message) {
             state = next;
             options.onState({ state: next, message: message || '' });
+        }
+
+        function clearFetchTimeout(owner) {
+            if (owner.timeout !== null) {
+                clearTimeout(owner.timeout);
+                owner.timeout = null;
+            }
         }
 
         function disposeMedia(owner) {
@@ -31,7 +40,7 @@
             if (!current) return;
             var owner = current;
             current = null;
-            clearTimeout(owner.timeout);
+            clearFetchTimeout(owner);
             owner.request.abort();
             disposeMedia(owner);
             publish('cancelled');
@@ -40,7 +49,7 @@
         function fail(owner, error) {
             if (current !== owner) return;
             current = null;
-            clearTimeout(owner.timeout);
+            clearFetchTimeout(owner);
             owner.request.abort();
             disposeMedia(owner);
             var message = error.message || 'Playback or audio device failed';
@@ -95,20 +104,23 @@
         }
 
         function nextSegment(owner) {
+            clearFetchTimeout(owner);
             if (owner.index === owner.segments.length) {
                 current = null;
-                clearTimeout(owner.timeout);
                 publish('finished');
                 return;
             }
             publish('loading');
             var text = owner.segments[owner.index++];
+            owner.timeout = setTimeout(function () { fail(owner, new Error('Audio request timed out')); }, FETCH_TIMEOUT_MS);
             fetch(options.url(), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-API-Token': options.token() },
                 body: JSON.stringify({ text: text, language: owner.language }),
                 signal: owner.request.signal
             }).then(checkedBlob).then(function (blob) {
+                if (current !== owner) return;
+                clearFetchTimeout(owner);
                 attachMedia(owner, blob);
             }).catch(function (error) { fail(owner, error); });
         }
@@ -117,9 +129,8 @@
             cancel();
             last = { text: text, language: language };
             var owner = { segments: text.split('|||').map(function (part) { return part.trim(); }).filter(Boolean),
-                language: language, index: 0, request: new AbortController(), audio: null, url: null };
+                language: language, index: 0, request: new AbortController(), audio: null, url: null, timeout: null };
             current = owner;
-            owner.timeout = setTimeout(function () { fail(owner, new Error('Audio request timed out')); }, 75000);
             nextSegment(owner);
         }
 
