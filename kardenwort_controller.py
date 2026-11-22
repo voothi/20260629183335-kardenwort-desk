@@ -5,6 +5,7 @@ import sys
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import Enum
 import sqlite3
 import kardenwort_desk as _desk_module
 import kardenwort_enrichment as _enrichment_core
@@ -550,6 +551,15 @@ class SidecarService:
         return f"http://{self.host}:{self.port}"
 
 
+class _SupervisorState(Enum):
+    IDLE = "idle"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    STOP_FAILED = "stop_failed"
+
+
 class ProcessSupervisor:
     """
     Supervises background HTTP microservices (SpaCy 8081, Translation 8082, IntelliFiller 8083).
@@ -566,6 +576,10 @@ class ProcessSupervisor:
         self._monitor_error = None
         self._monitor_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._state_cond = threading.Condition(self._state_lock)
+        self._state = _SupervisorState.IDLE
+        self._generation = 0
         try:
             self._setup_service_definitions()
         except BaseException as error:
@@ -759,15 +773,74 @@ class ProcessSupervisor:
         service.last_check = time.time()
         return False
 
-    def spawn_service(self, service: SidecarService) -> bool:
-        with self._lock:
+    def _active_stop_event(self, stop_event: Optional[threading.Event]) -> threading.Event:
+        return self._monitor_stop if stop_event is None else stop_event
+
+    def _is_generation_cancelled(
+        self,
+        generation: Optional[int] = None,
+        stop_event: Optional[threading.Event] = None,
+    ) -> bool:
+        if stop_event is not None and stop_event.is_set():
+            return True
+        with self._state_lock:
             if self._monitor_stop.is_set():
+                return True
+            if self._state in (_SupervisorState.STOPPING, _SupervisorState.STOPPED, _SupervisorState.STOP_FAILED):
+                return True
+            return generation is not None and self._generation != generation
+
+    def _begin_start_generation(self) -> Tuple[int, threading.Event]:
+        with self._state_cond:
+            while self._state == _SupervisorState.STOPPING:
+                self._state_cond.wait()
+            if self._state in (_SupervisorState.STARTING, _SupervisorState.RUNNING):
+                raise RuntimeError('Supervisor is already running')
+            if self._state == _SupervisorState.STOP_FAILED:
+                raise RuntimeError('Supervisor cannot restart after failed shutdown')
+            if self._state == _SupervisorState.STOPPED and self.job.job_handle is None:
+                self.job = WindowsJobObject()
+            self._generation += 1
+            stop_event = threading.Event()
+            self._monitor_stop = stop_event
+            self._state = _SupervisorState.STARTING
+            return self._generation, stop_event
+
+    def _abort_failed_start(self, generation: int) -> None:
+        with self._state_cond:
+            if self._generation == generation and self._state == _SupervisorState.STARTING:
+                self._state = _SupervisorState.IDLE
+                self._state_cond.notify_all()
+
+    def spawn_service(
+        self,
+        service: SidecarService,
+        generation: Optional[int] = None,
+        stop_event: Optional[threading.Event] = None,
+    ) -> bool:
+        with self._lock:
+            active_event = self._active_stop_event(stop_event)
+            if self._is_generation_cancelled(generation, active_event):
                 return False
             if self.probe_health(service, timeout=0.5):
+                if self._is_generation_cancelled(generation, active_event):
+                    return False
                 return self._reuse_healthy_service(service)
-            if service.managed_by_supervisor and service.process is not None:
-                stop_owned_process(service.process)
-            return self._launch_service(service)
+            if self._is_generation_cancelled(generation, active_event):
+                return False
+            return self._replace_and_launch_service(service, generation, active_event)
+
+    def _replace_and_launch_service(
+        self,
+        service: SidecarService,
+        generation: Optional[int],
+        stop_event: threading.Event,
+    ) -> bool:
+        if service.managed_by_supervisor and service.process is not None:
+            stop_owned_process(service.process)
+        if self._is_generation_cancelled(generation, stop_event):
+            return False
+        return self._launch_service(service, generation=generation, stop_event=stop_event)
 
     def _reuse_healthy_service(self, service):
         service.managed_by_supervisor = bool(service.managed_by_supervisor and service.process is not None
@@ -781,13 +854,21 @@ class ProcessSupervisor:
         script = Path(cmd[1]) if len(cmd) > 1 else None
         return not script or script.exists() or (len(cmd) > 2 and cmd[1] == '-m')
 
-    def _launch_service(self, service):
+    def _launch_service(
+        self,
+        service,
+        generation: Optional[int] = None,
+        stop_event: Optional[threading.Event] = None,
+    ):
         if not self._service_script_available(service.launch_cmd):
             logger.warning(f"Cannot launch sidecar '{service.name}': script does not exist.")
             return False
+        active_event = self._active_stop_event(stop_event)
+        if self._is_generation_cancelled(generation, active_event):
+            return False
         try:
             self._create_service_process(service)
-            return self._await_service_health(service)
+            return self._await_service_health(service, generation=generation, stop_event=active_event)
         except Exception as error:
             logger.error(f"Failed to spawn sidecar '{service.name}': {error}")
             return False
@@ -807,17 +888,33 @@ class ProcessSupervisor:
         self.job.assign_process(proc)
         logger.info(f"Spawned sidecar '{service.name}' (PID: {proc.pid}) on port {service.port}")
 
-    def _await_service_health(self, service):
+    def _confirm_healthy_service(
+        self,
+        service: SidecarService,
+        generation: Optional[int],
+        active_event: threading.Event,
+    ) -> bool:
+        if self._is_generation_cancelled(generation, active_event):
+            return False
+        logger.info(f"Sidecar '{service.name}' is healthy on port {service.port}")
+        return True
+
+    def _await_service_health(
+        self,
+        service,
+        generation: Optional[int] = None,
+        stop_event: Optional[threading.Event] = None,
+    ):
+        active_event = self._active_stop_event(stop_event)
         deadline = time.monotonic() + 15.0
-        while not self._monitor_stop.is_set() and time.monotonic() < deadline:
+        while not self._is_generation_cancelled(generation, active_event) and time.monotonic() < deadline:
             if service.process.poll() is not None:
                 logger.warning(f"Sidecar '{service.name}' exited with code {service.process.returncode}.")
                 return False
             if self.probe_health(service, timeout=0.5):
-                logger.info(f"Sidecar '{service.name}' is healthy on port {service.port}")
-                return True
-            self._monitor_stop.wait(0.3)
-        if not self._monitor_stop.is_set():
+                return self._confirm_healthy_service(service, generation, active_event)
+            active_event.wait(0.3)
+        if not self._is_generation_cancelled(generation, active_event):
             logger.warning(f"Sidecar '{service.name}' health probe did not respond within 15s.")
         return False
 
@@ -826,32 +923,91 @@ class ProcessSupervisor:
             logger.info("Process supervisor is disabled.")
             return
 
-        self._monitor_stop.clear()
+        generation, stop_event = self._begin_start_generation()
         logger.info("Starting ProcessSupervisor sidecar services...")
-        for svc in self.services.values():
-            self.spawn_service(svc)
+        try:
+            for svc in list(self.services.values()):
+                if self._is_generation_cancelled(generation, stop_event):
+                    return
+                self.spawn_service(svc, generation=generation, stop_event=stop_event)
+            self._start_monitor(generation=generation, stop_event=stop_event)
+        except BaseException:
+            self._abort_failed_start(generation)
+            raise
 
-        self._start_monitor()
-
-    def _start_monitor(self):
+    def _claim_started_monitor(
+        self,
+        generation: int,
+        stop_event: Optional[threading.Event],
+    ) -> Optional[Tuple[int, threading.Event]]:
+        active_event = self._active_stop_event(stop_event)
+        if self._generation != generation or self._state != _SupervisorState.STARTING:
+            return None
+        if active_event.is_set():
+            return None
         if self._monitor_thread is not None and self._monitor_thread.is_alive():
             raise RuntimeError('Supervisor watchdog is already running')
-        self._monitor_stop.clear()
-        self._monitor_error = None
-        self._monitor_thread = threading.Thread(target=self._supervision_loop, name="SupervisorWatchdog", daemon=False)
-        self._monitor_thread.start()
+        return generation, active_event
 
-    def _supervision_loop(self):
+    def _claim_monitor_generation(
+        self,
+        generation: Optional[int],
+        stop_event: Optional[threading.Event],
+    ) -> Optional[Tuple[int, threading.Event]]:
+        if generation is not None:
+            return self._claim_started_monitor(generation, stop_event)
+        if self._monitor_thread is not None and self._monitor_thread.is_alive():
+            raise RuntimeError('Supervisor watchdog is already running')
+        if self._state != _SupervisorState.IDLE or self._monitor_stop.is_set():
+            return None
+        self._generation += 1
+        fresh_event = threading.Event()
+        self._monitor_stop = fresh_event
+        return self._generation, fresh_event
+
+    def _start_monitor(
+        self,
+        generation: Optional[int] = None,
+        stop_event: Optional[threading.Event] = None,
+    ) -> bool:
+        with self._state_lock:
+            claimed = self._claim_monitor_generation(generation, stop_event)
+            if claimed is None:
+                return False
+            active_generation, active_event = claimed
+            self._monitor_error = None
+            thread = threading.Thread(
+                target=self._supervision_loop,
+                args=(active_generation, active_event),
+                name="SupervisorWatchdog",
+                daemon=False,
+            )
+            thread.start()
+            self._monitor_thread = thread
+            self._state = _SupervisorState.RUNNING
+            return True
+
+    def _supervision_loop(
+        self,
+        generation: Optional[int] = None,
+        stop_event: Optional[threading.Event] = None,
+    ):
+        active_event = self._active_stop_event(stop_event)
         try:
-            while not self._monitor_stop.wait(5.0):
+            while not active_event.wait(5.0):
                 for svc in list(self.services.values()):
-                    if self._monitor_stop.is_set():
+                    if self._is_generation_cancelled(generation, active_event):
                         return
-                    self._supervise_service(svc)
+                    self._supervise_service(svc, generation=generation, stop_event=active_event)
         except BaseException as error:
             self._monitor_error = error
 
-    def _supervise_service(self, svc):
+    def _supervise_service(
+        self,
+        svc,
+        generation: Optional[int] = None,
+        stop_event: Optional[threading.Event] = None,
+    ):
         if self.probe_health(svc, timeout=1.5):
             svc.consecutive_failures = 0
             return
@@ -862,7 +1018,7 @@ class ProcessSupervisor:
             logger.warning(f"Managed sidecar '{svc.name}' process exited (exit code: {exit_code}). Restarting...")
             svc.restart_count += 1
             svc.consecutive_failures = 0
-            self.spawn_service(svc)
+            self.spawn_service(svc, generation=generation, stop_event=stop_event)
             return
         if time.time() - getattr(svc, 'spawn_time', 0.0) < 20.0:
             return
@@ -871,12 +1027,29 @@ class ProcessSupervisor:
             logger.warning(f"Health probe failed {svc.consecutive_failures} consecutive times for managed sidecar '{svc.name}' on port {svc.port}. Restarting...")
             svc.restart_count += 1
             svc.consecutive_failures = 0
-            self.spawn_service(svc)
+            self.spawn_service(svc, generation=generation, stop_event=stop_event)
 
-    def _join_monitor(self):
-        if self._monitor_thread is not None:
-            self._monitor_thread.join(5)
-            if self._monitor_thread.is_alive():
+    def _begin_stop(self) -> Tuple[bool, Optional[threading.Thread]]:
+        with self._state_cond:
+            while self._state == _SupervisorState.STOPPING:
+                self._state_cond.wait()
+            if self._state == _SupervisorState.STOPPED:
+                return False, None
+            self._generation += 1
+            self._monitor_stop.set()
+            self._state = _SupervisorState.STOPPING
+            return True, self._monitor_thread
+
+    def _finish_stop(self, errors: List[BaseException]) -> None:
+        with self._state_cond:
+            self._state = _SupervisorState.STOP_FAILED if errors else _SupervisorState.STOPPED
+            self._state_cond.notify_all()
+
+    def _join_monitor(self, monitor_thread: Optional[threading.Thread] = None):
+        thread = self._monitor_thread if monitor_thread is None else monitor_thread
+        if thread is not None:
+            thread.join(5)
+            if thread.is_alive():
                 raise TimeoutError('Supervisor watchdog did not terminate')
         if self._monitor_error is not None:
             raise self._monitor_error
@@ -890,9 +1063,19 @@ class ProcessSupervisor:
             raise BaseExceptionGroup('Managed sidecar disposal failed', errors)
 
     def stop(self):
-        self._monitor_stop.set()
+        should_stop, monitor_thread = self._begin_stop()
+        if not should_stop:
+            return
         logger.info("Stopping ProcessSupervisor and terminating managed sidecars...")
-        errors = run_cleanup([self._join_monitor, self._stop_services, self.job.close])
+        errors: List[BaseException] = []
+        try:
+            errors = run_cleanup([
+                lambda: self._join_monitor(monitor_thread),
+                self._stop_services,
+                self.job.close,
+            ])
+        finally:
+            self._finish_stop(errors)
         if errors:
             raise BaseExceptionGroup('Supervisor disposal failed', errors)
 
