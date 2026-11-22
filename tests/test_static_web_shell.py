@@ -134,10 +134,10 @@ def test_playwright_client_hydration_from_session_data(page, test_server):
         "target_lang": "ru",
         "source_text": "Der schnelle braune Fuchs springt über den faulen Hund.",
         "sentence_translation": "Быстрая коричневая лиса прыгает через ленивую собаку.",
-        "headers": ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination"],
+        "headers": ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination", "SentenceSourceIndex", "TokenOrder"],
         "data_rows": [
-            ["Fuchs", "Fuchs", "n.", "лиса"],
-            ["springt", "springen", "v.", "прыгает"]
+            ["Fuchs", "Fuchs", "n.", "лиса", "1", "0"],
+            ["springt", "springen", "v.", "прыгает", "1", "1"]
         ],
         "server_enabled": True,
         "api_token": "test-token"
@@ -190,10 +190,10 @@ def test_playwright_client_hydration_from_kardenwort_bootstrap(page, test_server
             "target_lang": "ru",
             "source_text": "Ein treuer Hund bewacht das Haus.",
             "sentence_translation": "Верный пес охраняет дом.",
-            "headers": ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination"],
+            "headers": ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination", "SentenceSourceIndex", "TokenOrder"],
             "data_rows": [
-                ["Hund", "Hund", "n.", "пес"],
-                ["bewacht", "bewachen", "v.", "охраняет"]
+                ["Hund", "Hund", "n.", "пес", "1", "0"],
+                ["bewacht", "bewachen", "v.", "охраняет", "1", "1"]
             ],
             "server_enabled": True,
             "api_token": "bootstrap-token"
@@ -305,10 +305,10 @@ def test_playwright_word_token_hover_click_delegation_and_translation_pipeline(p
             "target_lang": "ru",
             "source_text": "Ein schneller Fuchs springt über den Fuchs.",
             "sentence_translation": "Быстрая лиса прыгает через лису.",
-            "headers": ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination"],
+            "headers": ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination", "SentenceSourceIndex", "TokenOrder"],
             "data_rows": [
-                ["Fuchs", "Fuchs", "n.", "лиса"],
-                ["springt", "springen", "v.", "прыгает"]
+                ["Fuchs", "Fuchs", "n.", "лиса", "1", "0"],
+                ["springt", "springen", "v.", "прыгает", "1", "1"]
             ],
             "server_enabled": True,
             "api_token": "bootstrap-token"
@@ -395,10 +395,10 @@ def test_playwright_table_inline_editing_history_and_navigation(page, test_serve
             "target_lang": "ru",
             "source_text": "Ein schneller Fuchs springt.",
             "sentence_translation": "Быстрая лиса прыгает.",
-            "headers": ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination"],
+            "headers": ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination", "SentenceSourceIndex", "TokenOrder"],
             "data_rows": [
-                ["Fuchs", "Fuchs", "n.", "лиса"],
-                ["springt", "springen", "v.", "прыгает"]
+                ["Fuchs", "Fuchs", "n.", "лиса", "1", "0"],
+                ["springt", "springen", "v.", "прыгает", "1", "1"]
             ],
             "server_enabled": True,
             "api_token": "bootstrap-token"
@@ -531,10 +531,10 @@ def test_playwright_action_toolbar_shortcuts_modal_and_audio(page, test_server):
             "target_lang": "ru",
             "source_text": "Ein schneller Fuchs springt.",
             "sentence_translation": "Быстрая лиса прыгает.",
-            "headers": ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination"],
+            "headers": ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination", "SentenceSourceIndex", "TokenOrder"],
             "data_rows": [
-                ["Fuchs", "Fuchs", "n.", "лиса"],
-                ["springt", "springen", "v.", "прыгает"]
+                ["Fuchs", "Fuchs", "n.", "лиса", "1", "0"],
+                ["springt", "springen", "v.", "прыгает", "1", "1"]
             ],
             "server_enabled": True,
             "api_token": "bootstrap-token"

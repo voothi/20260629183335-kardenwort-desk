@@ -223,7 +223,7 @@ def _extract_json_island(html: str, island_id: str) -> dict:
     return json.loads(match.group(1).strip())
 
 
-def _render_empty_hydrated_lookup_html(server, source_text, headers, data_rows, *, zid=ZID):
+def _render_empty_hydrated_lookup_html(server, source_text, headers, data_rows, *, zid=ZID, fingerprint=None):
     html = desk.render_lookup_html(
         text=source_text,
         language="de",
@@ -245,7 +245,7 @@ def _render_empty_hydrated_lookup_html(server, source_text, headers, data_rows, 
         session_zid=zid,
         api_token=TOKEN,
         server_enabled=True,
-        fingerprint=desk.compute_content_fingerprint(data_rows),
+        fingerprint=fingerprint if fingerprint is not None else desk.compute_content_fingerprint(data_rows),
     )
     return _empty_tbody(html)
 
@@ -277,7 +277,10 @@ def test_hydrated_checkbox_custom_reordered_headers_repeated_token_order_zero(
     source_text = _seed_repeated_token_zero_session(adapter)
 
     rows_initial = _reordered_custom_rows_from_sqlite(adapter)
-    html = _render_empty_hydrated_lookup_html(server, source_text, REORDERED_CUSTOM_HEADERS, rows_initial)
+    restored_fp = desk.compute_content_fingerprint(adapter.restore_session(ZID)["data_rows"])
+    html = _render_empty_hydrated_lookup_html(
+        server, source_text, REORDERED_CUSTOM_HEADERS, rows_initial, fingerprint=restored_fp
+    )
 
     errors = _open_page(page, url, html)
     try:
@@ -347,7 +350,10 @@ def test_hydrated_checkbox_direct_api_v1_tag_submits_exact_coordinates(
     source_text = _seed_repeated_token_zero_session(adapter)
 
     rows_initial = _reordered_custom_rows_from_sqlite(adapter)
-    html = _render_empty_hydrated_lookup_html(server, source_text, REORDERED_CUSTOM_HEADERS, rows_initial)
+    restored_fp = desk.compute_content_fingerprint(adapter.restore_session(ZID)["data_rows"])
+    html = _render_empty_hydrated_lookup_html(
+        server, source_text, REORDERED_CUSTOM_HEADERS, rows_initial, fingerprint=restored_fp
+    )
 
     errors = _open_page(page, url, html)
     try:

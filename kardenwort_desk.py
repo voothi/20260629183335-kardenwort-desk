@@ -2927,11 +2927,11 @@ def get_role_fields(mapping, headers):
     if 'selected' not in role_fields and 'deskselected' in headers_lower:
         role_fields['selected'] = headers_lower['deskselected']
 
-    sentence_index_col = headers_lower.get("sentencesourceindex", "SentenceSourceIndex")
+    sentence_index_col = role_fields.get('sentence_index') or headers_lower.get("sentencesourceindex", "SentenceSourceIndex")
     if mapping and 'fields_mapping.word' in mapping:
         for col, role in mapping['fields_mapping.word'].items():
             if role == 'sentence_index':
-                sentence_index_col = col
+                sentence_index_col = headers_lower.get(col.lower(), col)
                 break
     role_fields['sentence_index'] = sentence_index_col
 
@@ -13665,6 +13665,7 @@ html, body {{
         "sentence_translation": clean_sentence_trans,
         "headers": ui_session_headers,
         "data_rows": ui_session_rows,
+        "role_fields": dict(role_fields or {}),
         "tsv_path": str(working_tsv_path or tsv_path or ""),
         "theme": theme,
         "zoom_level": zoom_level,
@@ -14861,6 +14862,13 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     server_port = goldendict.get('server_port', 18335) if isinstance(goldendict, dict) else 18335
     server_url = f"http://{server_host}:{server_port}"
 
+    has_grouped_col = lookup_column(headers, ('all_row_ids', 'data-all-row-ids', 'all_ids')) >= 0
+    row_occurrence_targets = (
+        [occurrence_targets.get(id(row), []) for row in data_rows]
+        if has_grouped_col and data_rows and all(occurrence_targets.get(id(row)) for row in data_rows)
+        else None
+    )
+
     session_payload = {
         "zid": str(zid or session_zid or ""),
         "session_zid": str(session_zid or zid or ""),
@@ -14871,11 +14879,14 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         "sentence_translation": str(sentence_translation or ""),
         "headers": headers,
         "data_rows": data_rows,
+        "role_fields": dict(role_fields or {}),
         "server_enabled": bool(effective_server_enabled),
         "api_token": str(effective_api_token or ""),
         "fingerprint": str(fingerprint or ""),
         "server_url": server_url,
     }
+    if row_occurrence_targets is not None:
+        session_payload["row_occurrence_targets"] = row_occurrence_targets
     session_json = serialize_json_island(session_payload)
 
     web_dir = Path(__file__).resolve().parent / "web"
@@ -14918,6 +14929,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         "target_language": session_payload["target_lang"],
         "data_rows": session_payload["data_rows"],
         "headers": session_payload["headers"],
+        "role_fields": session_payload["role_fields"],
         "source_text": session_payload["source_text"],
         "sentence_translation": session_payload["sentence_translation"],
         "server_enabled": session_payload["server_enabled"],

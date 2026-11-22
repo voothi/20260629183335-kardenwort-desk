@@ -1100,6 +1100,158 @@
     }
     window.wireActionToolbar = wireActionToolbar;
 
+    /** @param {string[]} headers @param {string} configuredName @param {string[]} aliases @param {boolean} required @param {string} label */
+    function resolveHydrationColumnIndex(headers, configuredName, aliases, required, label) {
+        var candidates = [];
+        if (configuredName && String(configuredName).trim()) {
+            candidates.push(String(configuredName).trim().toLowerCase());
+        }
+        aliases.forEach(function (alias) {
+            var norm = String(alias).trim().toLowerCase();
+            if (norm && candidates.indexOf(norm) === -1) candidates.push(norm);
+        });
+        var matches = [];
+        for (var i = 0; i < headers.length; i++) {
+            var hNorm = String(headers[i] == null ? '' : headers[i]).trim().toLowerCase();
+            if (candidates.indexOf(hNorm) !== -1) {
+                matches.push(i);
+            }
+        }
+        if (matches.length > 1) {
+            throw new Error('Ambiguous ' + label + ' column in hydration manifest');
+        }
+        if (matches.length === 0) {
+            if (required) {
+                throw new Error('Missing required ' + label + ' column in hydration manifest');
+            }
+            return -1;
+        }
+        return matches[0];
+    }
+
+    /** @param {unknown} raw @param {string} label @param {number} rowIdx @param {number} minVal */
+    function parseHydrationIntCell(raw, label, rowIdx, minVal) {
+        var text = String(raw == null ? '' : raw).trim();
+        if (!/^[0-9]+$/.test(text) || Number(text) < minVal) {
+            throw new Error('Invalid ' + label + ' at row ' + rowIdx);
+        }
+        return text;
+    }
+
+    /** @param {unknown} targets @param {number} rowIdx */
+    function validateHydrationOccurrenceTargets(targets, rowIdx) {
+        if (!Array.isArray(targets) || targets.length === 0) {
+            throw new Error('Missing occurrence targets for grouped row ' + rowIdx);
+        }
+        return targets.map(function (t) {
+            if (!t || typeof t !== 'object') {
+                throw new Error('Malformed occurrence target at row ' + rowIdx);
+            }
+            var sVal = parseHydrationIntCell(t.sentence_idx, 'occurrence sentence_idx', rowIdx, 1);
+            var tVal = parseHydrationIntCell(t.token_order, 'occurrence token_order', rowIdx, 0);
+            return { sentence_idx: Number(sVal), token_order: Number(tVal) };
+        });
+    }
+
+    /** @param {Record<string, any>} session @param {Record<string, any>|null} bootstrapPayload */
+    function buildHydratedRowSpecs(session, bootstrapPayload) {
+        var headers = session.headers;
+        var dataRows = session.data_rows;
+        if (!Array.isArray(headers) || !Array.isArray(dataRows)) {
+            throw new Error('Invalid hydration payload: headers and data_rows must be arrays');
+        }
+        var roleFields = (session.role_fields && typeof session.role_fields === 'object')
+            ? session.role_fields
+            : ((bootstrapPayload && bootstrapPayload.role_fields && typeof bootstrapPayload.role_fields === 'object')
+                ? bootstrapPayload.role_fields
+                : {});
+
+        var colSentIdx = resolveHydrationColumnIndex(
+            headers, roleFields.sentence_index,
+            ['SentenceSourceIndex', 'SentenceIndex', 'sentence_index', 'sentence_idx'], true, 'sentence_index'
+        );
+        var colTokenOrder = resolveHydrationColumnIndex(
+            headers, roleFields.token_order,
+            ['TokenOrder', 'token_order'], true, 'token_order'
+        );
+        var colInf = resolveHydrationColumnIndex(headers, roleFields.inflected, ['WordSourceInflectedForm', 'inflected'], false, 'inflected');
+        var colLemma = resolveHydrationColumnIndex(headers, roleFields.lemma, ['WordSource', 'lemma'], false, 'lemma');
+        var colDest = resolveHydrationColumnIndex(headers, roleFields.word_translation, ['WordDestination', 'word_translation'], false, 'word_translation');
+        var colIpa = resolveHydrationColumnIndex(headers, roleFields.ipa, ['WordSourceIPA', 'ipa'], false, 'ipa');
+        var colMorph = resolveHydrationColumnIndex(headers, roleFields.morphology, ['WordSourceMorphologyAI', 'morphology'], false, 'morphology');
+        var colPos = resolveHydrationColumnIndex(headers, roleFields.pos, ['WordSourcePOS', 'pos'], false, 'pos');
+        var colGen = resolveHydrationColumnIndex(headers, roleFields.gender, ['WordSourceGender', 'gender', 'g'], false, 'gender');
+        var colSel = resolveHydrationColumnIndex(headers, roleFields.selected, ['DeskSelected', 'selected'], false, 'selected');
+        var colAllIds = resolveHydrationColumnIndex(headers, roleFields.all_row_ids, ['all_row_ids', 'data-all-row-ids', 'all_ids'], false, 'all_row_ids');
+        var colOcc = resolveHydrationColumnIndex(headers, roleFields.occurrence_data, ['occurrence_data', 'occ', 'data-occ'], false, 'occurrence_data');
+
+        var explicitTargets = session.row_occurrence_targets !== undefined
+            ? session.row_occurrence_targets
+            : (bootstrapPayload && bootstrapPayload.row_occurrence_targets !== undefined ? bootstrapPayload.row_occurrence_targets : null);
+        if (explicitTargets !== null && (!Array.isArray(explicitTargets) || explicitTargets.length !== dataRows.length)) {
+            throw new Error('Incompatible row_occurrence_targets manifest length');
+        }
+
+        var atomicByIndex = Object.create(null);
+        var rawSpecs = dataRows.map(function (row, idx) {
+            if (!Array.isArray(row)) {
+                throw new Error('Hydration row ' + idx + ' must be a positional array');
+            }
+            var sentIdxVal = parseHydrationIntCell(row[colSentIdx], 'sentence_index', idx, 1);
+            var tokOrderVal = parseHydrationIntCell(row[colTokenOrder], 'token_order', idx, 0);
+            atomicByIndex[String(idx)] = { sentence_idx: Number(sentIdxVal), token_order: Number(tokOrderVal) };
+            var allIdsVal = (colAllIds !== -1 && row[colAllIds] != null) ? String(row[colAllIds]).trim() : '';
+            var occVal = (colOcc !== -1 && row[colOcc] != null) ? String(row[colOcc]).trim() : '';
+            var rawSel = (colSel !== -1 && row[colSel] != null) ? String(row[colSel]).trim().toLowerCase() : '';
+            var isInitSel = (rawSel === '1' || rawSel === 'true') ||
+                Boolean(window.AppState && Array.isArray(window.AppState.selected_ids) && window.AppState.selected_ids.indexOf(idx) !== -1);
+            return {
+                idx: idx,
+                row: row,
+                sentIdxVal: sentIdxVal,
+                tokOrderVal: tokOrderVal,
+                allIdsVal: allIdsVal,
+                occVal: occVal,
+                isInitSel: isInitSel
+            };
+        });
+
+        return {
+            cols: {
+                inf: colInf, lemma: colLemma, dest: colDest, ipa: colIpa, morph: colMorph, pos: colPos, gen: colGen,
+                infName: colInf !== -1 ? String(headers[colInf]) : 'WordSourceInflectedForm',
+                lemmaName: colLemma !== -1 ? String(headers[colLemma]) : 'WordSource',
+                destName: colDest !== -1 ? String(headers[colDest]) : 'WordDestination',
+                ipaName: colIpa !== -1 ? String(headers[colIpa]) : 'WordSourceIPA',
+                morphName: colMorph !== -1 ? String(headers[colMorph]) : 'WordSourceMorphologyAI',
+                posName: colPos !== -1 ? String(headers[colPos]) : 'WordSourcePOS',
+                genName: colGen !== -1 ? String(headers[colGen]) : 'WordSourceGender'
+            },
+            rows: rawSpecs.map(function (spec) {
+                var targets;
+                if (explicitTargets !== null) {
+                    targets = validateHydrationOccurrenceTargets(explicitTargets[spec.idx], spec.idx);
+                } else if (spec.allIdsVal) {
+                    var groupParts = spec.allIdsVal.split(',').map(function (p) { return p.trim(); }).filter(Boolean);
+                    if (groupParts.length > 1) {
+                        targets = groupParts.map(function (gid) {
+                            if (!Object.prototype.hasOwnProperty.call(atomicByIndex, gid)) {
+                                throw new Error('Incompatible grouped row binding "' + gid + '" at row ' + spec.idx);
+                            }
+                            return atomicByIndex[gid];
+                        });
+                    } else {
+                        targets = [atomicByIndex[String(spec.idx)]];
+                    }
+                } else {
+                    targets = [atomicByIndex[String(spec.idx)]];
+                }
+                spec.occurrenceTargets = targets;
+                return spec;
+            })
+        };
+    }
+
     function hydrateSession() {
         var bootstrapEl = document.getElementById('kardenwort-bootstrap');
         var dataEl = document.getElementById('session-data');
@@ -1233,51 +1385,20 @@
             if (isMismatch) {
                 if (tbody) tbody.innerHTML = '';
             } else if (tbody && !tbody.children.length && session.data_rows && session.data_rows.length) {
-                var headers = session.headers || [];
-                var colInf = headers.indexOf('WordSourceInflectedForm');
-                var colLemma = headers.indexOf('WordSource');
-                if (colLemma === -1) colLemma = headers.indexOf('lemma');
-                var colDest = headers.indexOf('WordDestination');
-                if (colDest === -1) colDest = headers.indexOf('word_translation');
-                var colIpa = headers.indexOf('WordSourceIPA');
-                if (colIpa === -1) colIpa = headers.indexOf('ipa');
-                var colMorph = headers.indexOf('WordSourceMorphologyAI');
-                if (colMorph === -1) colMorph = headers.indexOf('morphology');
-                var colPos = headers.indexOf('WordSourcePOS');
-                if (colPos === -1) colPos = headers.indexOf('pos');
-                var colGen = headers.indexOf('WordSourceGender');
-                if (colGen === -1) colGen = headers.indexOf('gender');
-                if (colGen === -1) colGen = headers.indexOf('g');
-                var colTokenOrder = headers.indexOf('TokenOrder');
-                var colSentIdx = headers.indexOf('SentenceSourceIndex');
-
-                var hydrationBody = tbody;
-                session.data_rows.forEach(/** @param {string[]} row @param {number} idx */ function (row, idx) {
-                    var tokOrderVal = (colTokenOrder !== -1 && row[colTokenOrder] !== undefined && String(row[colTokenOrder]).trim() !== '') ? String(row[colTokenOrder]).trim() : String(idx);
-                    var sentIdxVal = (colSentIdx !== -1 && row[colSentIdx] !== undefined && String(row[colSentIdx]).trim() !== '') ? String(row[colSentIdx]).trim() : '1';
-                    var tr = document.createElement('tr');
-                    tr.setAttribute('data-row-id', String(idx));
-                    tr.setAttribute('data-token-order', tokOrderVal);
-                    tr.setAttribute('data-sentence-idx', sentIdxVal);
-                    var isInitSel = (window.AppState && window.AppState.selected_ids && window.AppState.selected_ids.indexOf(idx) !== -1);
-                    tr.setAttribute('data-selected', String(isInitSel ? '1' : '0'));
-                    tr.setAttribute('data-filter-hidden', String(isInitSel ? '0' : '1'));
-                    if (isInitSel) {
-                        tr.classList.add('selected', 'kw-row-selected');
+                var hydratedPlan = null;
+                try {
+                    hydratedPlan = buildHydratedRowSpecs(session, bootstrapPayload);
+                } catch (manifestErr) {
+                    var errMsg = (manifestErr && manifestErr.message) ? manifestErr.message : String(manifestErr);
+                    console.error('[Kardenwort] Hydration manifest validation failed:', manifestErr);
+                    setStatusMessage('Error: ' + errMsg, true);
+                    if (typeof window.showToast === 'function') {
+                        window.showToast('Error: ' + errMsg, 'error');
                     }
-
-                    if (!isServerDisabled()) {
-                        var tdTag = document.createElement('td');
-                        tdTag.className = 'kw-tag-control';
-                        var cb = document.createElement('input');
-                        cb.type = 'checkbox';
-                        cb.className = 'kw-tag-checkbox';
-                        cb.setAttribute('data-row-id', String(idx));
-                        cb.setAttribute('data-token-order', tokOrderVal);
-                        cb.onchange = function () { window.kwToggleTag(cb, idx); };
-                        tdTag.appendChild(cb);
-                        tr.appendChild(tdTag);
-                    }
+                }
+                if (hydratedPlan) {
+                    var cols = hydratedPlan.cols;
+                    var fragment = document.createDocumentFragment();
 
                     /** @param {string} cls @param {string} colName @param {string|Node} text @param {boolean} isEditable */
                     function makeCell(cls, colName, text, isEditable) {
@@ -1302,24 +1423,59 @@
                         return td;
                     }
 
-                    var valInf = (colInf !== -1 && row[colInf]) ? row[colInf] : '';
-                    var valLem = (colLemma !== -1 && row[colLemma]) ? row[colLemma] : (row[0] || '');
-                    var valDest = (colDest !== -1 && row[colDest]) ? row[colDest] : (row[1] || '');
-                    var valIpa = (colIpa !== -1 && row[colIpa]) ? row[colIpa] : '';
-                    var valMorph = (colMorph !== -1 && row[colMorph]) ? row[colMorph] : '';
-                    var valPos = (colPos !== -1 && row[colPos]) ? row[colPos] : '';
-                    var valGen = (colGen !== -1 && row[colGen]) ? row[colGen] : '';
+                    hydratedPlan.rows.forEach(function (spec) {
+                        var row = spec.row;
+                        var idx = spec.idx;
+                        var tr = document.createElement('tr');
+                        tr.setAttribute('data-row-id', String(idx));
+                        tr.setAttribute('data-token-order', spec.tokOrderVal);
+                        tr.setAttribute('data-sentence-idx', spec.sentIdxVal);
+                        tr.setAttribute('data-occurrence-targets', JSON.stringify(spec.occurrenceTargets));
+                        if (spec.allIdsVal) tr.setAttribute('data-all-row-ids', spec.allIdsVal);
+                        if (spec.occVal) tr.setAttribute('data-occ', spec.occVal);
+                        tr.setAttribute('data-selected', spec.isInitSel ? '1' : '0');
+                        tr.setAttribute('data-filter-hidden', spec.isInitSel ? '0' : '1');
+                        if (spec.isInitSel) {
+                            tr.classList.add('selected', 'kw-row-selected');
+                        }
 
-                    tr.appendChild(makeCell('col-inflected', 'WordSourceInflectedForm', valInf, true));
-                    tr.appendChild(makeCell('col-lemma', 'WordSource', valLem, true));
-                    tr.appendChild(makeCell('col-translation', 'WordDestination', valDest, true));
-                    tr.appendChild(makeCell('col-ipa', 'WordSourceIPA', valIpa, false));
-                    tr.appendChild(makeCell('col-morphology', 'WordSourceMorphologyAI', valMorph, false));
-                    tr.appendChild(makeCell('col-pos', 'WordSourcePOS', valPos, false));
-                    tr.appendChild(makeCell('col-gender', 'WordSourceGender', valGen, false));
+                        if (!isServerDisabled()) {
+                            var tdTag = document.createElement('td');
+                            tdTag.className = 'kw-tag-control';
+                            var cb = document.createElement('input');
+                            cb.type = 'checkbox';
+                            cb.className = 'kw-tag-checkbox';
+                            cb.setAttribute('data-row-id', String(idx));
+                            cb.setAttribute('data-token-order', spec.tokOrderVal);
+                            cb.setAttribute('data-sentence-idx', spec.sentIdxVal);
+                            if (spec.allIdsVal) cb.setAttribute('data-all-row-ids', spec.allIdsVal);
+                            if (spec.occVal) cb.setAttribute('data-occ', spec.occVal);
+                            cb.checked = spec.isInitSel;
+                            cb.onchange = function () { window.kwToggleTag(cb, idx); };
+                            tdTag.appendChild(cb);
+                            tr.appendChild(tdTag);
+                        }
 
-                    hydrationBody.appendChild(tr);
-                });
+                        var valInf = (cols.inf !== -1 && row[cols.inf] != null) ? row[cols.inf] : '';
+                        var valLem = (cols.lemma !== -1 && row[cols.lemma] != null) ? row[cols.lemma] : '';
+                        var valDest = (cols.dest !== -1 && row[cols.dest] != null) ? row[cols.dest] : '';
+                        var valIpa = (cols.ipa !== -1 && row[cols.ipa] != null) ? row[cols.ipa] : '';
+                        var valMorph = (cols.morph !== -1 && row[cols.morph] != null) ? row[cols.morph] : '';
+                        var valPos = (cols.pos !== -1 && row[cols.pos] != null) ? row[cols.pos] : '';
+                        var valGen = (cols.gen !== -1 && row[cols.gen] != null) ? row[cols.gen] : '';
+
+                        tr.appendChild(makeCell('col-inflected', cols.infName, valInf, true));
+                        tr.appendChild(makeCell('col-lemma', cols.lemmaName, valLem, true));
+                        tr.appendChild(makeCell('col-translation', cols.destName, valDest, true));
+                        tr.appendChild(makeCell('col-ipa', cols.ipaName, valIpa, false));
+                        tr.appendChild(makeCell('col-morphology', cols.morphName, valMorph, false));
+                        tr.appendChild(makeCell('col-pos', cols.posName, valPos, false));
+                        tr.appendChild(makeCell('col-gender', cols.genName, valGen, false));
+
+                        fragment.appendChild(tr);
+                    });
+                    tbody.appendChild(fragment);
+                }
             }
 
             // Synchronize thead tag header with actual checkboxes
@@ -9128,6 +9284,7 @@
                         return JSON.stringify(mergedDeltas);
                     }
                 }
+                var seenTableDeltas = {};
                 for (var i = 0; i < tableRows.length; i++) {
                     var row = tableRows[i];
                     var rowIdStr = String(row.getAttribute('data-row-id'));
@@ -9138,16 +9295,36 @@
                     var currentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr);
                     var initiallySelected = initialHighlights[rowIdStr] || false;
                     if (currentlySelected !== initiallySelected) {
-                        if (isLookupMode() && (!/^[0-9]+$/.test(sIdxStr || '') || Number(sIdxStr) < 1 || !/^[0-9]+$/.test(tOrdStr || ''))) {
-                            window.showToast('Selection unavailable: missing occurrence identity', 'error');
-                            continue;
+                        var rowTargets;
+                        if (row.hasAttribute('data-occurrence-targets')) {
+                            try {
+                                rowTargets = getLookupRowTargets(row);
+                            } catch (err) {
+                                window.showToast('Selection unavailable: missing occurrence identity', 'error');
+                                continue;
+                            }
+                            if (!rowTargets.length) {
+                                window.showToast('Selection unavailable: missing occurrence identity', 'error');
+                                continue;
+                            }
+                        } else {
+                            if (isLookupMode() && (!/^[0-9]+$/.test(sIdxStr || '') || Number(sIdxStr) < 1 || !/^[0-9]+$/.test(tOrdStr || ''))) {
+                                window.showToast('Selection unavailable: missing occurrence identity', 'error');
+                                continue;
+                            }
+                            rowTargets = [{sentence_idx: sIdxVal, token_order: tOrdVal}];
                         }
-                        mergedDeltas.push({
-                            row_id: parseInt(String(rowIdStr), 10),
-                            token_order: tOrdVal,
-                            sentence_idx: sIdxVal,
-                            column: 'DeskSelected',
-                            value: currentlySelected ? '1' : ''
+                        rowTargets.forEach(function(target) {
+                            var deltaKey = target.sentence_idx + '_' + target.token_order;
+                            if (seenTableDeltas[deltaKey]) return;
+                            seenTableDeltas[deltaKey] = true;
+                            mergedDeltas.push({
+                                row_id: parseInt(String(rowIdStr), 10),
+                                token_order: Number(target.token_order),
+                                sentence_idx: Number(target.sentence_idx),
+                                column: 'DeskSelected',
+                                value: currentlySelected ? '1' : ''
+                            });
                         });
                     }
                 }
