@@ -6826,39 +6826,6 @@
                         }
                     }
                     syncSelectionsToCardsAndState();
-                } else if (isCtrlKey) {
-                    dragStartVisualIdx = rowVisualIdx;
-                    dragLastVisualIdx = rowVisualIdx;
-                    dragStartRowId = rowId;
-                    dragLastRowId = rowId;
-                    var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr) ||
-                        constituentIds.some(function(cid) { return selectedRowIdsMap.hasOwnProperty(cid); });
-                    dragSelectMode = !isCurrentlySelected;
-
-                    initialSelectedMap = {};
-                    for (var key in selectedRowIdsMap) {
-                        if (selectedRowIdsMap.hasOwnProperty(key)) {
-                            initialSelectedMap[key] = selectedRowIdsMap[key];
-                        }
-                    }
-
-                    for (var cIdx = 0; cIdx < constituentIds.length; cIdx++) {
-                        var cId = constituentIds[cIdx];
-                        if (dragSelectMode) {
-                            selectedRowIdsMap[cId] = true;
-                        } else {
-                            delete selectedRowIdsMap[cId];
-                        }
-                    }
-                    var rowLem = getRowLemma(row);
-                    if (rowLem) setLemmaSelected(rowLem, dragSelectMode);
-                    if (!dragSelectMode) {
-                        pruneActiveTokensByRowOrLemma(rowIdStr, rowLem);
-                        for (var cIdx = 0; cIdx < constituentIds.length; cIdx++) {
-                            pruneActiveTokensByRowOrLemma(constituentIds[cIdx], rowLem);
-                        }
-                    }
-                    syncSelectionsToCardsAndState();
                 } else {
                     dragStartVisualIdx = rowVisualIdx;
                     dragLastVisualIdx = rowVisualIdx;
