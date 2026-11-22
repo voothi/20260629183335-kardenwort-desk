@@ -334,3 +334,202 @@ def test_real_descriptor_resolver_accepts_sentence_idx_and_rejects_sentence_inde
             reword.validate_session_targets(RESOLVER_ZID, foreign_target)
     finally:
         _cleanup_arbiter(arbiter)
+
+
+@pytest.mark.parametrize("cache_order", ["frequency_sorted", "storage_order"])
+def test_warm_stage3_frequency_reordered_enriches_same_missing_word(tmp_path, cache_order):
+    """Warm cached session enriches the exact same missing occurrence (1, 1) as the cold path."""
+    warm_zid = "20261122141504" if cache_order == "frequency_sorted" else "20261122141505"
+    config, paths, arbiter, adapter = _build_stage3_env(tmp_path, frequency_words=("Alpha", "Zebra"))
+    rows = [
+        ["0", "Zebra", "Zebra", "зебра", "/ˈtseːbʁa/", "noun_zebra", "1", "Zebra und Alpha.", "Зебра и Альфа."],
+        ["1", "Alpha", "Alpha", "альфа", "", "", "1", "Zebra und Alpha.", "Зебра и Альфа."],
+    ]
+    _seed_sqlite_session(
+        adapter,
+        tmp_path,
+        warm_zid,
+        rows,
+        text="Zebra und Alpha.",
+        provenances={0: "fixture:initial", 1: "live:google"},
+    )
+    restored = adapter.restore_session(warm_zid)
+    restored_headers, restored_rows = reword.restored_manifest_rows(restored)
+    mapping = desk.load_anki_mapping(paths["anki_mapping_file"])
+    roles = desk.get_role_fields(mapping, restored_headers)
+    cached_rows = (
+        desk.sort_session_data_rows(restored_rows, restored_headers, "de", config, paths, role_fields=roles)
+        if cache_order == "frequency_sorted"
+        else [list(r) for r in restored_rows]
+    )
+    arbiter.sessions[warm_zid] = {
+        "text": "Zebra und Alpha.",
+        "comments": [],
+        "headers": list(restored_headers),
+        "data_rows": [list(r) for r in cached_rows],
+        "language": "de",
+        "target_lang": "ru",
+        "text_mode": "single",
+        "tsv_path": warm_zid,
+        "row_provenances": {0: "fixture:initial", 1: "live:google"},
+    }
+    assert warm_zid in arbiter.sessions
+
+    before = _cold_words_by_key(config, paths, warm_zid)
+    try:
+        with enrichment_engine(config) as engine:
+            engine.release.set()
+            with control_writes() as writes:
+                events = _run_progressive_and_wait(arbiter, warm_zid)
+
+        finished = next(e for e in reversed(events) if e.get("stage") == "finished")
+        assert finished["status"] == "success" and finished["error"] is None
+        assert len(engine.requests) == 1
+        assert [row["WordSource"] for row in engine.requests[0]["rows"]] == ["Alpha"]
+
+        after = _cold_words_by_key(config, paths, warm_zid)
+        assert after[(1, 1)]["word_destination"] == "trans_Alpha"
+        assert after[(1, 1)]["ipa"] == "/ipa_Alpha/"
+        assert after[(1, 1)]["morphology"] == "morph_Alpha"
+        assert after[(1, 1)]["word_provenance"] == "live:intellifiller"
+        assert after[(1, 0)] == before[(1, 0)]
+        assert prohibited(writes) == []
+    finally:
+        _cleanup_arbiter(arbiter)
+
+
+def test_cold_stage3_grouped_multi_sentence_frequency_reordered_enriches_exact_missing_subset(tmp_path):
+    """Cold grouped Stage 3 across frequency-reordered sentences enriches only the exact missing rows."""
+    grouped_zid = "20261122141506"
+    config, paths, arbiter, adapter = _build_stage3_env(
+        tmp_path, frequency_words=("Alpha", "Beta", "Omega", "Zebra")
+    )
+    rows = [
+        ["0", "Zebra", "Zebra", "зебра", "/ˈtseːbʁa/", "noun_zebra", "1", "Zebra und Beta.", "Зебра и Бета."],
+        ["1", "Beta", "Beta", "бета", "", "", "1", "Zebra und Beta.", "Зебра и Бета."],
+        ["0", "Omega", "Omega", "омега", "/oˈmeːɡa/", "noun_omega", "2", "Omega und Alpha.", "Омега и Альфа."],
+        ["1", "Alpha", "Alpha", "альфа", "", "", "2", "Omega und Alpha.", "Омега и Альфа."],
+    ]
+    _seed_sqlite_session(
+        adapter,
+        tmp_path,
+        grouped_zid,
+        rows,
+        text="Zebra und Beta.\nOmega und Alpha.",
+        text_mode="multi",
+        provenances={0: "fixture:initial", 1: "live:google", 2: "fixture:initial", 3: "live:google"},
+    )
+    assert grouped_zid not in arbiter.sessions
+
+    before = _cold_words_by_key(config, paths, grouped_zid)
+    try:
+        with enrichment_engine(config) as engine:
+            engine.release.set()
+            with control_writes() as writes:
+                events = _run_progressive_and_wait(arbiter, grouped_zid, text_mode="multi")
+
+        finished = next(e for e in reversed(events) if e.get("stage") == "finished")
+        assert finished["status"] == "success" and finished["error"] is None
+        assert len(engine.requests) == 1
+        dispatched = [row["WordSource"] for row in engine.requests[0]["rows"]]
+        assert set(dispatched) == {"Beta", "Alpha"}
+        assert len(dispatched) == 2
+
+        after = _cold_words_by_key(config, paths, grouped_zid)
+        assert after[(1, 0)] == before[(1, 0)]
+        assert after[(2, 0)] == before[(2, 0)]
+        assert after[(1, 1)]["word_destination"] == "trans_Beta"
+        assert after[(1, 1)]["ipa"] == "/ipa_Beta/"
+        assert after[(1, 1)]["morphology"] == "morph_Beta"
+        assert after[(1, 1)]["word_provenance"] == "live:intellifiller"
+        assert after[(2, 1)]["word_destination"] == "trans_Alpha"
+        assert after[(2, 1)]["ipa"] == "/ipa_Alpha/"
+        assert after[(2, 1)]["morphology"] == "morph_Alpha"
+        assert after[(2, 1)]["word_provenance"] == "live:intellifiller"
+        assert prohibited(writes) == []
+    finally:
+        _cleanup_arbiter(arbiter)
+
+
+def test_stage3_sqlite_rejects_invalid_missing_or_duplicate_identity_before_effects(tmp_path):
+    """Missing, non-positive, negative, or duplicate SQLite identity fails before provider or DB effects."""
+    invalid_zid = "20261122141507"
+    config, paths, arbiter, adapter = _build_stage3_env(tmp_path, frequency_words=("Alpha", "Zebra"))
+
+    # Pure Stage 3 coordinate validation contract.
+    with pytest.raises(reword.InvalidRewordTarget):
+        reword.occurrence_target_descriptors(invalid_zid, None, [0])
+    with pytest.raises(reword.InvalidRewordTarget):
+        reword.occurrence_target_descriptors(invalid_zid, [(1, 0)], [1])
+    with pytest.raises(reword.InvalidRewordTarget):
+        reword.occurrence_target_descriptors(invalid_zid, [(0, 0)], [0])
+    with pytest.raises(reword.InvalidRewordTarget):
+        reword.occurrence_target_descriptors(invalid_zid, [(1, -1)], [0])
+    with pytest.raises(reword.InvalidRewordTarget):
+        reword.occurrence_target_descriptors(invalid_zid, [(1, 0), (1, 0)], [0, 1])
+    with pytest.raises(reword.InvalidRewordTarget):
+        reword.occurrence_target_descriptors(invalid_zid, [(1, 0)], [0, 0])
+    with pytest.raises(reword.InvalidRewordTarget):
+        reword.occurrence_target_descriptors("", [(1, 0)], [0])
+
+    # End-to-end cold SQLite session with non-positive sentence_index=0 fails before HTTP dispatch or DB writes.
+    rows = [
+        ["0", "Zebra", "Zebra", "зебра", "/ˈtseːbʁa/", "noun_zebra", "1", "Zebra und Alpha.", "Зебра и Альфа."],
+        ["1", "Alpha", "Alpha", "альфа", "", "", "1", "Zebra und Alpha.", "Зебра и Альфа."],
+    ]
+    _seed_sqlite_session(
+        adapter,
+        tmp_path,
+        invalid_zid,
+        rows,
+        text="Zebra und Alpha.",
+        provenances={0: "fixture:initial", 1: "live:google"},
+    )
+    with adapter.db.transaction(zid=invalid_zid) as conn:
+        conn.execute(
+            "INSERT INTO sentences (session_zid, sentence_index, sentence_source, sentence_destination) "
+            "VALUES (?, 0, ?, ?)",
+            (invalid_zid, "Zebra und Alpha.", "Зебра и Альфа."),
+        )
+        conn.execute(
+            "UPDATE words SET sentence_index = 0 WHERE session_zid = ? AND token_order = 1",
+            (invalid_zid,),
+        )
+    before = _cold_words_by_key(config, paths, invalid_zid)
+    assert (0, 1) in before
+
+    try:
+        with enrichment_engine(config) as engine:
+            engine.release.set()
+            with control_writes() as writes:
+                events = _run_progressive_and_wait(arbiter, invalid_zid)
+
+        finished = next(e for e in reversed(events) if e.get("stage") == "finished")
+        assert finished["status"] == "failed"
+        assert isinstance(finished.get("error"), dict)
+        assert engine.requests == [], f"Invalid SQLite identity must not dispatch provider: {engine.requests}"
+        assert _cold_words_by_key(config, paths, invalid_zid) == before
+        assert adapter.db.get_worker_status(invalid_zid)["worker_status"] == "failed"
+        assert prohibited(writes) == []
+    finally:
+        _cleanup_arbiter(arbiter)
+
+
+def test_stage3_dispatch_args_preserve_non_sqlite_and_forbid_sqlite_index_fallback():
+    """Non-SQLite keeps selected_rows; SQLite emits validated target_coordinates with no display-index fallback."""
+    from kardenwort_controller import EnrichmentQueue
+
+    dispatch_rows, coords = EnrichmentQueue._build_stage3_dispatch_args(
+        False, "20261122141508", None, [0, 2]
+    )
+    assert dispatch_rows == [0, 2]
+    assert coords is None
+
+    dispatch_rows_sql, coords_sql = EnrichmentQueue._build_stage3_dispatch_args(
+        True, "20261122141508", [(1, 0), (2, 0)], [1]
+    )
+    assert dispatch_rows_sql is None
+    assert coords_sql == [{"session_zid": "20261122141508", "sentence_idx": 2, "token_order": 0}]
+
+    with pytest.raises(reword.InvalidRewordTarget):
+        EnrichmentQueue._build_stage3_dispatch_args(True, "20261122141508", None, [0])

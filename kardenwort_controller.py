@@ -2351,6 +2351,17 @@ class EnrichmentQueue:
             finalization_error = error
         raise_progressive_finalization_errors(startup_error, finalization_error)
 
+    @staticmethod
+    def _build_stage3_dispatch_args(
+        is_sqlite: bool,
+        session_zid: str,
+        occurrence_keys: Any,
+        selected_rows: List[int],
+    ) -> Tuple[Optional[List[int]], Optional[List[Dict[str, Any]]]]:
+        if not is_sqlite:
+            return selected_rows, None
+        return None, reword.occurrence_target_descriptors(session_zid, occurrence_keys, selected_rows)
+
     @operation_preferences
     def _execute_progressive_task(
         self,
@@ -2547,9 +2558,13 @@ class EnrichmentQueue:
                 if selected_rows:
                     if self._is_progressive_superseded(session_zid, generation):
                         return
+                    dispatch_rows, target_coordinates = self._build_stage3_dispatch_args(
+                        is_sqlite, session_zid, occurrence_keys, selected_rows
+                    )
                     arbiter.reword_session(
                         session_zid=session_zid,
-                        selected_rows=selected_rows,
+                        selected_rows=dispatch_rows,
+                        target_coordinates=target_coordinates,
                         prompt=prompt_name,
                         language=sess_lang,
                         zid=req_zid,

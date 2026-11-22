@@ -50,6 +50,27 @@ def validate_session_targets(session_zid, targets):
             raise InvalidRewordTarget('Occurrence belongs to a different session')
 
 
+def _validated_occurrence_pair(occurrence_keys, index):
+    row_index = index_value(index, 0)
+    if not isinstance(occurrence_keys, (list, tuple)) or row_index >= len(occurrence_keys):
+        raise InvalidRewordTarget('Missing SQLite occurrence identity')
+    pair = occurrence_keys[row_index]
+    if not isinstance(pair, (tuple, list)) or len(pair) != 2:
+        raise InvalidRewordTarget('Malformed SQLite occurrence identity')
+    return index_value(pair[0], 1), index_value(pair[1], 0)
+
+
+def occurrence_target_descriptors(session_zid, occurrence_keys, selected_rows):
+    """Validate exact, unique SQLite occurrence keys and adapt sentence_index -> sentence_idx once."""
+    if not isinstance(session_zid, str) or not session_zid.strip():
+        raise InvalidRewordTarget('Missing session_zid for SQLite occurrence targeting')
+    keys = [_validated_occurrence_pair(occurrence_keys, index) for index in selected_rows]
+    if len(set(keys)) != len(keys):
+        raise InvalidRewordTarget('Duplicate SQLite occurrence target coordinate')
+    return [dict(session_zid=session_zid, sentence_idx=sentence_idx, token_order=token_order)
+            for sentence_idx, token_order in keys]
+
+
 def descriptor_kind(item):
     if 'token_order' in item:
         index_value(item.get('sentence_idx'), 1)
