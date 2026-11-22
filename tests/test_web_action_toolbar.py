@@ -356,21 +356,35 @@ def test_hand_tool_and_delete_and_shortcuts(page, tmp_path):
     # 2. Delete selected rows via Delete button & keyboard
     row0 = page.locator("tr[data-row-id='0']")
     row0.click()
+    assert page.evaluate("window.isDirty()") is True
     delete_btn = page.locator("#kw-btn-delete")
     delete_btn.click()
     assert not row0.is_visible()
+    assert [d["column"] for d in json.loads(page.evaluate("window.getDeltas()"))] == ["_delete"]
     assert page.evaluate("window.isDirty()") is True
 
-    # 3. Ctrl+Z undo restores row
+    # 3. Ctrl+Z undo restores row and pre-deletion selection without residual _delete delta
     page.keyboard.press("Control+z")
     assert row0.is_visible()
-    assert page.evaluate("window.isDirty()") is False
+    assert row0.get_attribute("data-selected") == "1"
+    assert page.evaluate("window.getSelectedRowsArray()") == [0]
+    assert [d["column"] for d in json.loads(page.evaluate("window.getDeltas()"))] == ["DeskSelected"]
+    assert page.evaluate("window.isDirty()") is True
 
-    # 4. Delete key deletes row again
-    row0.click()
+    # 4. Delete key deletes the restored selected row again
     page.keyboard.press("Delete")
     assert not row0.is_visible()
+    assert [d["column"] for d in json.loads(page.evaluate("window.getDeltas()"))] == ["_delete"]
     assert page.evaluate("window.isDirty()") is True
+
+    # 5. Undoing delete and toggling off the uncommitted selection returns clean state
+    page.keyboard.press("Control+z")
+    assert row0.is_visible()
+    assert row0.get_attribute("data-selected") == "1"
+    row0.click()
+    assert row0.get_attribute("data-selected") == "0"
+    assert json.loads(page.evaluate("window.getDeltas()")) == []
+    assert page.evaluate("window.isDirty()") is False
 
 
 def test_window_sequence_branding_in_web_view(page, tmp_path):
