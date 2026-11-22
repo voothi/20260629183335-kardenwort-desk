@@ -7611,7 +7611,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
     eff_task = 'lemma' if task_type == 'lemma' else 'text'
     configured_chain, configured_strategy = resolve_provider_chain(config, task_type=eff_task)
 
-    if provider and provider != 'default' and (not configured_chain or provider.strip().lower() != configured_chain[0]):
+    if provider and provider != 'default':
         if ',' in provider:
             providers_to_try = [p.strip().lower() for p in provider.split(',') if p.strip()]
             strategy = configured_strategy
@@ -7620,22 +7620,27 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
             strategy = configured_strategy
             if strategy == 'strict' or eff_task == 'lemma':
                 providers_to_try = [p_norm]
-            elif strategy == 'offline_fallback':
-                providers_to_try = [p_norm] if p_norm == 'argos' else [p_norm, 'argos']
+            elif not configured_chain or p_norm != configured_chain[0]:
+                if strategy == 'offline_fallback':
+                    providers_to_try = [p_norm] if p_norm == 'argos' else [p_norm, 'argos']
+                else:
+                    # strategy == 'chain'
+                    providers_to_try = [p_norm] + [p for p in configured_chain if p != p_norm]
             else:
-                # strategy == 'chain'
-                providers_to_try = [p_norm] + [p for p in configured_chain if p != p_norm]
+                providers_to_try = list(configured_chain)
     else:
         providers_to_try = list(configured_chain)
         strategy = configured_strategy
 
     if not providers_to_try:
         providers_to_try = ['google']
+    if strategy == 'strict':
+        providers_to_try = providers_to_try[:1]
 
     check_ips_str = config.get(SEC_PIPELINE, 'fast_connectivity_check_ips', fallback=config.get(SEC_PIPELINE, 'fast_connectivity_check_ip', fallback='8.8.8.8, 1.1.1.1')) if config and config.has_section(SEC_PIPELINE) else ''
     check_ips = [ip.strip() for ip in check_ips_str.split(',') if ip.strip()]
 
-    if strategy == 'offline_fallback' and check_ips and providers_to_try[0] != 'argos':
+    if strategy == 'offline_fallback' and check_ips and providers_to_try[0] != 'argos' and 'argos' in providers_to_try:
         if not is_network_online_multi(hosts=check_ips):
             logger.warning(f"Fast connectivity check to {check_ips} failed. Bypassing online providers and going straight to Argos.")
             from_p = providers_to_try[0]
@@ -7858,18 +7863,21 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         active_provider = chain[0] if chain else 'google'
     else:
         candidates = [norm_p] + [p for p in chain if p != norm_p]
-        active_provider = provider
+        active_provider = norm_p
 
     if active_provider in visited:
         logger.warning(f"Fast-path cycle detected for provider '{active_provider}' (visited: {visited}). Terminating fast-path recursion.")
         unvisited = [c for c in candidates if c not in visited and not is_provider_cooled_down(c, config=config, resolved_paths=resolved_paths, task_type='lemma')]
-        if unvisited and strategy != 'strict':
+        if unvisited and strategy == 'chain':
             active_provider = unvisited[0]
         else:
             prov_tag = f"live:{active_provider}" if active_provider else "live:unknown"
             return ProvenanceDict({}, provenance=prov_tag)
 
-    if is_provider_cooled_down(active_provider, config=config, resolved_paths=resolved_paths, task_type='lemma') and strategy != 'strict':
+    check_ips_str = config.get(SEC_PIPELINE, 'fast_connectivity_check_ips', fallback=config.get(SEC_PIPELINE, 'fast_connectivity_check_ip', fallback='8.8.8.8, 1.1.1.1')) if config and config.has_section(SEC_PIPELINE) else ''
+    check_ips = [ip.strip() for ip in check_ips_str.split(',') if ip.strip()]
+
+    if strategy == 'chain' and is_provider_cooled_down(active_provider, config=config, resolved_paths=resolved_paths, task_type='lemma'):
         for cand in candidates:
             if cand not in visited and not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
                 logger.warning(f"Lemma provider '{active_provider}' is in cooldown. Switching fast-path to '{cand}'...")
@@ -7894,19 +7902,18 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         translations = {}
         chunks = [lemmas[i:i + batch_size] for i in range(0, len(lemmas), batch_size)]
         chunk_prov = prov_tag
+        chunk_visited = set(visited)
         for chunk in chunks:
-            chunk_result = translate_lemmas_fast_path(chunk, source, target, config, resolved_paths, active_provider, zid=zid, on_failover=on_failover, visited_providers=visited, **kwargs)
+            chunk_result = translate_lemmas_fast_path(chunk, source, target, config, resolved_paths, active_provider, zid=zid, on_failover=on_failover, visited_providers=chunk_visited, **kwargs)
             if hasattr(chunk_result, 'provenance') and chunk_result.provenance:
                 chunk_prov = chunk_result.provenance
                 if str(chunk_prov).startswith("live:"):
                     cand_p = str(chunk_prov)[5:].strip().lower()
                     if cand_p and cand_p != active_provider:
+                        chunk_visited.add(active_provider)
                         active_provider = cand_p
             translations.update(chunk_result)
         return ProvenanceDict(translations, provenance=chunk_prov)
-
-    check_ips_str = config.get(SEC_PIPELINE, 'fast_connectivity_check_ips', fallback=config.get(SEC_PIPELINE, 'fast_connectivity_check_ip', fallback='8.8.8.8, 1.1.1.1')) if config and config.has_section(SEC_PIPELINE) else ''
-    check_ips = [ip.strip() for ip in check_ips_str.split(',') if ip.strip()]
 
     if strategy == 'offline_fallback' and check_ips and active_provider != 'argos' and 'argos' in candidates:
         if not is_network_online_multi(hosts=check_ips):
@@ -7919,10 +7926,10 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             active_provider = 'argos'
             prov_tag = "live:argos"
 
-    if strategy == 'strict':
+    if strategy in ('strict', 'offline_fallback'):
         provider_order = [active_provider]
     else:
-        provider_order = [active_provider] + [p for p in candidates if p != active_provider]
+        provider_order = [active_provider] + [p for p in candidates if p != active_provider and p not in visited]
 
     def _call_translate_text(text_val, p_name):
         kwargs_call = {"provider": p_name, "task_type": "lemma"}
@@ -7954,7 +7961,10 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         fallback_provider = None
         is_net = is_network_failure_exception(exc)
         next_visited = set(visited) | {active_provider}
-        if strategy != 'strict':
+        if strategy == 'offline_fallback':
+            if active_provider != 'argos' and 'argos' not in next_visited and check_ips and not is_network_online_multi(hosts=check_ips):
+                fallback_provider = 'argos'
+        elif strategy == 'chain':
             if is_net and check_ips and not is_network_online_multi(hosts=check_ips):
                 # Confirmed host network failure: short-circuit directly to first offline provider in candidates
                 for cand in candidates:
@@ -7967,21 +7977,19 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                     if cand != active_provider and cand not in next_visited and not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
                         fallback_provider = cand
                         break
-            if not fallback_provider and (strategy == 'offline_fallback' or 'argos' in provider_order) and 'argos' in OFFLINE_TRANSLATION_PROVIDERS and 'argos' not in next_visited:
-                fallback_provider = 'argos'
 
         if fallback_provider:
             logger.warning(f"Fast-path {tier_name} failed for '{active_provider}' ({exc}). Short-circuiting to fallback provider '{fallback_provider}'...")
             notify_provider_failover('lemma', active_provider, fallback_provider, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
             return translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, fallback_provider, zid=zid, on_failover=on_failover, visited_providers=next_visited, **kwargs)
 
-        return None
+        return ProvenanceDict({lemma: "" for lemma in lemmas}, provenance=prov_tag)
 
     def _translate_single(lemma):
         p_idx = 0
         while p_idx < len(provider_order):
             candidate = provider_order[p_idx]
-            if is_provider_cooled_down(candidate, config=config, resolved_paths=resolved_paths, task_type='lemma') and strategy != 'strict':
+            if strategy == 'chain' and is_provider_cooled_down(candidate, config=config, resolved_paths=resolved_paths, task_type='lemma'):
                 p_idx += 1
                 continue
             cand_prov_tag = f"live:{candidate}"
@@ -8004,8 +8012,8 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                     record_provider_failover(candidate, config=config, resolved_paths=resolved_paths, task_type='lemma')
                 logger.debug(f"Candidate provider '{candidate}' failed for lemma '{lemma}': {exc}")
 
-            if failed and strategy != 'strict':
-                if last_exc and is_network_failure_exception(last_exc) and strategy == 'chain' and check_ips and not is_network_online_multi(hosts=check_ips):
+            if failed and strategy == 'chain':
+                if last_exc and is_network_failure_exception(last_exc) and check_ips and not is_network_online_multi(hosts=check_ips):
                     # Short-circuit to first offline provider in provider_order only on confirmed host network failure
                     off_idx = None
                     for future_idx in range(p_idx + 1, len(provider_order)):
@@ -8030,8 +8038,13 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
 
             p_idx += 1
 
-        # Terminal resolution through offline Argos only when explicitly permitted by strategy or configuration
-        allow_terminal_argos = (strategy == 'offline_fallback' or 'argos' in provider_order)
+        # Terminal resolution through offline Argos only when offline_fallback confirms failed host connectivity probes
+        allow_terminal_argos = (
+            strategy == 'offline_fallback'
+            and active_provider != 'argos'
+            and bool(check_ips)
+            and not is_network_online_multi(hosts=check_ips)
+        )
         if allow_terminal_argos and 'argos' in OFFLINE_TRANSLATION_PROVIDERS and 'argos' not in provider_order:
             try:
                 last_prov = provider_order[-1] if provider_order else active_provider
