@@ -309,24 +309,28 @@ def extract_untranslated_lemmas(data_rows, col_lemma, col_word_dest):
     return lemmas
 
 
-def _record_row_provenance(row, row_idx, col_token_order, chunk_prov, sess_row_provs):
-    t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_idx)
+def _record_row_provenance(row, row_idx, col_token_order, chunk_prov, sess_row_provs, key=None, occurrence_provs=None):
+    t_ord = current_value(row, col_token_order) or str(row_idx)
     sess_row_provs[t_ord] = chunk_prov
     if t_ord.isdigit():
         sess_row_provs[int(t_ord)] = chunk_prov
+    if occurrence_provs is not None and key is not None:
+        occurrence_provs[(str(key[0]), str(key[1]))] = chunk_prov
 
 
-def apply_chunk_to_row(row, row_idx, col_word_dest, col_token_order, trans_val, chunk_prov, sess_row_provs):
+def _set_row_cell(row, col_word_dest, trans_val):
     while len(row) <= col_word_dest:
         row.append("")
     row[col_word_dest] = trans_val
-    _record_row_provenance(row, row_idx, col_token_order, chunk_prov, sess_row_provs)
 
 
-def _chunk_occurrence_update(row_idx, occurrence_keys, trans_val, chunk_prov):
-    if not (occurrence_keys and row_idx < len(occurrence_keys)):
-        return None
-    key = occurrence_keys[row_idx]
+def _chunk_occurrence_key(row_idx, occurrence_keys):
+    if occurrence_keys and row_idx < len(occurrence_keys):
+        return occurrence_keys[row_idx]
+    return None
+
+
+def _sqlite_word_update(key, trans_val, chunk_prov):
     return dict(
         sentence_index=key[0],
         token_order=key[1],
@@ -334,25 +338,40 @@ def _chunk_occurrence_update(row_idx, occurrence_keys, trans_val, chunk_prov):
     )
 
 
-def _apply_row_chunk_match(row, row_idx, col_word_dest, col_token_order, trans, chunk_prov, is_sqlite, occurrence_keys, sess_row_provs):
-    apply_chunk_to_row(row, row_idx, col_word_dest, col_token_order, trans, chunk_prov, sess_row_provs)
-    if is_sqlite:
-        return _chunk_occurrence_update(row_idx, occurrence_keys, trans, chunk_prov)
-    return None
-
-
-def build_chunk_word_updates(data_rows, col_lemma, col_word_dest, col_token_order, occurrence_keys, chunk_trans, chunk_prov, is_sqlite, sess_row_provs):
-    if col_lemma < 0 or col_word_dest < 0:
-        return []
-    updates = []
+def _matched_chunk_rows(data_rows, col_lemma, chunk_trans):
+    matched = []
     for row_idx, row in enumerate(data_rows):
-        lemma = current_value(row, col_lemma)
-        trans = chunk_trans.get(lemma)
+        trans = chunk_trans.get(current_value(row, col_lemma))
         if trans and str(trans).strip():
-            upd = _apply_row_chunk_match(row, row_idx, col_word_dest, col_token_order, trans, chunk_prov, is_sqlite, occurrence_keys, sess_row_provs)
-            if upd is not None:
-                updates.append(upd)
-    return updates
+            matched.append((row_idx, trans))
+    return matched
+
+
+def plan_chunk_word_updates(data_rows, col_lemma, col_word_dest, occurrence_keys, chunk_trans, chunk_prov, is_sqlite):
+    if col_lemma < 0 or col_word_dest < 0:
+        return [], []
+    patches = []
+    sqlite_updates = []
+    for row_idx, trans in _matched_chunk_rows(data_rows, col_lemma, chunk_trans):
+        key = _chunk_occurrence_key(row_idx, occurrence_keys)
+        patches.append((row_idx, trans, key))
+        if is_sqlite and key is not None:
+            sqlite_updates.append(_sqlite_word_update(key, trans, chunk_prov))
+    return patches, sqlite_updates
+
+
+def build_candidate_rows(data_rows, patches, col_word_dest):
+    candidate = [list(row) for row in data_rows]
+    for row_idx, trans_val, _ in patches:
+        _set_row_cell(candidate[row_idx], col_word_dest, trans_val)
+    return candidate
+
+
+def apply_committed_chunk_patches(data_rows, patches, col_word_dest, col_token_order, chunk_prov, sess_row_provs, occurrence_provs=None):
+    for row_idx, trans_val, key in patches:
+        row = data_rows[row_idx]
+        _set_row_cell(row, col_word_dest, trans_val)
+        _record_row_provenance(row, row_idx, col_token_order, chunk_prov, sess_row_provs, key=key, occurrence_provs=occurrence_provs)
 
 
 def translated_stage_event(rows, fingerprint, provenances, error, provider=None, sentences=None, text_provenance=None):

@@ -4,7 +4,10 @@ Spec: specs/progressive-worker-resilience/spec.md
 Requirement: Retain successful word batches when a later batch fails
 """
 import ast
+import json
 from pathlib import Path
+import threading
+import urllib.request
 import pytest
 
 import kardenwort_desk as desk
@@ -297,6 +300,334 @@ def test_explicit_reword_remains_all_or_nothing_control(tmp_path):
             assert (words['Baum']['word_destination'] or '') == ''
 
 
+def _get_status(base_url, server, zid):
+    request = urllib.request.Request(
+        f'{base_url}/session/status?zid={zid}',
+        headers={'X-API-Token': server.api_key},
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return json.load(response)['data']
+
+
+def test_progressive_word_batches_malformed_multi_lemma_batch_commits_none_of_batch2(tmp_path):
+    """Scenario: Malformed multi-lemma batch (batch_size=2).
+
+    Batch 1 ('Haus', 'Tisch') commits cleanly. Batch 2 ('Baum', 'Stein') returns a
+    translation for 'Baum' but omits 'Stein'. Neither 'Baum' nor 'Stein' is committed
+    while both Batch 1 words and unrelated sessions remain intact.
+    """
+
+    class PartialSecondBatchHandler(ItemAwareTranslationHandler):
+        def translate(self, provider, text, source, target):
+            self.server.provider_calls.append((text, source, target))
+            if 'Stein' in text:
+                if 'Baum' in text:
+                    return f'{provider}: Baum'
+                return ''
+            lines = []
+            for line in text.splitlines():
+                if '; ' in line:
+                    lines.append('; '.join(f'{provider}: {part}' for part in line.split('; ')))
+                else:
+                    lines.append(f'{provider}: {line}')
+            return '\n'.join(lines)
+
+    with translation_service(PartialSecondBatchHandler) as translator:
+        with controller_lifetime(tmp_path, translator, backend='sqlite') as (_, server):
+            _configure_progressive(server, batch_size=2)
+            zid = '20261121085305'
+            unrelated_zid = '20261121085399'
+            text = 'Das Haus, der Tisch, der Baum, der Stein.'
+            rows = [
+                ['0', 'Haus', 'Haus', '1', text, 'google: ' + text, ''],
+                ['1', 'Tisch', 'Tisch', '1', text, 'google: ' + text, ''],
+                ['2', 'Baum', 'Baum', '1', text, 'google: ' + text, ''],
+                ['3', 'Stein', 'Stein', '1', text, 'google: ' + text, ''],
+            ]
+            adapter = _seed_session(server, zid, text=text, rows=rows)
+            _seed_session(
+                server,
+                unrelated_zid,
+                text='Unrelated.',
+                rows=[['0', 'Fremd', 'Fremd', '1', 'Unrelated.', 'cached', 'unchanged']],
+            )
+            unrelated_before = adapter.db.get_session_bundle(unrelated_zid)
+
+            events = _run_progressive(server, zid)
+
+            translated_ev = next(e for e in events if e.get('stage') == 'translated')
+            finished = next(e for e in reversed(events) if e.get('stage') == 'finished')
+            words = {w['lemma']: w for w in adapter.db.get_words_by_session(zid)}
+            worker = adapter.db.get_worker_status(zid)
+
+            # Batch 1 fully retained with provenance
+            assert words['Haus']['word_destination'] == 'google: Haus'
+            assert words['Haus']['word_provenance'] == 'live:google'
+            assert words['Tisch']['word_destination'] == 'google: Tisch'
+            assert words['Tisch']['word_provenance'] == 'live:google'
+
+            # Atomic rejection of partially invalid Batch 2: NEITHER Baum nor Stein committed
+            assert (words['Baum']['word_destination'] or '') == ''
+            assert (words['Stein']['word_destination'] or '') == ''
+
+            # Unrelated session untouched
+            assert adapter.db.get_session_bundle(unrelated_zid) == unrelated_before
+
+            # Stage and terminal events truthfully report failure and do not leak uncommitted Baum
+            assert translated_ev['status'] == 'failed'
+            assert 'google: Baum' not in json.dumps(translated_ev.get('rows') or {})
+            assert worker['worker_status'] == 'failed'
+            assert finished['status'] == 'failed'
+            assert 'google: Baum' not in json.dumps(finished.get('rows') or {})
+
+
+def test_progressive_word_batch_sqlite_trigger_rejection_retains_batch1_without_leaking_batch2(tmp_path):
+    """Real SQLite trigger rejecting batch 2 retains batch 1 and leaks zero uncommitted batch 2 state."""
+    with translation_service(ItemAwareTranslationHandler) as translator:
+        with controller_lifetime(tmp_path, translator, backend='sqlite') as (base_url, server):
+            _configure_progressive(server, batch_size=1)
+            zid = '20261121085306'
+            text = 'Das Haus und der Baum.'
+            rows = [
+                ['0', 'Haus', 'Haus', '1', text, 'google: ' + text, ''],
+                ['1', 'Baum', 'Baum', '1', text, 'google: ' + text, ''],
+            ]
+            adapter = _seed_session(server, zid, text=text, rows=rows)
+            with adapter.db.get_connection() as conn:
+                conn.execute(
+                    "CREATE TRIGGER reject_baum_word_update "
+                    "BEFORE UPDATE OF word_destination ON words "
+                    "WHEN NEW.lemma = 'Baum' "
+                    "BEGIN SELECT RAISE(ABORT, 'owned trigger rejected batch 2 word write'); END"
+                )
+
+            events = _run_progressive(server, zid)
+
+            translated_ev = next(e for e in events if e.get('stage') == 'translated')
+            finished = next(e for e in reversed(events) if e.get('stage') == 'finished')
+            words = {w['lemma']: w for w in adapter.db.get_words_by_session(zid)}
+            worker = adapter.db.get_worker_status(zid)
+
+            assert words['Haus']['word_destination'] == 'google: Haus'
+            assert words['Haus']['word_provenance'] == 'live:google'
+            assert (words['Baum']['word_destination'] or '') == ''
+
+            # Uncommitted batch 2 must NOT leak into translated event, finished event, or warm/cold status
+            assert translated_ev['status'] == 'failed'
+            assert 'google: Baum' not in json.dumps(translated_ev.get('rows') or {})
+            assert finished['status'] == 'failed'
+            assert 'rejected batch 2 word write' in finished['error']['message']
+            assert 'google: Baum' not in json.dumps(finished.get('rows') or {})
+            assert worker['worker_status'] == 'failed'
+
+            warm_status = _get_status(base_url, server, zid)
+            assert 'google: Baum' not in json.dumps(warm_status.get('rows') or {})
+            server.arbiter.sessions.clear()
+            cold_status = _get_status(base_url, server, zid)
+            assert 'google: Baum' not in json.dumps(cold_status.get('rows') or {})
+            assert 'google: Haus' in json.dumps(cold_status.get('rows') or {})
+
+
+def test_progressive_word_batches_exact_multisentence_occurrence_identities(tmp_path):
+    """Scenario: Successful completion preserves exact (sentence_index, token_order) identities and provenance."""
+    with translation_service(ItemAwareTranslationHandler) as translator:
+        with controller_lifetime(tmp_path, translator, backend='sqlite') as (_, server):
+            _configure_progressive(server, batch_size=1)
+            zid = '20261121085307'
+            text = 'Das Haus.\nDer Baum und das Haus.'
+            rows = [
+                ['0', 'Haus', 'Haus', '1', 'Das Haus.', 'google: Das Haus.', ''],
+                ['0', 'Baum', 'Baum', '2', 'Der Baum und das Haus.', 'google: Der Baum und das Haus.', ''],
+                ['1', 'Haus', 'Haus', '2', 'Der Baum und das Haus.', 'google: Der Baum und das Haus.', ''],
+            ]
+            adapter = _seed_session(server, zid, text=text, rows=rows, text_mode='multi')
+
+            events = _run_progressive(server, zid, text_mode='multi')
+
+            finished = next(e for e in reversed(events) if e.get('stage') == 'finished')
+            by_coord = {(w['sentence_index'], w['token_order']): w for w in adapter.db.get_words_by_session(zid)}
+            assert by_coord[(1, 0)]['word_destination'] == 'google: Haus'
+            assert by_coord[(1, 0)]['word_provenance'] == 'live:google'
+            assert by_coord[(2, 0)]['word_destination'] == 'google: Baum'
+            assert by_coord[(2, 0)]['word_provenance'] == 'live:google'
+            assert by_coord[(2, 1)]['word_destination'] == 'google: Haus'
+            assert by_coord[(2, 1)]['word_provenance'] == 'live:google'
+            assert adapter.db.get_worker_status(zid)['worker_status'] == 'finished'
+            assert finished['status'] == 'success'
+            assert finished['error'] is None
+
+
+def test_progressive_word_batch_superseded_generation_cannot_overwrite_newer_run(tmp_path):
+    """Deterministic async coordination: superseded generation paused mid-batch cannot overwrite newer accepted run."""
+    entered = threading.Event()
+    release = threading.Event()
+    calls = {'Haus': 0}
+
+    class StaleWordBatchHandler(ItemAwareTranslationHandler):
+        def translate(self, provider, text, source, target):
+            if text.strip() == 'Haus':
+                calls['Haus'] += 1
+                if calls['Haus'] == 1:
+                    entered.set()
+                    assert release.wait(10), 'Stale generation was not released'
+                    return 'stale: Haus'
+                return 'newer: Haus'
+            return super().translate(provider, text, source, target)
+
+    with translation_service(StaleWordBatchHandler, google_concurrency=2) as translator:
+        with controller_lifetime(tmp_path, translator, backend='sqlite') as (_, server):
+            _configure_progressive(server, batch_size=1)
+            zid = '20261121085308'
+            text = 'Das Haus und der Baum.'
+            rows = [
+                ['0', 'Haus', 'Haus', '1', text, 'google: ' + text, ''],
+                ['1', 'Baum', 'Baum', '1', text, 'google: ' + text, ''],
+            ]
+            adapter = _seed_session(server, zid, text=text, rows=rows)
+            queue = server.arbiter.enrichment_queue
+            with queue._lock:
+                queue._progressive_generations[zid] = 1
+            stale_errors = []
+
+            def run_stale():
+                try:
+                    queue._execute_progressive_task(
+                        zid, server.arbiter, language='de', target_lang='ru',
+                        text_mode='single', skip_intellifiller=True, generation=1,
+                    )
+                except Exception as exc:
+                    stale_errors.append(exc)
+
+            worker = threading.Thread(target=run_stale)
+            worker.start()
+            try:
+                assert entered.wait(10), 'Stale generation did not reach provider'
+                with queue._lock:
+                    queue._progressive_generations[zid] = 2
+                queue._execute_progressive_task(
+                    zid, server.arbiter, language='de', target_lang='ru',
+                    text_mode='single', skip_intellifiller=True, generation=2,
+                )
+                words_newer = {w['lemma']: w for w in adapter.db.get_words_by_session(zid)}
+                assert words_newer['Haus']['word_destination'] == 'newer: Haus'
+                assert adapter.db.get_worker_status(zid)['worker_status'] == 'finished'
+
+                subscriber = server.arbiter.register_subscriber(zid)
+                try:
+                    release.set()
+                    worker.join(timeout=10)
+                    assert not worker.is_alive()
+                    assert stale_errors == []
+                    stale_events = []
+                    while not subscriber.empty():
+                        stale_events.append(subscriber.get_nowait())
+                    assert not [e for e in stale_events if e.get('stage') in ('translated', 'finished')]
+                finally:
+                    server.arbiter.unregister_subscriber(zid, subscriber)
+
+                words_after = {w['lemma']: w for w in adapter.db.get_words_by_session(zid)}
+                assert words_after['Haus']['word_destination'] == 'newer: Haus'
+                assert adapter.db.get_worker_status(zid)['worker_status'] == 'finished'
+            finally:
+                release.set()
+                worker.join(timeout=10)
+
+
+@pytest.mark.parametrize('delete_mode', ['soft', 'hard'])
+def test_progressive_word_batch_deleted_session_mid_batch_cannot_mutate_or_succeed(tmp_path, delete_mode):
+    """Deterministic async coordination: session deleted mid-lemma-batch cannot commit stale words or succeed."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    class PausedWordBatchHandler(ItemAwareTranslationHandler):
+        def translate(self, provider, text, source, target):
+            if text.strip() == 'Haus':
+                entered.set()
+                assert release.wait(10), 'Provider was not released'
+            return super().translate(provider, text, source, target)
+
+    with translation_service(PausedWordBatchHandler) as translator:
+        with controller_lifetime(tmp_path, translator, backend='sqlite') as (_, server):
+            _configure_progressive(server, batch_size=1)
+            zid = '20261121085309'
+            text = 'Das Haus.'
+            rows = [['0', 'Haus', 'Haus', '1', text, 'google: ' + text, '']]
+            adapter = _seed_session(server, zid, text=text, rows=rows)
+            subscriber = server.arbiter.register_subscriber(zid)
+            try:
+                enqueued = server.arbiter.enrichment_queue.enqueue_progressive_task(
+                    zid, server.arbiter, language='de', target_lang='ru',
+                    text_mode='single', skip_intellifiller=True,
+                )
+                assert enqueued['status'] == 'queued'
+                with server.arbiter.enrichment_queue._lock:
+                    future = server.arbiter.enrichment_queue._active_progressive_sessions.get(zid)
+                assert entered.wait(10), 'Worker did not reach provider'
+                if delete_mode == 'soft':
+                    assert adapter.db.soft_delete_session(zid)
+                else:
+                    assert adapter.db.delete_session(zid)
+                release.set()
+                if future is not None:
+                    future.result(timeout=15)
+                events = []
+                while not subscriber.empty():
+                    events.append(subscriber.get_nowait())
+            finally:
+                release.set()
+                server.arbiter.unregister_subscriber(zid, subscriber)
+
+            finished = next(e for e in reversed(events) if e.get('stage') == 'finished')
+            assert finished['status'] == 'failed'
+            assert isinstance(finished.get('error'), dict)
+            assert finished['rows'] == {}
+            assert zid not in server.arbiter.sessions
+            if delete_mode == 'soft':
+                assert (adapter.db.get_words_by_session(zid)[0]['word_destination'] or '') == ''
+                assert adapter.db.get_worker_status(zid)['worker_status'] == 'failed'
+            else:
+                assert adapter.db.get_session(zid, include_deleted=True) is None
+
+
+def test_progressive_word_batch_coordinates_with_sentence_failure(tmp_path):
+    """Decision #3: sentence failure + batch 1 success + batch 2 failure retains batch 1 and preserves failure."""
+
+    class SentenceAndBatch2FailingHandler(ItemAwareTranslationHandler):
+        def translate(self, provider, text, source, target):
+            if text.strip() == 'Das Haus und der Baum.' or 'Baum' in text:
+                self.server.provider_calls.append((text, source, target))
+                raise TranslationServerException(503, 'ERR_NETWORK_UNREACHABLE', f'Failed for {text}')
+            return super().translate(provider, text, source, target)
+
+    with translation_service(SentenceAndBatch2FailingHandler) as translator:
+        with controller_lifetime(tmp_path, translator, backend='sqlite') as (_, server):
+            _configure_progressive(server, batch_size=1)
+            server.config.set('triggers', 'run_text_translation', 'auto')
+            zid = '20261121085310'
+            text = 'Das Haus und der Baum.'
+            rows = [
+                ['0', 'Haus', 'Haus', '1', text, '', ''],
+                ['1', 'Baum', 'Baum', '1', text, '', ''],
+            ]
+            adapter = _seed_session(server, zid, text=text, rows=rows)
+
+            events = _run_progressive(server, zid)
+
+            finished = next(e for e in reversed(events) if e.get('stage') == 'finished')
+            sentences = adapter.db.get_sentences_by_session(zid)
+            words = {w['lemma']: w for w in adapter.db.get_words_by_session(zid)}
+            worker = adapter.db.get_worker_status(zid)
+
+            assert (sentences[0]['sentence_destination'] or '') == ''
+            assert words['Haus']['word_destination'] == 'google: Haus'
+            assert words['Haus']['word_provenance'] == 'live:google'
+            assert (words['Baum']['word_destination'] or '') == ''
+            assert worker['worker_status'] == 'failed'
+            assert finished['status'] == 'failed'
+            assert isinstance(finished.get('error'), dict)
+            assert finished['error'].get('details', {}).get('subsequent_error') is not None
+
+
 def test_progressive_word_batch_helpers_meet_complexity_and_purity_contract():
     """New pure completion and controller Stage 2 helpers enforce CC <= 7 and pure-core isolation."""
     root = Path(desk.__file__).resolve().parent
@@ -315,12 +646,18 @@ def test_progressive_word_batch_helpers_meet_complexity_and_purity_contract():
     checked = {
         '_heartbeat_lemma_worker',
         '_translate_single_lemma_chunk',
+        '_cache_active_lemma_provider',
         '_update_active_lemma_provider',
+        '_persist_lemma_chunk_storage',
+        '_cache_committed_lemma_chunk',
         '_commit_single_lemma_chunk',
         '_build_lemma_chunks',
         '_collect_untranslated_lemmas',
+        '_cache_translated_stage',
         '_emit_translated_stage',
+        '_process_single_lemma_chunk',
         '_translate_and_persist_lemma_chunks',
+        '_seed_lemma_row_provenances',
         '_run_lemma_stage',
     }
     measured = {node.name: complexity(node) for node in functions(ctrl_tree) if node.name in checked}

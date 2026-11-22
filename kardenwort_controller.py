@@ -1783,7 +1783,7 @@ class EnrichmentQueue:
                 pass
 
     def _translate_single_lemma_chunk(self, chunk: List[str], sess_lang: str, sess_target: str,
-                                      active_prov: str, session_zid: str) -> Tuple[Any, Optional[Dict[str, Any]]]:
+                                      active_prov: str, session_zid: str) -> Tuple[Any, Optional[str], Optional[Dict[str, Any]]]:
         try:
             chunk_trans = translate_lemmas_fast_path(
                 chunk,
@@ -1795,63 +1795,113 @@ class EnrichmentQueue:
                 zid=session_zid,
             )
             validated = reword.fast_provider_results(chunk, chunk_trans)
-            prov = getattr(chunk_trans, 'provenance', None)
-            if prov and hasattr(validated, '__setattr__'):
-                setattr(validated, 'provenance', prov)
-            return chunk_trans, None
+            return validated, getattr(chunk_trans, 'provenance', None), None
         except Exception as exc:
             logger.warning(f"Lemma batch translation failed for session {session_zid}: {exc}")
-            return None, progressive.lemma_stage_error(exc, provider=active_prov, failed_lemmas=chunk)
+            return None, None, progressive.lemma_stage_error(exc, provider=active_prov, failed_lemmas=chunk)
 
-    def _update_active_lemma_provider(self, arbiter: Any, session_zid: str, chunk_trans: Any, active_prov: str) -> Tuple[str, str]:
-        chunk_prov = getattr(chunk_trans, 'provenance', None) or f"live:{active_prov}"
-        cand = chunk_prov.split(':', 1)[1] if ':' in str(chunk_prov) else str(chunk_prov)
-        if cand and cand != active_prov:
-            active_prov = cand
+    def _cache_active_lemma_provider(self, arbiter: Any, session_zid: str, provider: str, generation: Optional[int]) -> bool:
+        with self._lock:
+            if generation is not None and self._progressive_generations.get(session_zid) != generation:
+                return False
             with arbiter._lock:
-                if session_zid in arbiter.sessions:
-                    arbiter.sessions[session_zid]["active_lemma_provider"] = active_prov
-                    arbiter.sessions[session_zid]["active_provider"] = active_prov
-            arbiter.emit_event(session_zid, {
-                "type": "stage",
-                "stage": "lemma_translation",
-                "status": "in_progress",
-                "provider": active_prov,
-                "active_lemma_provider": active_prov,
-                "active_provider": active_prov,
-            })
-        return chunk_prov, active_prov
+                sess = arbiter.sessions.get(session_zid)
+                if sess is not None:
+                    sess["active_lemma_provider"] = provider
+                    sess["active_provider"] = provider
+        return True
+
+    def _update_active_lemma_provider(self, arbiter: Any, session_zid: str, raw_prov: Optional[str],
+                                      active_prov: str, generation: Optional[int]) -> Tuple[str, str, bool]:
+        chunk_prov = raw_prov or f"live:{active_prov}"
+        cand = chunk_prov.split(':', 1)[1] if ':' in str(chunk_prov) else str(chunk_prov)
+        if not (cand and cand != active_prov):
+            return chunk_prov, active_prov, False
+        if not self._cache_active_lemma_provider(arbiter, session_zid, cand, generation):
+            return chunk_prov, active_prov, True
+        arbiter.emit_event(session_zid, {
+            "type": "stage",
+            "stage": "lemma_translation",
+            "status": "in_progress",
+            "provider": cand,
+            "active_lemma_provider": cand,
+            "active_provider": cand,
+        })
+        return chunk_prov, cand, False
+
+    @staticmethod
+    def _persist_lemma_chunk_storage(storage_adapter: Any, session_zid: str, req_zid: str, is_sqlite: bool,
+                                     sqlite_updates: List[Dict[str, Any]], data_rows: List[List[str]],
+                                     patches: List[Any], col_word_dest: int, tsv_path: Any,
+                                     comments: Any, headers: List[str]):
+        if is_sqlite:
+            if not _sqlite_session_active(storage_adapter, session_zid):
+                raise StructuredError(ErrorCode.NOT_FOUND, f"Session {session_zid} was deleted before word batch commit")
+            if sqlite_updates:
+                updated = storage_adapter.batch_update_words(session_zid=session_zid, updates_list=sqlite_updates, zid=req_zid)
+                if updated == 0 and not _sqlite_session_active(storage_adapter, session_zid):
+                    raise StructuredError(ErrorCode.NOT_FOUND, f"Session {session_zid} was deleted during word batch commit")
+            return
+        candidate_rows = progressive.build_candidate_rows(data_rows, patches, col_word_dest)
+        with storage_adapter.file_lock(tsv_path):
+            storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, candidate_rows)
+
+    def _cache_committed_lemma_chunk(self, arbiter: Any, session_zid: str, data_rows: List[List[str]],
+                                     patches: List[Any], col_word_dest: int, col_token_order: int,
+                                     chunk_prov: str, sess_row_provs: Dict[Any, str],
+                                     occurrence_provs: Dict[Any, str], generation: Optional[int]) -> bool:
+        with self._lock:
+            if generation is not None and self._progressive_generations.get(session_zid) != generation:
+                return False
+            with arbiter._lock:
+                progressive.apply_committed_chunk_patches(
+                    data_rows, patches, col_word_dest, col_token_order,
+                    chunk_prov, sess_row_provs, occurrence_provs=occurrence_provs,
+                )
+                sess = arbiter.sessions.get(session_zid)
+                if sess is not None:
+                    sess["row_provenances"] = dict(sess_row_provs)
+                    sess["data_rows"] = data_rows
+        return True
 
     def _commit_single_lemma_chunk(self, arbiter: Any, storage_adapter: Any, session_zid: str, req_zid: str,
                                    is_sqlite: bool, data_rows: List[List[str]], col_lemma: int, col_word_dest: int,
                                    col_token_order: int, occurrence_keys: Any, chunk_trans: Any, chunk_prov: str,
-                                   sess_row_provs: Dict[Any, str], tsv_path: Any, comments: Any,
-                                   headers: List[str], sess_lang: str) -> Optional[Dict[str, Any]]:
-        updates = progressive.build_chunk_word_updates(
-            data_rows, col_lemma, col_word_dest, col_token_order,
-            occurrence_keys, chunk_trans, chunk_prov, is_sqlite, sess_row_provs,
+                                   sess_row_provs: Dict[Any, str], occurrence_provs: Dict[Any, str],
+                                   tsv_path: Any, comments: Any, headers: List[str], sess_lang: str,
+                                   generation: Optional[int]) -> Tuple[Optional[Dict[str, Any]], bool]:
+        patches, sqlite_updates = progressive.plan_chunk_word_updates(
+            data_rows, col_lemma, col_word_dest, occurrence_keys, chunk_trans, chunk_prov, is_sqlite,
         )
         try:
-            if is_sqlite:
-                if updates:
-                    storage_adapter.batch_update_words(session_zid=session_zid, updates_list=updates, zid=req_zid)
-            else:
-                with storage_adapter.file_lock(tsv_path):
-                    storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+            self._persist_lemma_chunk_storage(
+                storage_adapter, session_zid, req_zid, is_sqlite,
+                sqlite_updates, data_rows, patches, col_word_dest, tsv_path, comments, headers,
+            )
         except Exception as exc:
             logger.warning(f"Lemma batch persistence failed for session {session_zid}: {exc}")
-            return progressive.lemma_stage_error(exc, provider='storage', failed_lemmas=list(chunk_trans.keys()), code='ERR_TRANSLATION_PERSISTENCE_FAILED')
-        with arbiter._lock:
-            if session_zid in arbiter.sessions:
-                arbiter.sessions[session_zid]["row_provenances"] = sess_row_provs
-                arbiter.sessions[session_zid]["data_rows"] = data_rows
-        arbiter.propagate_translations_to_siblings(chunk_trans, exclude_session_zid=session_zid, language=sess_lang)
-        return None
+            err = progressive.lemma_stage_error(
+                exc, provider='storage', failed_lemmas=list(chunk_trans.keys()),
+                code='ERR_TRANSLATION_PERSISTENCE_FAILED',
+            )
+            return err, False
+        if not self._cache_committed_lemma_chunk(
+            arbiter, session_zid, data_rows, patches, col_word_dest, col_token_order,
+            chunk_prov, sess_row_provs, occurrence_provs, generation,
+        ):
+            return None, True
+        arbiter.propagate_translations_to_siblings(
+            chunk_trans, exclude_session_zid=session_zid, language=sess_lang,
+            lemma_provenances={lemma: chunk_prov for lemma in chunk_trans},
+        )
+        return None, False
 
     def _build_lemma_chunks(self, lemmas: List[str]) -> List[List[str]]:
         chunk_size = 15
         if self.config and hasattr(self.config, 'getint'):
             chunk_size = self.config.getint(SEC_TRANSLATION, 'lemma_batch_size', fallback=15)
+        if chunk_size <= 0:
+            return [list(lemmas)]
         return [lemmas[i:i + chunk_size] for i in range(0, len(lemmas), chunk_size)]
 
     def _collect_untranslated_lemmas(self, data_rows: List[List[str]], col_lemma: int, col_word_dest: int) -> List[str]:
@@ -1863,18 +1913,37 @@ class EnrichmentQueue:
             lemmas.reverse()
         return lemmas
 
+    def _cache_translated_stage(self, arbiter: Any, session_zid: str, data_rows: List[List[str]],
+                                new_fp: str, sess_row_provs: Dict[Any, str],
+                                active_text_prov: Optional[str], generation: Optional[int]) -> bool:
+        with self._lock:
+            if generation is not None and self._progressive_generations.get(session_zid) != generation:
+                return False
+            with arbiter._lock:
+                sess = arbiter.sessions.get(session_zid)
+                if sess is not None:
+                    sess["data_rows"] = data_rows
+                    sess["fingerprint"] = new_fp
+                    sess["row_provenances"] = dict(sess_row_provs)
+                    if active_text_prov:
+                        sess["text_provenance"] = active_text_prov
+                        sess["textProvenance"] = active_text_prov
+        return True
+
     def _emit_translated_stage(self, arbiter: Any, storage_adapter: Any, session_zid: str, tsv_path: Any,
                               data_rows: List[List[str]], headers: List[str], role_fields: Dict[str, str],
                               sess_lang: str, eff_trace_id: str, sess_row_provs: Dict[Any, str],
-                              active_text_prov: Optional[str], active_prov: str,
-                              stage_err: Optional[Dict[str, Any]]):
+                              occurrence_provs: Dict[Any, str], active_text_prov: Optional[str],
+                              active_prov: str, stage_err: Optional[Dict[str, Any]],
+                              generation: Optional[int]) -> bool:
         new_fp = compute_content_fingerprint(data_rows)
-        with arbiter._lock:
-            if session_zid in arbiter.sessions:
-                arbiter.sessions[session_zid]["data_rows"] = data_rows
-                arbiter.sessions[session_zid]["fingerprint"] = new_fp
+        if not self._cache_translated_stage(
+            arbiter, session_zid, data_rows, new_fp, sess_row_provs, active_text_prov, generation
+        ):
+            return False
         sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
-        structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields, row_provenances=sess_row_provs)
+        occ_map = occurrence_provs or None
+        structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields, row_provenances=sess_row_provs, occurrence_provenances=occ_map)
         curr_sents = arbiter.sessions.get(session_zid, {}).get("sentences") if session_zid in arbiter.sessions else None
         event = progressive.translated_stage_event(
             structured_rows, new_fp, sess_row_provs, stage_err,
@@ -1883,56 +1952,68 @@ class EnrichmentQueue:
         safe_write_update_js(
             tsv_path, sorted_rows, headers, role_fields, stage="translated", status=event["status"],
             error=stage_err, zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov,
-            row_provenances=sess_row_provs, config=self.config, resolved_paths=self.resolved_paths,
-            storage_adapter=storage_adapter,
+            row_provenances=sess_row_provs, occurrence_provenances=occ_map,
+            config=self.config, resolved_paths=self.resolved_paths, storage_adapter=storage_adapter,
         )
         arbiter.emit_event(session_zid, event)
+        return True
+
+    def _process_single_lemma_chunk(
+        self, arbiter: Any, storage_adapter: Any, session_zid: str, req_zid: str, is_sqlite: bool,
+        chunk: List[str], data_rows: List[List[str]], headers: List[str],
+        occurrence_keys: Any, col_lemma: int, col_word_dest: int, col_token_order: int,
+        sess_lang: str, sess_target: str, tsv_path: Any, comments: Any,
+        generation: Optional[int], sess_row_provs: Dict[Any, str],
+        occurrence_provs: Dict[Any, str], active_prov: str,
+    ) -> Tuple[Optional[Dict[str, Any]], str, bool]:
+        self._heartbeat_lemma_worker(storage_adapter, session_zid, is_sqlite)
+        chunk_trans, raw_prov, trans_err = self._translate_single_lemma_chunk(
+            chunk, sess_lang, sess_target, active_prov, session_zid
+        )
+        if self._is_progressive_superseded(session_zid, generation):
+            return None, active_prov, True
+        if trans_err is not None:
+            return trans_err, active_prov, False
+        chunk_prov, active_prov, superseded = self._update_active_lemma_provider(
+            arbiter, session_zid, raw_prov, active_prov, generation
+        )
+        if superseded:
+            return None, active_prov, True
+        commit_err, superseded = self._commit_single_lemma_chunk(
+            arbiter, storage_adapter, session_zid, req_zid, is_sqlite,
+            data_rows, col_lemma, col_word_dest, col_token_order,
+            occurrence_keys, chunk_trans, chunk_prov, sess_row_provs,
+            occurrence_provs, tsv_path, comments, headers, sess_lang, generation,
+        )
+        return commit_err, active_prov, superseded
 
     def _translate_and_persist_lemma_chunks(
-        self,
-        arbiter: Any,
-        storage_adapter: Any,
-        session_zid: str,
-        req_zid: str,
-        is_sqlite: bool,
-        chunks: List[List[str]],
-        data_rows: List[List[str]],
-        headers: List[str],
-        role_fields: Dict[str, str],
-        occurrence_keys: Any,
-        col_lemma: int,
-        col_word_dest: int,
-        col_token_order: int,
-        sess_lang: str,
-        sess_target: str,
-        tsv_path: Any,
-        comments: Any,
-        eff_trace_id: str,
-        generation: Optional[int],
-        sess_row_provs: Dict[Any, str],
-        active_prov: str,
+        self, arbiter: Any, storage_adapter: Any, session_zid: str, req_zid: str, is_sqlite: bool,
+        chunks: List[List[str]], data_rows: List[List[str]], headers: List[str],
+        occurrence_keys: Any, col_lemma: int, col_word_dest: int, col_token_order: int,
+        sess_lang: str, sess_target: str, tsv_path: Any, comments: Any,
+        generation: Optional[int], sess_row_provs: Dict[Any, str],
+        occurrence_provs: Dict[Any, str], active_prov: str,
     ) -> Tuple[Optional[Dict[str, Any]], str, bool]:
         for chunk in chunks:
             if self._is_progressive_superseded(session_zid, generation):
                 return None, active_prov, True
-            self._heartbeat_lemma_worker(storage_adapter, session_zid, is_sqlite)
-            chunk_trans, trans_err = self._translate_single_lemma_chunk(
-                chunk, sess_lang, sess_target, active_prov, session_zid
-            )
-            if trans_err is not None:
-                return trans_err, active_prov, False
-            chunk_prov, active_prov = self._update_active_lemma_provider(
-                arbiter, session_zid, chunk_trans, active_prov
-            )
-            commit_err = self._commit_single_lemma_chunk(
+            chunk_err, active_prov, superseded = self._process_single_lemma_chunk(
                 arbiter, storage_adapter, session_zid, req_zid, is_sqlite,
-                data_rows, col_lemma, col_word_dest, col_token_order,
-                occurrence_keys, chunk_trans, chunk_prov, sess_row_provs,
-                tsv_path, comments, headers, sess_lang,
+                chunk, data_rows, headers, occurrence_keys, col_lemma, col_word_dest, col_token_order,
+                sess_lang, sess_target, tsv_path, comments, generation, sess_row_provs,
+                occurrence_provs, active_prov,
             )
-            if commit_err is not None:
-                return commit_err, active_prov, False
+            if superseded or chunk_err is not None:
+                return chunk_err, active_prov, superseded
         return None, active_prov, False
+
+    @staticmethod
+    def _seed_lemma_row_provenances(arbiter: Any, session_zid: str, sess_row_provs: Dict[Any, str]):
+        with arbiter._lock:
+            existing = dict((arbiter.sessions.get(session_zid) or {}).get("row_provenances", {}) or {})
+        for key, value in existing.items():
+            sess_row_provs.setdefault(key, value)
 
     def _run_lemma_stage(
         self,
@@ -1962,29 +2043,31 @@ class EnrichmentQueue:
             data_rows, headers, role_fields, occurrence_keys,
             col_lemma, col_word_dest, sess_lang, tsv_path, comments,
         )
+        self._seed_lemma_row_provenances(arbiter, session_zid, sess_row_provs)
         lemmas_to_translate = self._collect_untranslated_lemmas(data_rows, col_lemma, col_word_dest)
-        if not lemmas_to_translate:
-            return None, False
-        chunks = self._build_lemma_chunks(lemmas_to_translate)
         lemma_chain, _ = resolve_provider_chain(self.config, task_type='lemma') if self.config else (['google'], 'chain')
-        lemma_provider = lemma_chain[0] if lemma_chain else 'google'
-        arbiter.emit_event(session_zid, {
-            "type": "stage", "stage": "lemma_translation", "status": "in_progress", "provider": lemma_provider,
-        })
-        stage_err, active_prov, superseded = self._translate_and_persist_lemma_chunks(
-            arbiter, storage_adapter, session_zid, req_zid, is_sqlite,
-            chunks, data_rows, headers, role_fields, occurrence_keys,
-            col_lemma, col_word_dest, col_token_order,
-            sess_lang, sess_target, tsv_path, comments, eff_trace_id,
-            generation, sess_row_provs, lemma_provider,
-        )
-        if superseded:
-            return None, True
-        self._emit_translated_stage(
+        active_prov = lemma_chain[0] if lemma_chain else 'google'
+        occurrence_provs: Dict[Any, str] = {}
+        stage_err = None
+        if lemmas_to_translate:
+            chunks = self._build_lemma_chunks(lemmas_to_translate)
+            arbiter.emit_event(session_zid, {
+                "type": "stage", "stage": "lemma_translation", "status": "in_progress", "provider": active_prov,
+            })
+            stage_err, active_prov, superseded = self._translate_and_persist_lemma_chunks(
+                arbiter, storage_adapter, session_zid, req_zid, is_sqlite,
+                chunks, data_rows, headers, occurrence_keys, col_lemma, col_word_dest, col_token_order,
+                sess_lang, sess_target, tsv_path, comments, generation, sess_row_provs,
+                occurrence_provs, active_prov,
+            )
+            if superseded:
+                return None, True
+        if not self._emit_translated_stage(
             arbiter, storage_adapter, session_zid, tsv_path, data_rows, headers,
-            role_fields, sess_lang, eff_trace_id, sess_row_provs, active_text_prov,
-            active_prov, stage_err,
-        )
+            role_fields, sess_lang, eff_trace_id, sess_row_provs, occurrence_provs,
+            active_text_prov, active_prov, stage_err, generation,
+        ):
+            return None, True
         return stage_err, False
 
     def _start_progressive_worker_state(self, storage_adapter, session_zid, is_sqlite):
@@ -2155,6 +2238,7 @@ class EnrichmentQueue:
                     worker_error = progressive.combine_worker_errors(worker_error, stage1_error)
 
             # Stage 2: Lemma Base Translation
+            stage2_err = None
             run_base = self.config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto') if self.config else 'auto'
             if run_base == 'auto' and col_lemma != -1:
                 stage2_err, superseded = self._run_lemma_stage(
@@ -2187,7 +2271,7 @@ class EnrichmentQueue:
             # Stage 3: Enrichment (IntelliFiller)
             run_enrich = self.config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='manual') if self.config else 'manual'
             enrich_provider = self.config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller') if self.config else 'intellifiller'
-            if not worker_error and not skip_intellifiller and run_enrich == 'auto' and enrich_provider == 'intellifiller':
+            if stage2_err is None and not skip_intellifiller and run_enrich == 'auto' and enrich_provider == 'intellifiller':
                 selected_rows = []
                 col_ipa = progressive.header_index(headers, (role_fields.get('ipa', 'WordSourceIPA'), 'WordSourceIPA'))
                 col_morph = progressive.header_index(headers, (role_fields.get('morphology', 'WordSourceMorphologyAI'), 'WordSourceMorphologyAI'))
