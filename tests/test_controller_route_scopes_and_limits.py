@@ -146,21 +146,27 @@ def test_render_alias_isolates_snapshot_across_concurrent_preference_commit(scop
     assert observed == {'before': 'dark', 'after': 'dark'}
 
 
-def test_api_v1_lookup_observes_independent_sqlite_zoom_preference(scope_world):
+def test_api_v1_lookup_observes_independent_sqlite_language_preference(scope_world):
     url, server, _ = scope_world
-    _seed_session(server)
-    _independent_commit(server, default_zoom=135)
-    assert server.config.get('rendering', 'default_zoom') == '100'
+    db = KardenwortDB(config=server.config, resolved_paths=server.resolved_paths)
+    db.run_migrations()
+    project_id = db.create_project('Lookup Scope Project')
+    _independent_commit(server, default_language='fr')
+    assert server.config.get('settings', 'default_language') == 'de'
 
     # Alias control: /lookup is already in request_preference_scope.
-    status_alias, html_alias = _http_request(url, f'/lookup?session_zid={ZID}')
+    status_alias, html_alias = _http_request(url, f'/lookup?project_id={project_id}')
     assert status_alias == 200
-    assert 'zoom: 135%' in html_alias
+    assert '<script id="session-lang" type="text/plain">fr</script>' in html_alias
 
-    # Excluded route: /api/v1/lookup must observe the same committed zoom.
-    status_v1, body_v1 = _http_request(url, f'/api/v1/lookup?session_zid={ZID}')
+    # Repaired route: /api/v1/lookup must observe the same committed default_language='fr'.
+    status_v1, body_v1 = _http_request(url, f'/api/v1/lookup?project_id={project_id}')
     assert status_v1 == 200, body_v1
-    assert 'zoom: 135%' in _data(body_v1)['html']
+    assert _data(body_v1)['language'] == 'fr'
+    assert '<script id="session-lang" type="text/plain">fr</script>' in _data(body_v1)['html']
+
+    # Auth control remains enforced.
+    assert _http_request(url, f'/api/v1/lookup?project_id={project_id}', token='wrong')[0] == 403
 
 
 def test_api_v1_export_observes_independent_sqlite_default_language(scope_world):
