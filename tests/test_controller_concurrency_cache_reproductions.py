@@ -557,3 +557,135 @@ def test_delete_all_matching_purge_restore_and_failed_delete_cache_and_generatio
         assert st_restored == 200
         rows_map = body_restored["data"]["rows"]
         assert any(r.get("trans") == "restored_fresh" for r in rows_map.values())
+
+        # 5. Purge evicts any cached entry and bumps generation fence for purged ZIDs.
+        assert _http_json(url, "/api/v1/admin/sessions/delete", method="POST", body={"session_zid": zid_keep})[0] == 200
+        with server.arbiter._lock:
+            server.arbiter.sessions[zid_keep] = {"session_zid": zid_keep}
+        with server.arbiter.enrichment_queue._lock:
+            gen_before_purge = server.arbiter.enrichment_queue._progressive_generations.get(zid_keep, 0)
+        st_purge, body_purge = _http_json(url, "/api/v1/admin/trash/purge", method="POST", body={})
+        assert st_purge == 200 and body_purge["data"]["purged_sessions"] >= 1
+        assert zid_keep not in server.arbiter.sessions
+        with server.arbiter.enrichment_queue._lock:
+            assert server.arbiter.enrichment_queue._progressive_generations.get(zid_keep, 0) > gen_before_purge
+
+
+def test_save_preserves_fingerprint_conflict_eviction_and_committed_delivery_recovery(tmp_path, monkeypatch):
+    """Save preserves ROW_STALE fingerprint conflicts, does not resurrect evicted sessions,
+    and retains committed recovery metadata when event delivery fails after SQLite commit.
+    """
+    config, paths, arbiter, adapter, _ = _build_sqlite_arbiter(tmp_path)
+    zid = "20261123050020"
+    try:
+        restored = _seed_sqlite_session(adapter, tmp_path, zid, word_dest="initial")
+        _warm_cache_entry(arbiter, restored, zid)
+
+        # 1. Stale fingerprint conflict rejected cleanly without modifying SQLite or cache.
+        with pytest.raises(desk.StructuredError) as stale_err:
+            arbiter.save_session(
+                session_zid=zid,
+                deltas=[{"row_id": 0, "sentence_idx": 1, "token_order": 0, "column": "WordDestination", "value": "bad"}],
+                fingerprint="stale-wrong-fingerprint",
+                language="de",
+            )
+        assert stale_err.value.error_code == desk.ErrorCode.ROW_STALE
+        assert adapter.db.get_words_by_session(zid)[0]["word_destination"] == "initial"
+
+        # 2. Cache eviction during save does not resurrect evicted session in arbiter.sessions.
+        real_core_edit_save = controller.core_edit_save
+
+        def evicting_save(*args, **kwargs):
+            res = real_core_edit_save(*args, **kwargs)
+            arbiter.invalidate_deleted_sessions([zid])
+            return res
+
+        monkeypatch.setattr(controller, "core_edit_save", evicting_save)
+        res_evict = arbiter.save_session(
+            session_zid=zid,
+            deltas=[{"row_id": 0, "sentence_idx": 1, "token_order": 0, "column": "WordDestination", "value": "after_evict"}],
+            language="de",
+        )
+        assert res_evict["status"] == "success"
+        assert zid not in arbiter.sessions
+
+        # 3. Delivery failure after SQLite commit preserves committed recovery details.
+        monkeypatch.setattr(controller, "core_edit_save", real_core_edit_save)
+        monkeypatch.setattr(arbiter, "emit_event", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("sse broken")))
+        with pytest.raises(desk.StructuredError) as deliv_err:
+            arbiter.save_session(
+                session_zid=zid,
+                deltas=[{"row_id": 0, "sentence_idx": 1, "token_order": 0, "column": "WordDestination", "value": "committed_ok"}],
+                language="de",
+            )
+        assert deliv_err.value.details.get("committed") is True
+        assert deliv_err.value.details.get("session_zid") == zid
+        assert deliv_err.value.details.get("fingerprint")
+        assert adapter.db.get_words_by_session(zid)[0]["word_destination"] == "committed_ok"
+    finally:
+        _cleanup_arbiter(arbiter)
+
+
+def test_bounded_idle_retention_preserves_active_workers_tombstones_and_claimed_drafts(tmp_path):
+    """Configured size/TTL retention evicts idle recomputable entries only while preserving
+    active sessions, pinned generation fences, and claimed drafts.
+    """
+    config, paths, arbiter, _, _ = _build_sqlite_arbiter(tmp_path)
+    eq = arbiter.enrichment_queue
+    try:
+        # 1. SessionArbiter idle session eviction vs active progressive worker protection.
+        arbiter._session_cache_max = 2
+        arbiter._session_cache_idle_ttl = 100.0
+        with arbiter._lock:
+            for idx, zid in enumerate(("20261123050031", "20261123050032", "20261123050033")):
+                arbiter.sessions[zid] = {"session_zid": zid, "lock": threading.Lock()}
+                arbiter._session_last_used[zid] = 1000.0 + idx * 10.0
+        active_fut = concurrent.futures.Future()
+        with eq._lock:
+            eq._active_progressive_sessions["20261123050031"] = active_fut
+        arbiter.prune_idle_caches(now=1050.0)
+        assert "20261123050031" in arbiter.sessions, "Active progressive worker session was evicted"
+        assert "20261123050032" not in arbiter.sessions, "Oldest idle session was not evicted at size limit"
+        assert "20261123050033" in arbiter.sessions
+
+        # TTL expiry evicts remaining idle session while keeping active worker session.
+        arbiter.prune_idle_caches(now=1200.0)
+        assert "20261123050031" in arbiter.sessions
+        assert "20261123050033" not in arbiter.sessions
+
+        # 2. EnrichmentQueue memo LRU/TTL & generation tombstone pinning.
+        eq._enrichment_cache_max = 2
+        eq._enrichment_cache_ttl = 50.0
+        eq._generation_fence_max = 2
+        with eq._lock:
+            eq._put_memo_locked(eq._cache, eq._cache_times, ("a", "de"), {"v": 1}, 2, 50.0, now=100.0)
+            eq._put_memo_locked(eq._cache, eq._cache_times, ("b", "de"), {"v": 2}, 2, 50.0, now=110.0)
+            eq._put_memo_locked(eq._cache, eq._cache_times, ("c", "de"), {"v": 3}, 2, 50.0, now=120.0)
+            assert set(eq._cache.keys()) == {("b", "de"), ("c", "de")}
+            eq._progressive_generations["20261123050031"] = 5
+            eq._progressive_generations["idle_1"] = 1
+            eq._progressive_generations["idle_2"] = 1
+            eq._progressive_generations["idle_3"] = 1
+            eq._prune_generations_locked()
+            assert "20261123050031" in eq._progressive_generations, "Pinned active generation fence was dropped"
+            assert len(eq._progressive_generations) == 2
+            eq._active_progressive_sessions.pop("20261123050031", None)
+
+        # 3. Draft retention evicts idle/expired drafts while preserving a claimed draft.
+        z_claimed, z_idle1, z_idle2 = "20261123050041", "20261123050042", "20261123050043"
+        try:
+            controller._store_draft_session(z_claimed, {"text": "c"}, max_entries=1, ttl_seconds=60.0, now=100.0)
+            draft, token, _, busy = controller._claim_draft_session(z_claimed, ttl_seconds=60.0, now=105.0)
+            assert draft is not None and token is not None and not busy
+            controller._store_draft_session(z_idle1, {"text": "i1"}, max_entries=1, ttl_seconds=60.0, now=110.0)
+            controller._store_draft_session(z_idle2, {"text": "i2"}, max_entries=1, ttl_seconds=60.0, now=120.0)
+            with controller._DRAFT_SESSIONS_LOCK:
+                assert z_claimed in controller._DRAFT_SESSIONS, "Claimed draft was evicted"
+                assert z_idle1 not in controller._DRAFT_SESSIONS, "Excess idle draft was not evicted"
+                assert z_idle2 in controller._DRAFT_SESSIONS
+            controller._complete_draft_session(z_claimed, token, draft)
+        finally:
+            for z in (z_claimed, z_idle1, z_idle2):
+                controller._cancel_draft_session(z)
+    finally:
+        _cleanup_arbiter(arbiter)

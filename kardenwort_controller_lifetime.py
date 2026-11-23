@@ -195,12 +195,16 @@ class ControllerHTTPServer(ThreadingHTTPServer):
         with self.close_lock:
             if not self.closed_event.is_set():
                 self.streams.stopping.set()
-                self.errors.extend(run_cleanup([
+                cleanup_errors = run_cleanup([
                     lambda: HTTPServer.server_close(self), self.streams.cancel,
-                    self.cancel_connections, self.join_workers]))
+                    self.cancel_connections, self.join_workers])
+                with self.lock:
+                    self.errors.extend(cleanup_errors)
                 self.closed_event.set()
-            if self.errors:
-                raise BaseExceptionGroup('Controller HTTP disposal failed', list(self.errors))
+            with self.lock:
+                errors = list(self.errors)
+            if errors:
+                raise BaseExceptionGroup('Controller HTTP disposal failed', errors)
 
     def request_shutdown(self):
         with self.lock:

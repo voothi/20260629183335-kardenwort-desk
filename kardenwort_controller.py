@@ -322,6 +322,20 @@ def _session_cache_revision(session):
     )
 
 
+def _bump_arbiter_revision_locked(arbiter, zid):
+    bump = getattr(arbiter, '_bump_session_revision_locked', None)
+    if bump is not None:
+        bump(zid)
+
+
+def _evict_arbiter_session_locked(arbiter, zid):
+    evict = getattr(arbiter, '_evict_session_locked', None)
+    if evict is not None:
+        evict(zid)
+    else:
+        arbiter.sessions.pop(zid, None)
+
+
 def committed_recovery_snapshot(arbiter, zid):
     adapter = getattr(arbiter, 'storage_adapter', None) or get_storage_adapter(
         arbiter.config, arbiter.resolved_paths, read_only=True)
@@ -342,6 +356,7 @@ def committed_recovery_snapshot(arbiter, zid):
         if pre_revision is not None and _session_cache_revision(current) == pre_revision:
             current.update(headers=headers, data_rows=rows,
                 fingerprint=snapshot['fingerprint'], translatedText=snapshot['translatedText'])
+            _bump_arbiter_revision_locked(arbiter, zid)
     return snapshot
 
 ERROR_STATUS_MATRIX = {
@@ -364,9 +379,172 @@ ERROR_STATUS_MATRIX = {
 
 _DRAFT_SESSIONS: Dict[str, dict] = {}
 _DRAFT_SESSIONS_LOCK = threading.Lock()
+_DRAFT_META: Dict[str, dict] = {}
+_DRAFT_SEQ = 0
+_DEFAULT_DRAFT_SESSION_MAX = 128
+_DEFAULT_DRAFT_SESSION_TTL_SECONDS = 1800.0
+_DEFAULT_SESSION_CACHE_MAX = 128
+_DEFAULT_SESSION_CACHE_IDLE_TTL_SECONDS = 3600.0
+_DEFAULT_ENRICHMENT_CACHE_MAX = 4096
+_DEFAULT_ENRICHMENT_CACHE_TTL_SECONDS = 3600.0
+_DEFAULT_TRANSLATION_CACHE_MAX = 10000
+_DEFAULT_TRANSLATION_CACHE_TTL_SECONDS = 3600.0
+_DEFAULT_GENERATION_FENCE_MAX = 1024
 _RENDERED_SESSION_ALIASES: Dict[str, str] = {}
 _RENDERED_SESSION_ALIASES_LOCK = threading.Lock()
 _MAX_RENDERED_SESSION_ALIASES = 256
+
+
+def _positive_int_config(config: Any, section: str, option: str, default: int) -> int:
+    if config is None or not hasattr(config, "getint"):
+        return default
+    try:
+        value = config.getint(section, option, fallback=default)
+    except (ValueError, TypeError):
+        return default
+    return value if value > 0 else default
+
+
+def _positive_float_config(config: Any, section: str, option: str, default: float) -> float:
+    if config is None or not hasattr(config, "getfloat"):
+        return default
+    try:
+        value = config.getfloat(section, option, fallback=default)
+    except (ValueError, TypeError):
+        return default
+    return value if value > 0 else default
+
+
+def _next_draft_seq_locked() -> int:
+    global _DRAFT_SEQ
+    _DRAFT_SEQ += 1
+    return _DRAFT_SEQ
+
+
+def _ensure_draft_meta_locked(zid: str, draft: dict, now: float) -> dict:
+    meta = _DRAFT_META.get(zid)
+    if meta is not None and meta.get("draft_ref") is draft:
+        return meta
+    meta = {
+        "draft_id": _next_draft_seq_locked(),
+        "draft_ref": draft,
+        "created_at": now,
+        "claimed_by": None,
+        "language_committed": None,
+    }
+    _DRAFT_META[zid] = meta
+    return meta
+
+
+def _prune_idle_drafts_locked(max_entries: int, ttl_seconds: float, now: float) -> None:
+    stale_meta = [z for z in list(_DRAFT_META) if z not in _DRAFT_SESSIONS]
+    for z in stale_meta:
+        _DRAFT_META.pop(z, None)
+    unclaimed = []
+    for z, draft in list(_DRAFT_SESSIONS.items()):
+        meta = _ensure_draft_meta_locked(z, draft, now)
+        if meta["claimed_by"] is not None:
+            continue
+        if (now - meta["created_at"]) > ttl_seconds:
+            _DRAFT_SESSIONS.pop(z, None)
+            _DRAFT_META.pop(z, None)
+        else:
+            unclaimed.append((meta["created_at"], meta["draft_id"], z))
+    unclaimed.sort()
+    excess = len(unclaimed) - max(1, max_entries)
+    for _, _, z in unclaimed[:max(0, excess)]:
+        _DRAFT_SESSIONS.pop(z, None)
+        _DRAFT_META.pop(z, None)
+
+
+def _store_draft_session(
+    zid: str,
+    draft: dict,
+    *,
+    config: Any = None,
+    max_entries: Optional[int] = None,
+    ttl_seconds: Optional[float] = None,
+    now: Optional[float] = None,
+) -> None:
+    stamp = time.monotonic() if now is None else float(now)
+    cap = max_entries if max_entries is not None else _positive_int_config(
+        config, "server", "draft_session_max", _DEFAULT_DRAFT_SESSION_MAX
+    )
+    ttl = ttl_seconds if ttl_seconds is not None else _positive_float_config(
+        config, "server", "draft_session_ttl_seconds", _DEFAULT_DRAFT_SESSION_TTL_SECONDS
+    )
+    with _DRAFT_SESSIONS_LOCK:
+        _DRAFT_SESSIONS[zid] = draft
+        _DRAFT_META[zid] = {
+            "draft_id": _next_draft_seq_locked(),
+            "draft_ref": draft,
+            "created_at": stamp,
+            "claimed_by": None,
+            "language_committed": None,
+        }
+        _prune_idle_drafts_locked(cap, ttl, stamp)
+
+
+def _claim_draft_session(
+    zid: str,
+    *,
+    config: Any = None,
+    ttl_seconds: Optional[float] = None,
+    now: Optional[float] = None,
+) -> Tuple[Optional[dict], Optional[int], Optional[str], bool]:
+    stamp = time.monotonic() if now is None else float(now)
+    ttl = ttl_seconds if ttl_seconds is not None else _positive_float_config(
+        config, "server", "draft_session_ttl_seconds", _DEFAULT_DRAFT_SESSION_TTL_SECONDS
+    )
+    with _DRAFT_SESSIONS_LOCK:
+        draft = _DRAFT_SESSIONS.get(zid)
+        if draft is None:
+            _DRAFT_META.pop(zid, None)
+            return None, None, None, False
+        meta = _ensure_draft_meta_locked(zid, draft, stamp)
+        if meta["claimed_by"] is not None:
+            return None, None, None, True
+        if (stamp - meta["created_at"]) > ttl:
+            _DRAFT_SESSIONS.pop(zid, None)
+            _DRAFT_META.pop(zid, None)
+            return None, None, None, False
+        claim_token = _next_draft_seq_locked()
+        meta["claimed_by"] = claim_token
+        return draft, claim_token, meta.get("language_committed"), False
+
+
+def _mark_draft_language_committed(zid: str, claim_token: int, language: str) -> None:
+    with _DRAFT_SESSIONS_LOCK:
+        meta = _DRAFT_META.get(zid)
+        if meta is not None and meta.get("claimed_by") == claim_token:
+            meta["language_committed"] = language
+
+
+def _complete_draft_session(zid: str, claim_token: int, draft_ref: dict) -> None:
+    with _DRAFT_SESSIONS_LOCK:
+        meta = _DRAFT_META.get(zid)
+        if (
+            meta is not None
+            and meta.get("claimed_by") == claim_token
+            and _DRAFT_SESSIONS.get(zid) is draft_ref
+        ):
+            _DRAFT_SESSIONS.pop(zid, None)
+            _DRAFT_META.pop(zid, None)
+
+
+def _release_draft_claim(zid: str, claim_token: int, draft_ref: dict) -> None:
+    with _DRAFT_SESSIONS_LOCK:
+        if _DRAFT_SESSIONS.get(zid) is not draft_ref:
+            return
+        meta = _DRAFT_META.get(zid)
+        if meta is not None and meta.get("claimed_by") == claim_token:
+            meta["claimed_by"] = None
+
+
+def _cancel_draft_session(zid: str) -> None:
+    with _DRAFT_SESSIONS_LOCK:
+        _DRAFT_SESSIONS.pop(zid, None)
+        _DRAFT_META.pop(zid, None)
 
 
 def _resolve_rendered_session_zid(html_result: Any, fallback_zid: str) -> str:
@@ -414,6 +592,23 @@ def _lookup_session_alias(requested_zid: Optional[str]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Windows Job Object Helper for Process Supervision
 # ---------------------------------------------------------------------------
+def _configure_win32_job_api(kernel32):
+    import ctypes
+    import ctypes.wintypes as wt
+
+    kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wt.LPCWSTR]
+    kernel32.CreateJobObjectW.restype = wt.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [wt.HANDLE, ctypes.c_int, ctypes.c_void_p, wt.DWORD]
+    kernel32.SetInformationJobObject.restype = wt.BOOL
+    kernel32.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+    kernel32.OpenProcess.restype = wt.HANDLE
+    kernel32.AssignProcessToJobObject.argtypes = [wt.HANDLE, wt.HANDLE]
+    kernel32.AssignProcessToJobObject.restype = wt.BOOL
+    kernel32.CloseHandle.argtypes = [wt.HANDLE]
+    kernel32.CloseHandle.restype = wt.BOOL
+    return kernel32
+
+
 class WindowsJobObject:
     """
     Manages a Windows Job Object configured with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
@@ -431,10 +626,12 @@ class WindowsJobObject:
     def _init_job(self):
         if sys.platform != "win32":
             return
-        try:
-            import ctypes
-            import ctypes.wintypes
+        import ctypes
+        import ctypes.wintypes
 
+        kernel32 = None
+        created_handle = None
+        try:
             class IO_COUNTERS(ctypes.Structure):
                 _fields_ = [
                     ('ReadOperationCount', ctypes.c_uint64),
@@ -468,9 +665,9 @@ class WindowsJobObject:
                     ('PeakJobMemoryLimit', ctypes.c_size_t),
                 ]
 
-            kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-            self.job_handle = kernel32.CreateJobObjectW(None, None)
-            if not self.job_handle:
+            kernel32 = _configure_win32_job_api(ctypes.WinDLL('kernel32', use_last_error=True))
+            created_handle = kernel32.CreateJobObjectW(None, None)
+            if not created_handle:
                 err = ctypes.get_last_error()
                 logger.warning(f"Failed to create Windows Job Object: error {err}")
                 return
@@ -478,7 +675,7 @@ class WindowsJobObject:
             info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
             info.BasicLimitInformation.LimitFlags = self.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             success = kernel32.SetInformationJobObject(
-                self.job_handle,
+                created_handle,
                 self.JobObjectExtendedLimitInformation,
                 ctypes.byref(info),
                 ctypes.sizeof(info)
@@ -486,25 +683,34 @@ class WindowsJobObject:
             if not success:
                 err = ctypes.get_last_error()
                 logger.warning(f"Failed to set Job Object information: error {err}")
-                kernel32.CloseHandle(self.job_handle)
-                self.job_handle = None
-            else:
-                logger.info("Windows Job Object initialized with KILL_ON_JOB_CLOSE")
+                kernel32.CloseHandle(created_handle)
+                return
+            self.job_handle = created_handle
+            created_handle = None
+            logger.info("Windows Job Object initialized with KILL_ON_JOB_CLOSE")
         except Exception as e:
             logger.warning(f"Error setting up Windows Job Object: {e}")
+            if created_handle and kernel32 is not None:
+                try:
+                    kernel32.CloseHandle(created_handle)
+                except Exception:
+                    pass
             self.job_handle = None
 
     def assign_process(self, proc: subprocess.Popen) -> bool:
         if sys.platform != "win32" or not self.job_handle or not proc:
             return False
+        import ctypes
+        kernel32 = None
+        owned_handle = None
         try:
-            import ctypes
-            kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            kernel32 = _configure_win32_job_api(ctypes.WinDLL('kernel32', use_last_error=True))
             handle = getattr(proc, '_handle', None)
             if not handle and hasattr(proc, 'pid'):
                 PROCESS_SET_QUOTA = 0x0100
                 PROCESS_TERMINATE = 0x0001
-                handle = kernel32.OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, False, proc.pid)
+                owned_handle = kernel32.OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, False, proc.pid)
+                handle = owned_handle
             if handle:
                 res = kernel32.AssignProcessToJobObject(self.job_handle, handle)
                 if not res:
@@ -514,15 +720,19 @@ class WindowsJobObject:
                 return True
         except Exception as e:
             logger.warning(f"Exception assigning process to Job Object: {e}")
+        finally:
+            if owned_handle and kernel32 is not None:
+                try:
+                    kernel32.CloseHandle(owned_handle)
+                except Exception:
+                    pass
         return False
 
     def close(self):
         if sys.platform != "win32" or not self.job_handle:
             return
         import ctypes
-        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-        kernel32.CloseHandle.restype = ctypes.c_int
+        kernel32 = _configure_win32_job_api(ctypes.WinDLL('kernel32', use_last_error=True))
         if not kernel32.CloseHandle(self.job_handle):
             raise ctypes.WinError(ctypes.get_last_error())
         self.job_handle = None
@@ -1196,12 +1406,29 @@ class EnrichmentQueue:
             thread_name_prefix="ProgressiveWorker",
         )
         self._cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._cache_times: Dict[Tuple[str, str], float] = {}
         self._inflight_lemmas: Dict[Tuple[str, str], concurrent.futures.Future] = {}
         self._inflight_progressive_batches: Dict[Any, _InFlightProgressiveBatch] = {}
         self._lemma_trans_cache: Dict[Tuple[str, str, str], str] = {}
+        self._lemma_trans_times: Dict[Tuple[str, str, str], float] = {}
         self._inflight_trans: Dict[Tuple[str, str, str], concurrent.futures.Future] = {}
         self._active_progressive_sessions: Dict[str, concurrent.futures.Future] = {}
         self._progressive_generations: Dict[str, int] = {}
+        self._enrichment_cache_max = _positive_int_config(
+            config, "intellifiller", "enrichment_cache_max", _DEFAULT_ENRICHMENT_CACHE_MAX
+        )
+        self._enrichment_cache_ttl = _positive_float_config(
+            config, "intellifiller", "enrichment_cache_ttl_seconds", _DEFAULT_ENRICHMENT_CACHE_TTL_SECONDS
+        )
+        self._translation_cache_max = _positive_int_config(
+            config, SEC_TRANSLATION, "cache_size", _DEFAULT_TRANSLATION_CACHE_MAX
+        )
+        self._translation_cache_ttl = _positive_float_config(
+            config, SEC_TRANSLATION, "cache_ttl_seconds", _DEFAULT_TRANSLATION_CACHE_TTL_SECONDS
+        )
+        self._generation_fence_max = _positive_int_config(
+            config, "server", "generation_fence_max", _DEFAULT_GENERATION_FENCE_MAX
+        )
         self._unobserved_progressive_failures: List[BaseException] = []
         self._progressive_failures = self._unobserved_progressive_failures
         self._acknowledged_failures = deque(maxlen=64)
@@ -1210,37 +1437,99 @@ class EnrichmentQueue:
         self._pacing_lock = threading.Lock()
         self._last_request_time = 0.0
 
+    @staticmethod
+    def _prune_memo_locked(cache: dict, times: dict, max_entries: int, ttl_seconds: float, now: float) -> None:
+        expired = [k for k, ts in list(times.items()) if (now - ts) > ttl_seconds]
+        for k in expired:
+            cache.pop(k, None)
+            times.pop(k, None)
+        while len(cache) > max_entries:
+            oldest = next(iter(cache))
+            cache.pop(oldest, None)
+            times.pop(oldest, None)
+
+    def _put_memo_locked(self, cache: dict, times: dict, key: Any, value: Any, max_entries: int, ttl_seconds: float, now: Optional[float] = None) -> None:
+        stamp = time.monotonic() if now is None else float(now)
+        cache.pop(key, None)
+        cache[key] = value
+        times[key] = stamp
+        self._prune_memo_locked(cache, times, max_entries, ttl_seconds, stamp)
+
+    def _get_memo_locked(self, cache: dict, times: dict, key: Any, ttl_seconds: float, now: Optional[float] = None):
+        if key not in cache:
+            return None
+        stamp = time.monotonic() if now is None else float(now)
+        ts = times.get(key)
+        if ts is not None and (stamp - ts) > ttl_seconds:
+            cache.pop(key, None)
+            times.pop(key, None)
+            return None
+        val = cache.pop(key)
+        cache[key] = val
+        times[key] = stamp
+        return val
+
+    def _prune_generations_locked(self) -> None:
+        if len(self._progressive_generations) <= self._generation_fence_max:
+            return
+        pinned = set(self._active_progressive_sessions.keys())
+        for batch in self._inflight_progressive_batches.values():
+            pinned.update(s_zid for s_zid, _ in batch.subscribers)
+        candidates = [z for z in list(self._progressive_generations) if z not in pinned]
+        excess = len(self._progressive_generations) - self._generation_fence_max
+        for z in candidates[:max(0, excess)]:
+            self._progressive_generations.pop(z, None)
+
     def get_cached(self, lemma: str, language: str = "de") -> Optional[Dict[str, Any]]:
         norm_lemma = lemma.strip()
         norm_lang = (language or "de").strip()
         with self._lock:
-            cached = self._cache.get((norm_lemma, norm_lang))
+            cached = self._get_memo_locked(self._cache, self._cache_times, (norm_lemma, norm_lang), self._enrichment_cache_ttl)
             return dict(cached) if cached is not None else None
 
     def set_cached(self, lemma: str, language: str, result: Dict[str, Any]):
         norm_lemma = lemma.strip()
         norm_lang = (language or "de").strip()
         with self._lock:
-            self._cache[(norm_lemma, norm_lang)] = dict(result)
+            self._put_memo_locked(
+                self._cache, self._cache_times, (norm_lemma, norm_lang), dict(result),
+                self._enrichment_cache_max, self._enrichment_cache_ttl,
+            )
 
     def clear_cache(self):
         with self._lock:
             self._cache.clear()
+            self._cache_times.clear()
             self._lemma_trans_cache.clear()
+            self._lemma_trans_times.clear()
 
     def get_cached_translation(self, lemma: str, source_lang: str = "de", target_lang: str = "ru") -> Optional[str]:
         norm_lemma = (lemma or "").strip()
         norm_src = (source_lang or "de").strip()
         norm_tgt = (target_lang or "ru").strip()
         with self._lock:
-            return self._lemma_trans_cache.get((norm_lemma, norm_src, norm_tgt))
+            return self._get_memo_locked(
+                self._lemma_trans_cache, self._lemma_trans_times,
+                (norm_lemma, norm_src, norm_tgt), self._translation_cache_ttl,
+            )
 
     def set_cached_translation(self, lemma: str, source_lang: str, target_lang: str, translation: str):
         norm_lemma = (lemma or "").strip()
         norm_src = (source_lang or "de").strip()
         norm_tgt = (target_lang or "ru").strip()
         with self._lock:
-            self._lemma_trans_cache[(norm_lemma, norm_src, norm_tgt)] = translation
+            self._put_memo_locked(
+                self._lemma_trans_cache, self._lemma_trans_times,
+                (norm_lemma, norm_src, norm_tgt), translation,
+                self._translation_cache_max, self._translation_cache_ttl,
+            )
+
+    def prune_idle_caches(self, now: Optional[float] = None) -> None:
+        stamp = time.monotonic() if now is None else float(now)
+        with self._lock:
+            self._prune_memo_locked(self._cache, self._cache_times, self._enrichment_cache_max, self._enrichment_cache_ttl, stamp)
+            self._prune_memo_locked(self._lemma_trans_cache, self._lemma_trans_times, self._translation_cache_max, self._translation_cache_ttl, stamp)
+            self._prune_generations_locked()
 
     def translate_lemma(
         self,
@@ -1280,7 +1569,10 @@ class EnrichmentQueue:
             res = fut.result()
             if isinstance(res, str) and res:
                 with self._lock:
-                    self._lemma_trans_cache[key] = res
+                    self._put_memo_locked(
+                        self._lemma_trans_cache, self._lemma_trans_times, key, res,
+                        self._translation_cache_max, self._translation_cache_ttl,
+                    )
             return res if isinstance(res, str) else ""
         finally:
             with self._lock:
@@ -1417,7 +1709,10 @@ class EnrichmentQueue:
             res = fut.result()
             if isinstance(res, dict) and res:
                 with self._lock:
-                    self._cache[key] = dict(res)
+                    self._put_memo_locked(
+                        self._cache, self._cache_times, key, dict(res),
+                        self._enrichment_cache_max, self._enrichment_cache_ttl,
+                    )
             return dict(res) if isinstance(res, dict) else {}
         finally:
             with self._lock:
@@ -1437,7 +1732,10 @@ class EnrichmentQueue:
         except ValueError as exc:
             raise StructuredError(ErrorCode.DESK_FAILED, str(exc)) from exc
         with self._lock:
-            self._cache[(lemma.strip(), language)] = dict(result)
+            self._put_memo_locked(
+                self._cache, self._cache_times, (lemma.strip(), language), dict(result),
+                self._enrichment_cache_max, self._enrichment_cache_ttl,
+            )
         return result
 
     def _execute_legacy_enrich_lemma(
@@ -1543,20 +1841,36 @@ class EnrichmentQueue:
 
         return {}
 
+    def _has_active_batch_subscriber_locked(self, subscribers: List[Tuple[str, Optional[int]]]) -> bool:
+        if self._shutting_down:
+            return False
+        return any(
+            gen is None or self._progressive_generations.get(s_zid) == gen
+            for s_zid, gen in subscribers
+        )
+
     def _has_active_batch_subscriber(self, subscribers: List[Tuple[str, Optional[int]]]) -> bool:
         with self._lock:
-            if self._shutting_down:
-                return False
-            return any(
-                gen is None or self._progressive_generations.get(s_zid) == gen
-                for s_zid, gen in subscribers
-            )
+            return self._has_active_batch_subscriber_locked(subscribers)
+
+    def _retire_progressive_batch_locked(self, request_key: Any, future: Optional[concurrent.futures.Future]):
+        if future is None:
+            return
+        entry = self._inflight_progressive_batches.get(request_key)
+        if entry is not None and entry.future is future:
+            del self._inflight_progressive_batches[request_key]
+            self._prune_generations_locked()
 
     def _retire_progressive_batch(self, request_key: Any, future: Optional[concurrent.futures.Future]):
         with self._lock:
-            entry = self._inflight_progressive_batches.get(request_key)
-            if entry is not None and (future is None or entry.future is future):
-                del self._inflight_progressive_batches[request_key]
+            self._retire_progressive_batch_locked(request_key, future)
+
+    def _claim_batch_execution_or_retire(self, request_key: Any, holder: List[Optional[concurrent.futures.Future]], subscribers: List[Tuple[str, Optional[int]]]) -> bool:
+        with self._lock:
+            if self._has_active_batch_subscriber_locked(subscribers):
+                return True
+            self._retire_progressive_batch_locked(request_key, holder[0])
+            return False
 
     def _acquire_progressive_batch_future(
         self, request_key, batch, prompt, language, config, session_zid, generation, zid, trace_id
@@ -1584,7 +1898,7 @@ class EnrichmentQueue:
         self, request_key, holder, subscribers, batch, prompt, language, config, zid, trace_id
     ) -> Dict[int, Dict[str, str]]:
         try:
-            if not self._has_active_batch_subscriber(subscribers):
+            if not self._claim_batch_execution_or_retire(request_key, holder, subscribers):
                 raise concurrent.futures.CancelledError("All progressive enrichment subscribers were superseded")
             return _enrichment_core.request_batch(
                 batch, prompt, language, config, _desk_module.query_intellifiller_server, zid, trace_id,
@@ -1660,6 +1974,7 @@ class EnrichmentQueue:
                 self._unobserved_progressive_failures.append(error)
             if self._active_progressive_sessions.get(session_zid) is future:
                 del self._active_progressive_sessions[session_zid]
+            self._prune_generations_locked()
 
     def _collect_wordfill_row_updates(self, row, headers, role_fields, match, existing_provenance=None):
         patch = progressive.wordfill_patch(
@@ -1894,9 +2209,10 @@ class EnrichmentQueue:
     @staticmethod
     def _cache_completion_locked(arbiter, zid, snapshot):
         if snapshot.restored is None:
-            arbiter.sessions.pop(zid, None)
+            _evict_arbiter_session_locked(arbiter, zid)
         elif zid in arbiter.sessions:
             arbiter.sessions[zid].update(progressive.cache_projection(snapshot))
+            _bump_arbiter_revision_locked(arbiter, zid)
 
     def _deliver_completion(self, arbiter, adapter, request, snapshot):
         if request.path and snapshot.rows and snapshot.headers:
@@ -2002,6 +2318,7 @@ class EnrichmentQueue:
                     if committed_map:
                         sess["active_text_provider"] = eff_tp_name
                         sess["active_provider"] = eff_tp_name
+                    _bump_arbiter_revision_locked(arbiter, session_zid)
         return True
 
     def _emit_translated_text_stage(self, arbiter, adapter, session_zid, tsv_path, data_rows, headers,
@@ -2143,6 +2460,7 @@ class EnrichmentQueue:
                 if sess is not None:
                     sess["row_provenances"] = dict(sess_row_provs)
                     sess["data_rows"] = data_rows
+                    _bump_arbiter_revision_locked(arbiter, session_zid)
         return True
 
     def _commit_single_lemma_chunk(self, arbiter: Any, storage_adapter: Any, session_zid: str, req_zid: str,
@@ -2209,6 +2527,7 @@ class EnrichmentQueue:
                     if active_text_prov:
                         sess["text_provenance"] = active_text_prov
                         sess["textProvenance"] = active_text_prov
+                    _bump_arbiter_revision_locked(arbiter, session_zid)
         return True
 
     def _emit_translated_stage(self, arbiter: Any, storage_adapter: Any, session_zid: str, tsv_path: Any,
@@ -2713,12 +3032,119 @@ class SessionArbiter:
         self.resolved_paths = resolved_paths
         self.wordfill_cfg = wordfill_cfg or resolve_wordfill_config(config, resolved_paths)
         self.sessions: Dict[str, Dict[str, Any]] = {}
+        self._session_revisions: Dict[str, int] = {}
+        self._session_last_used: Dict[str, float] = {}
+        self._active_session_ops: Dict[str, int] = {}
+        self._session_io_gates: Dict[str, List[Any]] = {}
+        self._session_cache_max = _positive_int_config(
+            config, "server", "session_cache_max", _DEFAULT_SESSION_CACHE_MAX
+        )
+        self._session_cache_idle_ttl = _positive_float_config(
+            config, "server", "session_cache_idle_ttl_seconds", _DEFAULT_SESSION_CACHE_IDLE_TTL_SECONDS
+        )
         self._lock = threading.Lock()
         self.enrichment_queue = EnrichmentQueue(config, resolved_paths)
         try:
             register_failover_callback(self._on_global_failover)
         except Exception:
             pass
+
+    def _bump_session_revision_locked(self, session_zid: str, now: Optional[float] = None) -> int:
+        rev = self._session_revisions.get(session_zid, 0) + 1
+        self._session_revisions[session_zid] = rev
+        if session_zid in self.sessions:
+            self._session_last_used[session_zid] = time.monotonic() if now is None else float(now)
+        return rev
+
+    def _evict_session_locked(self, session_zid: str) -> None:
+        self.sessions.pop(session_zid, None)
+        self._session_last_used.pop(session_zid, None)
+        self._session_revisions[session_zid] = self._session_revisions.get(session_zid, 0) + 1
+
+    def evict_session_cache(self, session_zid: str) -> None:
+        with self._lock:
+            self._evict_session_locked(session_zid)
+
+    def invalidate_deleted_sessions(self, deleted_zids: List[str]) -> None:
+        clean_zids = [str(z) for z in (deleted_zids or []) if str(z).strip()]
+        if not clean_zids:
+            return
+        with self.enrichment_queue._lock:
+            for z in clean_zids:
+                self.enrichment_queue._progressive_generations[z] = (
+                    self.enrichment_queue._progressive_generations.get(z, 0) + 1
+                )
+            self.enrichment_queue._prune_generations_locked()
+            with self._lock:
+                for z in clean_zids:
+                    self._evict_session_locked(z)
+
+    def _is_session_active_locked(self, session_zid: str, active_progressive: set) -> bool:
+        if session_zid in active_progressive:
+            return True
+        if self._active_session_ops.get(session_zid, 0) > 0 or session_zid in self._session_io_gates:
+            return True
+        return EventDispatcher.get_instance().has_subscribers(session_zid)
+
+    def prune_idle_caches(self, now: Optional[float] = None) -> None:
+        stamp = time.monotonic() if now is None else float(now)
+        self.enrichment_queue.prune_idle_caches(now=stamp)
+        with self.enrichment_queue._lock:
+            active_prog = set(self.enrichment_queue._active_progressive_sessions.keys())
+            with self._lock:
+                self._prune_idle_sessions_locked(active_prog, stamp)
+
+    def _prune_idle_sessions_locked(self, active_progressive: set, now: float) -> None:
+        idle_entries = []
+        for zid in list(self.sessions):
+            if self._is_session_active_locked(zid, active_progressive):
+                continue
+            last_used = self._session_last_used.get(zid, now)
+            if (now - last_used) > self._session_cache_idle_ttl:
+                self._evict_session_locked(zid)
+            else:
+                idle_entries.append((last_used, zid))
+        excess = len(self.sessions) - self._session_cache_max
+        if excess <= 0 or not idle_entries:
+            return
+        idle_entries.sort()
+        for _, zid in idle_entries[:excess]:
+            self._evict_session_locked(zid)
+
+    @contextmanager
+    def _session_io_gate(self, session_zid: str):
+        with self._lock:
+            entry = self._session_io_gates.get(session_zid)
+            if entry is None:
+                entry = [threading.Lock(), 0]
+                self._session_io_gates[session_zid] = entry
+            entry[1] += 1
+            gate_lock = entry[0]
+        gate_lock.acquire()
+        try:
+            yield
+        finally:
+            gate_lock.release()
+            with self._lock:
+                cur = self._session_io_gates.get(session_zid)
+                if cur is not None and cur[0] is gate_lock:
+                    cur[1] -= 1
+                    if cur[1] <= 0:
+                        del self._session_io_gates[session_zid]
+
+    @contextmanager
+    def _active_session_op(self, session_zid: str):
+        with self._lock:
+            self._active_session_ops[session_zid] = self._active_session_ops.get(session_zid, 0) + 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                rem = self._active_session_ops.get(session_zid, 1) - 1
+                if rem <= 0:
+                    self._active_session_ops.pop(session_zid, None)
+                else:
+                    self._active_session_ops[session_zid] = rem
 
     def _on_global_failover(self, task: str, from_p: str, to_p: str, zid: Optional[str] = None):
         if zid:
@@ -2895,6 +3321,8 @@ class SessionArbiter:
                 "lock": threading.Lock(),
                 "created_at": time.time(),
             }
+            self._bump_session_revision_locked(session_zid)
+        self.prune_idle_caches()
 
         res["active_text_provider"] = active_text_p
         res["active_lemma_provider"] = active_lemma_p
@@ -2926,6 +3354,66 @@ class SessionArbiter:
 
     start_session = create_session
 
+    def _capture_save_pre_state(self, session_zid: str):
+        with self.enrichment_queue._lock:
+            pre_gen = self.enrichment_queue._progressive_generations.get(session_zid, 0)
+            with self._lock:
+                session = self.sessions.get(session_zid)
+                pre_id = id(session) if session is not None else None
+                pre_rev = self._session_revisions.get(session_zid, 0)
+                memo_lang = session.get("language") if session else None
+                memo_path = session.get("tsv_path") if session else None
+        return pre_gen, pre_id, pre_rev, memo_lang, memo_path
+
+    def _resolve_save_snapshot_rows(self, adapter, session_zid, res, committed_snapshot, memo_path):
+        if committed_snapshot.get("headers") is not None and committed_snapshot.get("data_rows") is not None:
+            return committed_snapshot["headers"], committed_snapshot["data_rows"]
+        stored_path = memo_path or res.get("tsv_path")
+        if adapter.backend_name == "sqlite" or (stored_path and Path(stored_path).is_file()):
+            _, headers, rows = adapter.load_tsv_rows(session_zid if adapter.backend_name == "sqlite" else stored_path)
+            return headers, rows
+        return None, None
+
+    def _apply_save_cache_if_current(self, session_zid, pre_gen, pre_id, pre_rev, fingerprint, headers, rows) -> Optional[int]:
+        with self.enrichment_queue._lock:
+            if self.enrichment_queue._progressive_generations.get(session_zid, 0) != pre_gen:
+                return None
+            with self._lock:
+                current = self.sessions.get(session_zid)
+                if current is None or id(current) != pre_id:
+                    return None
+                cur_rev = self._session_revisions.get(session_zid, 0)
+                if cur_rev != pre_rev:
+                    return cur_rev
+                current["fingerprint"] = fingerprint
+                if headers is not None and rows is not None:
+                    current["headers"] = headers
+                    current["data_rows"] = rows
+                self._bump_session_revision_locked(session_zid)
+                return None
+
+    def _reconcile_raced_sqlite_cache(self, adapter, session_zid, pre_gen, pre_id, observed_rev) -> None:
+        try:
+            restored = adapter.restore_session(session_zid)
+        except StructuredError as exc:
+            if exc.error_code == ErrorCode.NOT_FOUND:
+                self.evict_session_cache(session_zid)
+            return
+        headers = list(restored.get("headers") or [])
+        rows = [list(r) for r in (restored.get("data_rows") or [])]
+        fp = compute_content_fingerprint(rows)
+        self._apply_save_cache_if_current(session_zid, pre_gen, pre_id, observed_rev, fp, headers, rows)
+
+    def _publish_save_snapshot(self, adapter, session_zid, res, committed_snapshot, pre_gen, pre_id, pre_rev, memo_path) -> None:
+        if pre_id is None:
+            return
+        headers, rows = self._resolve_save_snapshot_rows(adapter, session_zid, res, committed_snapshot, memo_path)
+        raced_rev = self._apply_save_cache_if_current(
+            session_zid, pre_gen, pre_id, pre_rev, res["fingerprint"], headers, rows,
+        )
+        if raced_rev is not None and adapter.backend_name == "sqlite":
+            self._reconcile_raced_sqlite_cache(adapter, session_zid, pre_gen, pre_id, raced_rev)
+
     def save_session(
         self,
         session_zid: str,
@@ -2935,36 +3423,31 @@ class SessionArbiter:
         zid: Optional[str] = None
     ) -> Dict[str, Any]:
         req_zid = zid or generate_unique_zid()
-
-        with self._lock:
-            session = self.sessions.get(session_zid)
-
         adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
-        sess_lock = session["lock"] if session else self._lock
-        committed_snapshot: Dict[str, Any] = {}
-        with sess_lock:
-            res = core_edit_save(
+        is_sqlite = (getattr(adapter, 'backend_name', '') == 'sqlite')
+
+        with self._active_session_op(session_zid):
+            pre_gen, pre_id, pre_rev, memo_lang, memo_path = self._capture_save_pre_state(session_zid)
+            committed_snapshot: Dict[str, Any] = {}
+            save_kwargs = dict(
                 tsv_path_or_session=session_zid,
                 deltas=deltas,
                 config=self.config,
                 resolved_paths=self.resolved_paths,
                 fingerprint=fingerprint,
                 zid=req_zid,
-                language=language or (session.get("language") if session else None),
-                snapshot_out=committed_snapshot if (session and adapter.backend_name == 'sqlite') else None,
+                language=language or memo_lang,
+                snapshot_out=committed_snapshot if (pre_id is not None and is_sqlite) else None,
             )
+            if is_sqlite:
+                res = core_edit_save(**save_kwargs)
+            else:
+                with self._session_io_gate(session_zid):
+                    res = core_edit_save(**save_kwargs)
 
-            if session:
-                session["fingerprint"] = res["fingerprint"]
-                if committed_snapshot.get("headers") is not None and committed_snapshot.get("data_rows") is not None:
-                    session["headers"] = committed_snapshot["headers"]
-                    session["data_rows"] = committed_snapshot["data_rows"]
-                else:
-                    stored_path = session.get('tsv_path') or res.get('tsv_path')
-                    if adapter.backend_name == 'sqlite' or (stored_path and Path(stored_path).is_file()):
-                        _, current_headers, current_rows = adapter.load_tsv_rows(session_zid if adapter.backend_name == 'sqlite' else stored_path)
-                        session['headers'] = current_headers
-                        session['data_rows'] = current_rows
+            self._publish_save_snapshot(
+                adapter, session_zid, res, committed_snapshot, pre_gen, pre_id, pre_rev, memo_path,
+            )
 
         raw_selection = res.get("shared_selection")
         selection = dict(raw_selection) if isinstance(raw_selection, dict) else None
@@ -3070,6 +3553,7 @@ class SessionArbiter:
             session['sentence_translation'] = raw
             session['active_provider'] = result['active_text_provider']
             session.pop('sentences', None)
+            self._bump_session_revision_locked(session_zid)
 
     @staticmethod
     def _read_retext_sentences(adapter, session_zid):
@@ -3260,6 +3744,7 @@ class SessionArbiter:
                         self.sessions[sib_zid]["headers"] = headers
                         self.sessions[sib_zid]["fingerprint"] = new_fp
                         self.sessions[sib_zid]["row_provenances"] = sib_row_provs
+                        self._bump_session_revision_locked(sib_zid)
 
                 structured_rows = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=sib_row_provs)
                 self.emit_event(sib_zid, {
@@ -3374,6 +3859,7 @@ class SessionArbiter:
             self.sessions[session_zid]["fingerprint"] = new_fp
             self.sessions[session_zid]["row_provenances"] = existing_row_provs
             self.sessions[session_zid]['headers'] = headers
+            self._bump_session_revision_locked(session_zid)
 
     @operation_preferences
     def reword_session(
@@ -3816,6 +4302,7 @@ class SessionArbiter:
                         self.sessions[sib_zid]["data_rows"] = data_rows
                         self.sessions[sib_zid]["fingerprint"] = new_fp
                         self.sessions[sib_zid]['row_provenances'] = row_provenances
+                        self._bump_session_revision_locked(sib_zid)
 
                 sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                 sentence_field = role_fields.get('sentence_index', 'SentenceSourceIndex')
@@ -4102,6 +4589,7 @@ class SessionArbiter:
                     if "row_provenances" not in self.sessions[session_zid]:
                         self.sessions[session_zid]["row_provenances"] = {}
                     self.sessions[session_zid]["row_provenances"].update(retried_row_provenances)
+                self._bump_session_revision_locked(session_zid)
 
         with self._lock:
             is_active_session = (session_zid in self.sessions)
@@ -5447,8 +5935,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                             lang_res = verify_language(text, language, operation_configuration(self.server.config), bypass=False)
                             if not lang_res.is_match:
                                 if lang_res.action in ("block", "prompt"):
-                                    with _DRAFT_SESSIONS_LOCK:
-                                        _DRAFT_SESSIONS[active_zid] = {
+                                    _store_draft_session(
+                                        active_zid,
+                                        {
                                             "text": text,
                                             "language": language,
                                             "text_mode": text_mode,
@@ -5464,8 +5953,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                                                 "action": lang_res.action,
                                                 "text": text,
                                                 "session_zid": active_zid,
-                                            }
-                                        }
+                                            },
+                                        },
+                                        config=operation_configuration(self.server.config),
+                                    )
                                     raise StructuredError(
                                         ErrorCode.LANGUAGE_MISMATCH,
                                         lang_res.message,
@@ -5510,8 +6001,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     lang_res = verify_language(text, language, operation_configuration(self.server.config), bypass=False)
                     if not lang_res.is_match:
                         if lang_res.action in ("block", "prompt"):
-                            with _DRAFT_SESSIONS_LOCK:
-                                _DRAFT_SESSIONS[active_zid] = {
+                            _store_draft_session(
+                                active_zid,
+                                {
                                     "text": text,
                                     "language": language,
                                     "text_mode": text_mode,
@@ -5527,8 +6019,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                                         "action": lang_res.action,
                                         "text": text,
                                         "session_zid": active_zid,
-                                    }
-                                }
+                                    },
+                                },
+                                config=operation_configuration(self.server.config),
+                            )
                             raise StructuredError(
                                 ErrorCode.LANGUAGE_MISMATCH,
                                 lang_res.message,
@@ -6203,10 +6697,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if not action or action not in ('process', 'switch', 'keep', 'cancel'):
                 raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Invalid or missing required payload field 'action': '{action}'. Must be 'process', 'switch', 'keep', or 'cancel'")
 
-            with _DRAFT_SESSIONS_LOCK:
-                draft = _DRAFT_SESSIONS.pop(session_zid, None)
-
             if action == 'cancel':
+                _cancel_draft_session(session_zid)
                 self._send_json(200, {
                     "ok": True,
                     "action": "cancel",
@@ -6214,71 +6706,73 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 })
                 return
 
+            draft, claim_token, committed_lang, draft_busy = _claim_draft_session(
+                session_zid, config=operation_configuration(self.server.config)
+            )
+            if draft_busy:
+                raise StructuredError(ErrorCode.ROW_BUSY, f"Draft session '{session_zid}' is currently being confirmed")
             if not draft:
                 raise StructuredError(ErrorCode.NOT_FOUND, f"Draft session '{session_zid}' not found or already confirmed")
 
-            if action == 'process':
-                raw_lang = body.get('chosen_source_lang') or body.get('selected_language') or body.get('target_language') or draft.get("language") or "und"
-                if not isinstance(raw_lang, str):
-                    with _DRAFT_SESSIONS_LOCK:
-                        _DRAFT_SESSIONS[session_zid] = draft
-                    raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Invalid concrete study language')
-                chosen_source_lang = raw_lang.strip().lower() if raw_lang else "und"
-            elif action == 'switch':
-                raw_detected = draft.get("mismatch_info", {}).get("detected_language") or draft.get("language")
-                chosen_source_lang = raw_detected.strip().lower() if raw_detected else "en"
-            elif action == 'keep':
-                raw_exp = draft.get("language") or "en"
-                chosen_source_lang = raw_exp.strip().lower() if raw_exp else "en"
-            else:
-                raw_exp = draft.get("language") or "en"
-                chosen_source_lang = raw_exp.strip().lower() if raw_exp else "en"
+            try:
+                if action == 'process':
+                    raw_lang = body.get('chosen_source_lang') or body.get('selected_language') or body.get('target_language') or draft.get("language") or "und"
+                    if not isinstance(raw_lang, str):
+                        raise StructuredError(ErrorCode.INVALID_PAYLOAD, 'Invalid concrete study language')
+                    chosen_source_lang = raw_lang.strip().lower() if raw_lang else "und"
+                elif action == 'switch':
+                    raw_detected = draft.get("mismatch_info", {}).get("detected_language") or draft.get("language")
+                    chosen_source_lang = raw_detected.strip().lower() if raw_detected else "en"
+                elif action == 'keep':
+                    raw_exp = draft.get("language") or "en"
+                    chosen_source_lang = raw_exp.strip().lower() if raw_exp else "en"
+                else:
+                    raw_exp = draft.get("language") or "en"
+                    chosen_source_lang = raw_exp.strip().lower() if raw_exp else "en"
 
-            # Commit concrete language before launching a tray or session effect.
-            if chosen_source_lang and chosen_source_lang != 'und':
-                try:
-                    current = preference_store(self.server.config, self.server.resolved_paths).get('default_language')
-                    if chosen_source_lang != current:
-                        lang_res = set_language(self.server, chosen_source_lang)
-                        _sync_request_language(operation_configuration(self.server.config), self.server.config, lang_res)
-                        spawn_ahk(['--set-language', chosen_source_lang], base_dir=self.server.resolved_paths.get('base_dir'))
-                except ValueError as error:
-                    with _DRAFT_SESSIONS_LOCK:
-                        _DRAFT_SESSIONS[session_zid] = draft
-                    raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(error)) from error
-                except (sqlite3.Error, QueryExecutionError) as error:
-                    with _DRAFT_SESSIONS_LOCK:
-                        _DRAFT_SESSIONS[session_zid] = draft
-                    raise StructuredError(ErrorCode.CONFIGURATION_ERROR, 'SQLite state is unavailable') from error
-                except Exception:
-                    with _DRAFT_SESSIONS_LOCK:
-                        _DRAFT_SESSIONS[session_zid] = draft
-                    raise
+                # Commit concrete language once before launching a tray or session effect.
+                if chosen_source_lang and chosen_source_lang != 'und' and committed_lang != chosen_source_lang:
+                    try:
+                        current = preference_store(self.server.config, self.server.resolved_paths).get('default_language')
+                        if chosen_source_lang != current:
+                            lang_res = set_language(self.server, chosen_source_lang)
+                            _sync_request_language(operation_configuration(self.server.config), self.server.config, lang_res)
+                            spawn_ahk(['--set-language', chosen_source_lang], base_dir=self.server.resolved_paths.get('base_dir'))
+                        _mark_draft_language_committed(session_zid, claim_token, chosen_source_lang)
+                    except ValueError as error:
+                        raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(error)) from error
+                    except (sqlite3.Error, QueryExecutionError) as error:
+                        raise StructuredError(ErrorCode.CONFIGURATION_ERROR, 'SQLite state is unavailable') from error
 
-            raw_tsv = draft.get("tsv_path")
-            if raw_tsv and chosen_source_lang != draft.get("language"):
-                tsv_path_arg = None
-            else:
-                tsv_path_arg = Path(raw_tsv) if raw_tsv else None
+                raw_tsv = draft.get("tsv_path")
+                if raw_tsv and chosen_source_lang != draft.get("language"):
+                    tsv_path_arg = None
+                else:
+                    tsv_path_arg = Path(raw_tsv) if raw_tsv else None
 
-            # Execute run_render_flow
-            api_token = getattr(self.server, 'api_key', '')
-            render_out = render_flow_fn(
-                text=draft.get("text", ""),
-                language=chosen_source_lang,
-                zid=session_zid,
-                text_mode=draft.get("text_mode", "single"),
-                config=operation_configuration(self.server.config),
-                resolved_paths=self.server.resolved_paths,
-                zoom_level=str(draft.get("zoom", "100")),
-                theme=draft.get("theme", "dark"),
-                tsv_path=tsv_path_arg,
-                seq_num=int(draft["seq_num"]) if draft.get("seq_num") else None,
-                spawn_children=False,
-                return_children=True,
-                api_token=api_token,
-                server_enabled=True,
-            )
+                # Execute run_render_flow
+                api_token = getattr(self.server, 'api_key', '')
+                render_out = render_flow_fn(
+                    text=draft.get("text", ""),
+                    language=chosen_source_lang,
+                    zid=session_zid,
+                    text_mode=draft.get("text_mode", "single"),
+                    config=operation_configuration(self.server.config),
+                    resolved_paths=self.server.resolved_paths,
+                    zoom_level=str(draft.get("zoom", "100")),
+                    theme=draft.get("theme", "dark"),
+                    tsv_path=tsv_path_arg,
+                    seq_num=int(draft["seq_num"]) if draft.get("seq_num") else None,
+                    spawn_children=False,
+                    return_children=True,
+                    api_token=api_token,
+                    server_enabled=True,
+                )
+            except BaseException:
+                _release_draft_claim(session_zid, claim_token, draft)
+                raise
+
+            _complete_draft_session(session_zid, claim_token, draft)
             if isinstance(render_out, tuple):
                 html_result, child_args = render_out
             else:
@@ -6728,6 +7222,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             from kardenwort_db import KardenwortDB
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
             ok = db.soft_delete_session(str(session_zid))
+            if ok and hasattr(self.server, 'arbiter') and self.server.arbiter:
+                self.server.arbiter.invalidate_deleted_sessions([str(session_zid)])
             self._send_json(200, {"ok": ok, "session_zid": session_zid})
             return
 
@@ -6745,7 +7241,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
 
             if mode == 'all_matching' or (not session_zids and body.get('all_matching')):
-                deleted_count = db.soft_delete_sessions_batch(
+                deleted_zids = db.soft_delete_sessions_batch_returning(
                     session_zids=None,
                     query=filter_params.get('query'),
                     language=filter_params.get('language'),
@@ -6757,9 +7253,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 if not isinstance(session_zids, list) or len(session_zids) == 0:
                     raise StructuredError(ErrorCode.MISSING_FIELD, "Missing or empty 'session_zids' in payload")
                 clean_list = [str(z) for z in session_zids if str(z) not in excluded_zids]
-                deleted_count = db.soft_delete_sessions_batch(
+                deleted_zids = db.soft_delete_sessions_batch_returning(
                     session_zids=clean_list
                 )
+            if deleted_zids and hasattr(self.server, 'arbiter') and self.server.arbiter:
+                self.server.arbiter.invalidate_deleted_sessions(deleted_zids)
+            deleted_count = len(deleted_zids)
             self._send_json(200, {"ok": True, "deleted_count": deleted_count})
             return
 
@@ -6896,6 +7395,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if 'zid' in body and body['zid']:
                 session_zid = str(body['zid']).strip()
                 ok = db.restore_session(session_zid)
+                if ok and hasattr(self.server, 'arbiter') and self.server.arbiter:
+                    self.server.arbiter.evict_session_cache(session_zid)
                 self._send_json(200, {"ok": ok, "restored_type": "session", "zid": session_zid})
                 return
             elif 'project_id' in body and body['project_id'] is not None:
@@ -6920,7 +7421,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             from kardenwort_db import KardenwortDB
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
-            purged_sessions = db.purge_deleted_sessions(older_than_days=older_than_days)
+            purged_zids = db.purge_deleted_sessions_returning(older_than_days=older_than_days)
+            if purged_zids and hasattr(self.server, 'arbiter') and self.server.arbiter:
+                self.server.arbiter.invalidate_deleted_sessions(purged_zids)
+            purged_sessions = len(purged_zids)
             purged_projects = db.purge_deleted_projects(older_than_days=older_than_days)
             self._send_json(200, {
                 "ok": True,

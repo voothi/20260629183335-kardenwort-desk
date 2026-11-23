@@ -120,8 +120,9 @@ IDENTITY_COLUMNS = frozenset({
 
 
 def _identity_columns(roles):
-    sentence_col = (roles or {}).get('sentence_index')
-    return IDENTITY_COLUMNS | ({sentence_col} if sentence_col else set())
+    role_map = roles or {}
+    extra = {role_map[name] for name in ('sentence_index', 'selected') if role_map.get(name)}
+    return IDENTITY_COLUMNS | extra
 
 
 def _row_dict(headers, row, row_id):
@@ -139,6 +140,10 @@ def _canonical_row_key(row, identity_cols):
     return tuple((name, str(row[name])) for name in sorted(row) if name not in identity_cols)
 
 
+def _semantic_role_key(roles):
+    return tuple(sorted((str(k), str(v)) for k, v in (roles or {}).items() if str(k) != 'selected'))
+
+
 def progressive_request_key(batch, prompt, source_language, target_language, config, roles=None):
     """Build an immutable equivalence key covering all meaning-affecting request inputs."""
     url = config.get('services', 'intellifiller_server_url', fallback='').strip()
@@ -151,7 +156,6 @@ def progressive_request_key(batch, prompt, source_language, target_language, con
         opts['prompt_template'],
         opts['temperature'],
     )
-    role_key = tuple(sorted((str(k), str(v)) for k, v in (roles or {}).items()))
     identity_cols = _identity_columns(roles)
     rows_key = tuple(_canonical_row_key(row, identity_cols) for row in batch)
     return (
@@ -159,7 +163,7 @@ def progressive_request_key(batch, prompt, source_language, target_language, con
         str(prompt or '').strip(),
         str(source_language or '').strip().lower(),
         str(target_language or '').strip().lower(),
-        role_key,
+        _semantic_role_key(roles),
         rows_key,
     )
 

@@ -132,6 +132,14 @@ class KardenwortConnection(sqlite3.Connection):
         self.read_only: bool = False
         self._in_context_block: bool = False
 
+    def _close_preserving_primary(self, has_primary: bool) -> None:
+        try:
+            self.close()
+        except Exception as close_err:
+            if not has_primary:
+                raise
+            logger.warning("SQLite connection close failed while preserving primary error: %s", close_err)
+
     def __enter__(self) -> "KardenwortConnection":
         self._in_context_block = True
         if not self.in_transaction:
@@ -140,33 +148,34 @@ class KardenwortConnection(sqlite3.Connection):
                 self.execute(sql)
             except Exception:
                 self._in_context_block = False
-                self.close()
+                self._close_preserving_primary(has_primary=True)
                 raise
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        primary_failed = exc_type is not None
         try:
             if exc_type is not None:
                 try:
                     if self.in_transaction:
                         self.rollback()
-                except Exception:
-                    pass
+                except Exception as rb_err:
+                    logger.warning("SQLite rollback failed while preserving primary error: %s", rb_err)
                 return False
-            else:
+            try:
+                if self.in_transaction:
+                    self.commit()
+            except Exception:
+                primary_failed = True
                 try:
-                    if self.in_transaction:
-                        self.commit()
-                except Exception:
-                    try:
-                        self.rollback()
-                    except Exception:
-                        pass
-                    raise
-                return False
+                    self.rollback()
+                except Exception as rb_err:
+                    logger.warning("SQLite rollback after failed commit failed: %s", rb_err)
+                raise
+            return False
         finally:
             self._in_context_block = False
-            self.close()
+            self._close_preserving_primary(has_primary=primary_failed)
 
 
 def sanitize_extra_fields(data: Any) -> Dict[str, Any]:
@@ -1203,7 +1212,7 @@ class KardenwortDB:
             self._cleanup_session_runtime_state(conn, targets)
             return cursor.rowcount > 0
 
-    def soft_delete_sessions_batch(
+    def soft_delete_sessions_batch_returning(
         self,
         session_zids: Optional[List[str]] = None,
         query: Optional[str] = None,
@@ -1212,10 +1221,10 @@ class KardenwortDB:
         project_id: Optional[int] = None,
         excluded_zids: Optional[List[str]] = None,
         zid: Optional[str] = None,
-    ) -> int:
+    ) -> List[str]:
         """
-        Soft-deletes multiple sessions in a single batch operation by setting deleted_at.
-        Returns the number of affected sessions.
+        Soft-deletes multiple sessions in a single transaction and returns the exact
+        list of session ZIDs transitioned from active to soft-deleted.
         """
         now_iso = datetime.now(timezone.utc).isoformat()
         conditions: List[str] = ["deleted_at IS NULL"]
@@ -1223,10 +1232,10 @@ class KardenwortDB:
 
         if session_zids is not None:
             if not session_zids:
-                return 0
+                return []
             clean_zids = [str(z) for z in session_zids if str(z).strip()]
             if not clean_zids:
-                return 0
+                return []
             placeholders = ",".join(["?"] * len(clean_zids))
             conditions.append(f"zid IN ({placeholders})")
             params.extend(clean_zids)
@@ -1274,9 +1283,35 @@ class KardenwortDB:
         with self.get_connection(zid=zid) as conn:
             cursor = conn.cursor()
             targets = [row[0] for row in conn.execute(f'SELECT zid FROM sessions {where_clause}', params[1:]).fetchall()]
+            if not targets:
+                return []
             cursor.execute(sql, params)
             self._cleanup_session_runtime_state(conn, targets)
-            return cursor.rowcount
+            return targets
+
+    def soft_delete_sessions_batch(
+        self,
+        session_zids: Optional[List[str]] = None,
+        query: Optional[str] = None,
+        language: Optional[str] = None,
+        assigned: Optional[Union[bool, str]] = None,
+        project_id: Optional[int] = None,
+        excluded_zids: Optional[List[str]] = None,
+        zid: Optional[str] = None,
+    ) -> int:
+        """
+        Soft-deletes multiple sessions in a single batch operation by setting deleted_at.
+        Returns the number of affected sessions.
+        """
+        return len(self.soft_delete_sessions_batch_returning(
+            session_zids=session_zids,
+            query=query,
+            language=language,
+            assigned=assigned,
+            project_id=project_id,
+            excluded_zids=excluded_zids,
+            zid=zid,
+        ))
 
     def restore_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
         """
@@ -1307,11 +1342,11 @@ class KardenwortDB:
             cursor.execute(sql, params)
             return [dict(r) for r in cursor.fetchall()]
 
-    def purge_deleted_sessions(
+    def purge_deleted_sessions_returning(
         self, older_than_days: Optional[float] = None, zid: Optional[str] = None
-    ) -> int:
+    ) -> List[str]:
         """
-        Permanently hard-deletes soft-deleted sessions (and cascades to sentences/words).
+        Permanently hard-deletes soft-deleted sessions and returns the exact purged ZIDs.
         """
         where_clause = "WHERE deleted_at IS NOT NULL"
         params: List[Any] = []
@@ -1326,7 +1361,15 @@ class KardenwortDB:
             cursor.execute(sql, params)
             self._cleanup_session_runtime_state(conn, targets)
             self._purge_orphan_runtime_state_in_conn(conn)
-            return cursor.rowcount
+            return targets
+
+    def purge_deleted_sessions(
+        self, older_than_days: Optional[float] = None, zid: Optional[str] = None
+    ) -> int:
+        """
+        Permanently hard-deletes soft-deleted sessions (and cascades to sentences/words).
+        """
+        return len(self.purge_deleted_sessions_returning(older_than_days=older_than_days, zid=zid))
 
     def delete_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
         """
