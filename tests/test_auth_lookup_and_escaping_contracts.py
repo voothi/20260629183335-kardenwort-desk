@@ -317,7 +317,12 @@ def test_1_2_lookup_empty_token_config_parity_script_order_and_no_duplicate_titl
         cfg_check = page.evaluate("""() => ({
             hasConfig: Boolean(window.__CONFIG__ && typeof window.__CONFIG__ === 'object'),
             hasGrammar: Boolean(window.__CONFIG__ && window.__CONFIG__.grammar),
-            hasPosOrder: Array.isArray(window.__CONFIG__ && window.__CONFIG__.pos_display_order),
+            hasPosOrder: Boolean(
+                window.__CONFIG__
+                && window.__CONFIG__.pos_display_order
+                && typeof window.__CONFIG__.pos_display_order === 'object'
+                && window.__CONFIG__.pos_display_order['art.'] === 0
+            ),
             hasServerApiKey: Boolean(window.__CONFIG__ && 'server_api_key' in window.__CONFIG__),
             lemmaCol: window.__CONFIG__ && window.__CONFIG__.lemma_col_name,
         })""")
@@ -346,8 +351,10 @@ def test_1_2_lookup_empty_token_config_parity_script_order_and_no_duplicate_titl
         api_token=admitted,
         server_enabled=False,
     )
-    assert (admitted in html_disabled) is False
-    assert (leaked_key in html_disabled) is False
+    has_admitted_disabled = admitted in html_disabled
+    has_leaked_disabled = leaked_key in html_disabled
+    assert has_admitted_disabled is False
+    assert has_leaked_disabled is False
     dup_titles = re.findall(r'<button\b[^>]*\btitle="[^"]*"[^>]*\btitle="[^"]*"[^>]*>', html_disabled)
     assert dup_titles == [], f"Found duplicate title attributes on disabled lookup buttons: {dup_titles}"
 

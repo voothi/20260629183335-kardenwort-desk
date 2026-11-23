@@ -11907,6 +11907,13 @@
         window.saveClientView = stateClient.save;
         if (window.WorkspacePresentation) window.WorkspacePresentation.bind(stateClient);
         window.__stateReady = stateClient.start();
+        if (window.__CONFIG__ && window.__CONFIG__.read_only_preview) {
+            document.documentElement.setAttribute('data-workspace-phase', 'ready');
+            ['kw-btn-save', 'kw-btn-update', 'kw-btn-retext', 'kw-btn-reword', 'kw-btn-export', 'kw-btn-delete'].forEach(function(btnId) {
+                var btn = document.getElementById(btnId);
+                if (btn) btn.disabled = true;
+            });
+        }
         probeInitialWorkspace();
         resumeMountedStream();
     }

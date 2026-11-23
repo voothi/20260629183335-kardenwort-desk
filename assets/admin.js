@@ -5,13 +5,19 @@
 
 let initialToken = '';
 try {
-    if (typeof localStorage !== 'undefined') {
-        initialToken = localStorage.getItem('kardenwort_api_token') || '';
+    if (typeof document !== 'undefined') {
+        const bootEl = document.getElementById('kardenwort-admin-bootstrap');
+        if (bootEl && bootEl.textContent) {
+            const parsedBoot = JSON.parse(bootEl.textContent);
+            if (parsedBoot && typeof parsedBoot.api_token === 'string' && parsedBoot.api_token) {
+                initialToken = parsedBoot.api_token;
+            }
+        }
     }
 } catch (e) {}
 try {
-    if (!initialToken && typeof window !== 'undefined' && window.location && window.location.search) {
-        initialToken = new URLSearchParams(window.location.search).get('token') || '';
+    if (!initialToken && typeof localStorage !== 'undefined') {
+        initialToken = localStorage.getItem('kardenwort_api_token') || '';
     }
 } catch (e) {}
 
@@ -43,22 +49,16 @@ if (typeof window !== 'undefined') {
     window.state = state;
 }
 
-// Helper: HTTP Request with API Token
+// Helper: HTTP Request with API Token (header-only; never append URL tokens)
 async function apiFetch(endpoint, options = {}) {
-    const headers = options.headers || {};
+    const headers = Object.assign({}, options.headers || {});
     if (state.token) {
         headers['X-API-Token'] = state.token;
     }
     headers['Content-Type'] = headers['Content-Type'] || 'application/json';
 
-    let url = endpoint;
-    if (state.token && !url.includes('token=')) {
-        const separator = url.includes('?') ? '&' : '?';
-        url += `${separator}token=${encodeURIComponent(state.token)}`;
-    }
-
     try {
-        const response = await fetch(url, { ...options, headers });
+        const response = await fetch(endpoint, { ...options, headers });
         const data = await response.json();
         if (!response.ok) {
             throw new Error(data.message || data.error || `HTTP ${response.status}`);
@@ -1309,9 +1309,47 @@ function openSessionInDict(zid) {
     window.open(url, '_blank');
 }
 
-function openProjectInDesk(projectId) {
-    const url = `/?project_id=${encodeURIComponent(projectId)}&theme=dark`;
-    window.open(url, '_blank');
+function _generateMaterializeZid() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return (
+        String(d.getUTCFullYear()) +
+        pad(d.getUTCMonth() + 1) +
+        pad(d.getUTCDate()) +
+        pad(d.getUTCHours()) +
+        pad(d.getUTCMinutes()) +
+        pad(d.getUTCSeconds())
+    );
+}
+
+async function openProjectInDesk(projectId) {
+    // Obtain popup synchronously within the original user gesture to prevent popup blocking
+    const popup = window.open('about:blank', '_blank');
+    const cmdZid = _generateMaterializeZid();
+    try {
+        const res = await apiFetch('/api/v1/admin/projects/synthesize', {
+            method: 'POST',
+            body: JSON.stringify({
+                project_id: projectId,
+                materialize: true,
+                session_zid: cmdZid,
+            }),
+        });
+        const persistedZid = res && res.session_zid ? String(res.session_zid) : '';
+        if (!persistedZid) {
+            throw new Error('Project materialization did not return a persisted session identity');
+        }
+        const targetUrl = `/?session_zid=${encodeURIComponent(persistedZid)}&theme=dark`;
+        if (popup) {
+            popup.location.href = targetUrl;
+        } else {
+            window.open(targetUrl, '_blank');
+        }
+    } catch (e) {
+        if (popup && typeof popup.close === 'function') {
+            popup.close();
+        }
+    }
 }
 
 function openProjectInDict(projectId) {

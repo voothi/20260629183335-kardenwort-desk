@@ -4927,7 +4927,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         raw_path = getattr(self, 'path', '') or ''
         parsed = urllib.parse.urlparse(raw_path)
         path = parsed.path
-        if path in ('/api/v1/render', '/render', '/verify-language', '/api/v1/lookup', '/lookup', '/session/render'):
+        if path in (
+            '/api/v1/render', '/render', '/verify-language',
+            '/api/v1/lookup', '/lookup', '/session/render',
+            '/session/create', '/admin', '/admin/',
+        ):
             return True
         if path == '/':
             qs = urllib.parse.parse_qs(parsed.query)
@@ -5002,6 +5006,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 self._send_credential_cors_headers(allow_opaque=allow_opaque_cors)
                 self.send_header('Cache-Control', 'no-store')
                 self.send_header('Referrer-Policy', 'no-referrer')
+                if 'Content-Security-Policy' not in (extra_headers or {}):
+                    self.send_header('Content-Security-Policy', "frame-ancestors 'none'")
             else:
                 self._send_cors_headers()
             for hdr_name, hdr_val in (extra_headers or {}).items():
@@ -5090,6 +5096,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
     def _read_bounded_body(self, max_bytes: int) -> bytes:
         content_length = self._parse_bounded_content_length(max_bytes)
+        self._body_consumed = True
         if content_length == 0:
             return b""
         raw_body = self.rfile.read(content_length)
@@ -5241,16 +5248,32 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
         self._send_bytes(200, content, content_type)
 
+    def _drain_small_unread_body(self):
+        if getattr(self, '_body_consumed', False) or self.headers.get_all('Transfer-Encoding'):
+            return
+        raw_cl = self._single_header('Content-Length')
+        if isinstance(raw_cl, str) and raw_cl.isascii() and raw_cl.isdigit():
+            cl_int = int(raw_cl)
+            if 0 < cl_int <= 65536:
+                try:
+                    self.rfile.read(cl_int)
+                except Exception:
+                    pass
+        self._body_consumed = True
+
     def _handle_method(self, method: str):
+        self._body_consumed = False
         try:
             with ExitStack() as stack:
                 self._pref_stack = stack
                 self._pref_entered = False
                 self._dispatch_route(method)
         except StructuredError as se:
+            self._drain_small_unread_body()
             status_code = ERROR_STATUS_MATRIX.get(se.error_code, 500)
             self._send_error_json(status_code, se.error_code, se.message, se.details)
         except Exception as e:
+            self._drain_small_unread_body()
             logger.error(f"Unhandled Controller error on {method} {self.path}: {e}\n{traceback.format_exc()}")
             self._send_error_json(500, ErrorCode.SERVER_ERROR, f"Internal server error: {e}")
         finally:
@@ -5469,7 +5492,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body, require_configured=True)
+            self._require_credential_admission(method, body_data=body, allow_browser_nav=False)
 
             text = body.get('text', '')
             language = body.get('language', '')
@@ -5488,7 +5511,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 zid=body.get('zid'),
                 bypass_lang_check=body.get('bypass_lang_check', False)
             )
-            self._send_json(200, res)
+            self._send_json(200, res, credential_bearing=True)
             return
 
         if path == '/internal/selection':
@@ -6351,7 +6374,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             if project_id:
                 pid_int = _parse_strict_int(project_id, 'project_id', min_value=1, allow_str=True)
-                req_zid = generate_unique_zid()
+                req_zid = f"project_{pid_int}"
                 try:
                     synthesized = synthesize_project_materials(
                         project_id=pid_int,
@@ -6359,9 +6382,17 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         resolved_paths=self.server.resolved_paths,
                         language=language,
                         zid=req_zid,
+                        read_only=True,
+                        enrich_headings=False,
                     )
+                except StructuredError as se:
+                    if se.error_code == ErrorCode.CONFIGURATION_ERROR:
+                        raise
+                    raise StructuredError(ErrorCode.NOT_FOUND, f"Project '{project_id}' materials preview failed: {se}")
+                except sqlite3.Error as db_err:
+                    raise StructuredError(ErrorCode.CONFIGURATION_ERROR, f"SQLite storage unavailable: {db_err}")
                 except Exception as e:
-                    raise StructuredError(ErrorCode.NOT_FOUND, f"Project '{project_id}' materials synthesis failed: {e}")
+                    raise StructuredError(ErrorCode.NOT_FOUND, f"Project '{project_id}' materials preview failed: {e}")
 
                 source_text = synthesized.get("source_text", "")
                 sess_lang = synthesized.get("source_language") or language or "de"
@@ -6378,7 +6409,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         for s in synthesized["sentences"]
                     ])
                 fingerprint = compute_content_fingerprint(data_rows)
-                slug = synthesized.get("slug") or ""
                 req_theme = qs.get('theme', [None])[0]
                 view_mode = qs.get('view', [None])[0]
                 synth_zid = synthesized.get("session_zid") or req_zid
@@ -6393,7 +6423,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     goldendict.setdefault('heading_lemmas', '__default__')
                     goldendict.setdefault('run_intellifiller', False)
                     goldendict['server_enabled'] = True
-                    goldendict['server_api_key'] = admitted_token
+                    goldendict.pop('server_api_key', None)
 
                     html = render_lookup_html(
                         text=source_text,
@@ -6413,26 +6443,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         fingerprint=fingerprint,
                     )
                 else:
-                    adapter = get_storage_adapter(operation_configuration(self.server.config), self.server.resolved_paths)
-                    adapter.save_session(
-                        session_zid=synth_zid,
-                        slug=slug,
-                        source_language=sess_lang,
-                        target_language=target_lang,
-                        text_mode="multi",
-                        source_raw_text=source_text,
-                        headers=headers,
-                        data_rows=data_rows,
-                        sentences=synthesized.get("sentences"),
-                    )
-                    if adapter.backend_name == 'sqlite':
-                        tsv_path = str(synth_zid)
-                    else:
-                        results_dir = Path(self.server.resolved_paths.get('kardenwort_workspace', '.')) / "results"
-                        results_dir.mkdir(parents=True, exist_ok=True)
-                        slug_suffix = f"-{slug}" if slug else ""
-                        tsv_path = results_dir / f"{synth_zid}{slug_suffix}.{sess_lang}.tsv"
-                        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                     html = render_flow_fn(
                         text=source_text,
                         language=sess_lang,
@@ -6441,17 +6451,25 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         config=operation_configuration(self.server.config),
                         resolved_paths=self.server.resolved_paths,
                         theme=req_theme,
-                        tsv_path=tsv_path,
+                        tsv_path=None,
                         api_token=admitted_token,
                         server_enabled=True,
+                        read_only=True,
+                        preloaded_bundle=dict(synthesized, fingerprint=fingerprint),
+                        read_only_preview=True,
+                        preview_project_id=pid_int,
                     )
                 self._send_credential_html(html)
                 return
 
             if session_zid:
-                adapter = get_storage_adapter(operation_configuration(self.server.config), self.server.resolved_paths)
+                adapter = get_storage_adapter(operation_configuration(self.server.config), self.server.resolved_paths, read_only=True)
+                if getattr(adapter, 'backend_name', '') == 'sqlite' and not adapter.db.db_path.exists():
+                    raise StructuredError(ErrorCode.CONFIGURATION_ERROR, f"SQLite storage database is unavailable: {adapter.db.db_path}")
                 try:
                     restored = adapter.restore_session(session_zid)
+                except sqlite3.Error as db_err:
+                    raise StructuredError(ErrorCode.CONFIGURATION_ERROR, f"SQLite storage unavailable: {db_err}")
                 except Exception as e:
                     aliased_zid = _lookup_session_alias(session_zid)
                     if aliased_zid and aliased_zid != session_zid:
@@ -6465,6 +6483,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         location = urllib.parse.urlunsplit(('', '', split_url.path, urllib.parse.urlencode(rewritten), ''))
                         self.send_response(302)
                         self.send_header('Cache-Control', 'no-store')
+                        self.send_header('Content-Security-Policy', "frame-ancestors 'none'")
                         self.send_header('Referrer-Policy', 'no-referrer')
                         self.send_header('Location', location)
                         self.send_header('Content-Length', '0')
@@ -6487,6 +6506,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                             mismatch_info=draft.get("mismatch_info"),
                             api_token=admitted_token,
                             server_enabled=True,
+                            read_only=True,
                         )
                         self._send_credential_html(html)
                         return
@@ -6519,60 +6539,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 mapping = load_anki_mapping(mapping_path) if mapping_path and mapping_path.exists() else None
                 role_fields = get_role_fields(mapping, headers) if mapping else {}
 
-                # Incremental wordfill hydration for missing lemma fields
-                wordfill_cfg = getattr(self.server, 'wordfill', None)
-                if wordfill_cfg is None and operation_configuration(self.server.config) is not None:
-                    wordfill_cfg = resolve_wordfill_config(operation_configuration(self.server.config), self.server.resolved_paths)
-
-                hydrated_any = False
-                if wordfill_cfg and wordfill_cfg.get('enabled', False) and data_rows and headers:
-                    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else (headers.index('WordDestination') if 'WordDestination' in headers else -1)
-                    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else (headers.index('WordSource') if 'WordSource' in headers else -1)
-                    col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else (headers.index('WordSourceIPA') if 'WordSourceIPA' in headers else -1)
-                    col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else (headers.index('WordSourceMorphologyAI') if 'WordSourceMorphologyAI' in headers else -1)
-                    col_lemma_wf = col_lemma
-                    if col_lemma_wf != -1:
-                        seen_lemmas = {}
-                        for i, row in enumerate(data_rows):
-                            if len(row) > col_lemma_wf:
-                                lemma_val = row[col_lemma_wf].strip()
-                                if lemma_val:
-                                    seen_lemmas.setdefault(lemma_val, []).append(i)
-                        for lemma_val, row_indices in seen_lemmas.items():
-                            needs_hydration = False
-                            for idx in row_indices:
-                                row = data_rows[idx]
-                                need_dest = col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip()
-                                need_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
-                                need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
-                                if need_dest or need_ipa or need_morph:
-                                    needs_hydration = True
-                                    break
-                            if needs_hydration:
-                                match = find_wordfill_match(lemma_val, sess_lang, wordfill_cfg)
-                                if match:
-                                    lemma_rows = [data_rows[i] for i in row_indices]
-                                    apply_wordfill_to_rows(lemma_rows, headers, match)
-                                    hydrated_any = True
-
-                if hydrated_any:
-                    try:
-                        adapter.save_session(
-                            session_zid=session_zid,
-                            slug=restored.get("slug") or "",
-                            source_language=sess_lang,
-                            target_language=target_lang,
-                            text_mode=restored.get("text_mode") or "single",
-                            source_raw_text=source_text,
-                            comments=comments,
-                            headers=headers,
-                            data_rows=data_rows,
-                            sentences=restored.get("sentences"),
-                        )
-                        restored = adapter.restore_session(session_zid)
-                    except Exception as save_err:
-                        logger.warning(f"Could not persist hydrated session to storage: {save_err}")
-
                 fingerprint = compute_content_fingerprint(restored.get("data_rows", []))
 
                 if data_rows and headers:
@@ -6597,7 +6563,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     goldendict.setdefault('heading_lemmas', '__default__')
                     goldendict.setdefault('run_intellifiller', False)
                     goldendict['server_enabled'] = True
-                    goldendict['server_api_key'] = admitted_token
+                    goldendict.pop('server_api_key', None)
 
                     html = render_lookup_html(
                         text=source_text,
@@ -6661,6 +6627,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         seq_num=resolved_seq_num,
                         api_token=admitted_token,
                         server_enabled=True,
+                        read_only=True,
+                        fingerprint=fingerprint,
                     )
                 self._send_credential_html(html)
                 return
@@ -6713,7 +6681,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             if project_id:
                 pid_int = _parse_strict_int(project_id, 'project_id', min_value=1, allow_str=True)
-                req_zid = generate_unique_zid()
+                req_zid = f"project_{pid_int}"
                 try:
                     synthesized = synthesize_project_materials(
                         project_id=pid_int,
@@ -6721,7 +6689,15 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         resolved_paths=self.server.resolved_paths,
                         language=language,
                         zid=req_zid,
+                        read_only=True,
+                        enrich_headings=False,
                     )
+                except StructuredError as se:
+                    if se.error_code == ErrorCode.CONFIGURATION_ERROR:
+                        raise
+                    raise StructuredError(ErrorCode.NOT_FOUND, f"Project '{project_id}' materials synthesis failed: {se}")
+                except sqlite3.Error as db_err:
+                    raise StructuredError(ErrorCode.CONFIGURATION_ERROR, f"SQLite storage unavailable: {db_err}")
                 except Exception as e:
                     raise StructuredError(ErrorCode.NOT_FOUND, f"Project '{project_id}' materials synthesis failed: {e}")
 
@@ -6751,7 +6727,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 goldendict.setdefault('heading_lemmas', '__default__')
                 goldendict.setdefault('run_intellifiller', False)
                 goldendict['server_enabled'] = True
-                goldendict['server_api_key'] = admitted_token
+                goldendict.pop('server_api_key', None)
 
                 html = render_lookup_html(
                     text=source_text,
@@ -6783,9 +6759,13 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 return
 
             if session_zid:
-                adapter = get_storage_adapter(operation_configuration(self.server.config), self.server.resolved_paths)
+                adapter = get_storage_adapter(operation_configuration(self.server.config), self.server.resolved_paths, read_only=True)
+                if getattr(adapter, 'backend_name', '') == 'sqlite' and not adapter.db.db_path.exists():
+                    raise StructuredError(ErrorCode.CONFIGURATION_ERROR, f"SQLite storage database is unavailable: {adapter.db.db_path}")
                 try:
                     restored = adapter.restore_session(session_zid)
+                except sqlite3.Error as db_err:
+                    raise StructuredError(ErrorCode.CONFIGURATION_ERROR, f"SQLite storage unavailable: {db_err}")
                 except Exception as e:
                     raise StructuredError(ErrorCode.NOT_FOUND, f"Session '{session_zid}' not found: {e}")
 
@@ -7176,10 +7156,29 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if path in ('/admin', '/admin/'):
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
-            self._authenticate_token(query_params=qs)
+            admitted_token = self._require_credential_admission(
+                method, query_params=qs, allow_browser_nav=True
+            )
             desk_dir = Path(__file__).resolve().parent
-            admin_html = desk_dir / "assets" / "admin.html"
-            self._serve_static_file(admin_html)
+            admin_html_path = desk_dir / "assets" / "admin.html"
+            if not admin_html_path.exists():
+                raise StructuredError(ErrorCode.NOT_FOUND, "Admin panel HTML not found")
+            from kardenwort_desk import serialize_json_island
+            admin_html = admin_html_path.read_text(encoding='utf-8')
+            bootstrap_tag = (
+                '<script id="kardenwort-admin-bootstrap" type="application/json">'
+                + serialize_json_island({"api_token": admitted_token})
+                + '</script>\n    '
+            )
+            if '<script src="/assets/admin.js"></script>' in admin_html:
+                admin_html = admin_html.replace(
+                    '<script src="/assets/admin.js"></script>',
+                    bootstrap_tag + '<script src="/assets/admin.js"></script>',
+                    1,
+                )
+            else:
+                admin_html = admin_html.replace('</body>', bootstrap_tag + '</body>', 1)
+            self._send_credential_html(admin_html)
             return
 
         if path.startswith('/assets/') or path in ('/admin.css', '/admin.js'):
@@ -7437,11 +7436,17 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if path == '/api/v1/admin/projects/synthesize':
             if method not in ('GET', 'POST'):
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            materialize = False
+            enrich_headings = False
+            requested_session_zid = None
             if method == 'POST':
                 body = self._read_json_body()
                 self._authenticate_token(body, require_configured=True)
                 project_id = body.get('project_id')
                 lang = body.get('language')
+                materialize = bool(body.get('materialize', False))
+                enrich_headings = bool(body.get('enrich_headings', False))
+                requested_session_zid = body.get('session_zid') or body.get('zid')
             else:
                 self._authenticate_token(query_params=qs)
                 project_id = qs.get('project_id', [None])[0] or qs.get('project', [None])[0]
@@ -7451,15 +7456,99 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload/parameters")
             pid_int = _parse_strict_int(project_id, 'project_id', min_value=1, allow_str=(method == 'GET'))
 
-            req_zid = generate_server_zid(self.server)
+            cfg = operation_configuration(self.server.config)
+            if not materialize:
+                req_zid = generate_server_zid(self.server)
+                res = synthesize_project_materials(
+                    project_id=pid_int,
+                    config=cfg,
+                    resolved_paths=self.server.resolved_paths,
+                    language=lang,
+                    zid=req_zid,
+                    read_only=True,
+                    enrich_headings=False,
+                )
+                self._send_json(200, res)
+                return
+
+            # Explicit authenticated materialization mode (POST with materialize=true)
+            if requested_session_zid is not None:
+                req_zid_str = str(requested_session_zid).strip()
+                if len(req_zid_str) != 14 or not req_zid_str.isascii() or not req_zid_str.isdigit() or req_zid_str == '0' * 14:
+                    raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Invalid 'session_zid' for project materialization (expected 14-digit ZID)")
+                target_zid = req_zid_str
+            else:
+                target_zid = generate_unique_zid()
+
+            adapter = get_storage_adapter(cfg, self.server.resolved_paths)
+            project_marker = f"(ID: {pid_int})"
+            existing = None
+            try:
+                if getattr(adapter, 'backend_name', '') == 'sqlite':
+                    existing = adapter.db.get_session(target_zid)
+            except Exception:
+                existing = None
+
+            if existing is not None:
+                existing_comments = str(existing.get("comments") or "")
+                existing_slug = str(existing.get("slug") or "")
+                proj_meta = adapter.db.get_project(pid_int)
+                expected_slug = (proj_meta.get("slug") or f"project_{pid_int}") if proj_meta else f"project_{pid_int}"
+                if project_marker in existing_comments or existing_slug == expected_slug:
+                    restored_existing = adapter.restore_session(target_zid)
+                    self._send_json(200, {
+                        "ok": True,
+                        "materialized": True,
+                        "reused": True,
+                        "session_zid": target_zid,
+                        "project_id": pid_int,
+                        "slug": restored_existing.get("slug") or expected_slug,
+                        "source_language": restored_existing.get("source_language") or lang or "de",
+                        "target_language": restored_existing.get("target_language") or "ru",
+                        "fingerprint": compute_content_fingerprint(restored_existing.get("data_rows", [])),
+                    })
+                    return
+                raise StructuredError(
+                    ErrorCode.ROW_STALE,
+                    f"Session ZID '{target_zid}' already belongs to another session",
+                )
+
             res = synthesize_project_materials(
                 project_id=pid_int,
-                config=operation_configuration(self.server.config),
+                config=cfg,
                 resolved_paths=self.server.resolved_paths,
                 language=lang,
-                zid=req_zid,
+                zid=target_zid,
+                read_only=False,
+                enrich_headings=enrich_headings,
             )
-            self._send_json(200, res)
+            sess_lang = res.get("source_language") or lang or "de"
+            target_lang = res.get("target_language") or cfg.get(SEC_SETTINGS, "default_target_language", fallback="ru")
+            slug = res.get("slug") or f"project_{pid_int}"
+            source_text = res.get("source_text", "")
+            headers = res.get("headers", [])
+            data_rows = res.get("data_rows", [])
+            comments = list(res.get("comments") or [])
+            if not any(project_marker in str(c) for c in comments):
+                comments.append(f"# Synthesized Project Session: {res.get('project_title', '')} {project_marker}")
+            sentences_payload = res.get("sentences")
+            adapter.save_session(
+                session_zid=target_zid,
+                slug=slug,
+                source_language=sess_lang,
+                target_language=target_lang,
+                text_mode="multi",
+                source_raw_text=source_text,
+                comments=comments,
+                headers=headers,
+                data_rows=data_rows,
+                sentences=sentences_payload,
+            )
+            payload = dict(res)
+            payload["session_zid"] = target_zid
+            payload["materialized"] = True
+            payload["reused"] = False
+            self._send_json(200, payload)
             return
 
         if path == '/api/v1/admin/sessions':

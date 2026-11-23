@@ -6184,6 +6184,8 @@ def synthesize_project_materials(
     resolved_paths: Optional[Dict[str, Any]] = None,
     language: Optional[str] = None,
     zid: Optional[str] = None,
+    read_only: bool = False,
+    enrich_headings: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Synthesizes continuous reading and study materials across all sessions in a project
@@ -6192,9 +6194,21 @@ def synthesize_project_materials(
     and returns a unified multi-chapter reader structure.
     """
     from kardenwort_db import KardenwortDB
+    if enrich_headings is None:
+        enrich_headings = not read_only
     if db is None:
-        db = KardenwortDB(config=config, resolved_paths=resolved_paths)
-    adapter = SqliteStorageAdapter(config=config, resolved_paths=resolved_paths)
+        db = KardenwortDB(config=config, resolved_paths=resolved_paths, read_only=read_only)
+    if read_only and not db.db_path.exists():
+        raise StructuredError(
+            ErrorCode.CONFIGURATION_ERROR,
+            f"SQLite storage database is unavailable: {db.db_path}",
+        )
+    adapter = SqliteStorageAdapter(
+        config=config,
+        resolved_paths=resolved_paths,
+        db_path=db.db_path,
+        read_only=read_only,
+    )
 
     project = db.get_project(project_id)
     if not project:
@@ -6267,7 +6281,7 @@ def synthesize_project_materials(
             global_sentence_offset += 1
 
             heading_translation = ""
-            if provider and provider != "none":
+            if enrich_headings and provider and provider != "none":
                 try:
                     heading_translation = translate_text(
                         heading_text,
@@ -6294,42 +6308,43 @@ def synthesize_project_materials(
                 "deck": deck_path,
             })
 
-            # Lemmatize heading title
-            tokens = []
-            try:
-                tokens = tokenize_text_with_fallback(
-                    title,
-                    language=lang,
-                    config=config,
-                    resolved_paths=resolved_paths or {},
-                    zid=zid,
-                )
-            except Exception as tok_err:
-                logger.debug(f"Heading tokenization failed: {tok_err}")
+            if enrich_headings:
+                # Lemmatize heading title (admitted command path only)
                 tokens = []
+                try:
+                    tokens = tokenize_text_with_fallback(
+                        title,
+                        language=lang,
+                        config=config,
+                        resolved_paths=resolved_paths or {},
+                        zid=zid,
+                    )
+                except Exception as tok_err:
+                    logger.debug(f"Heading tokenization failed: {tok_err}")
+                    tokens = []
 
-            heading_words = []
-            if tokens:
-                for tok in tokens:
-                    w = tok.get("word") or tok.get("text") or ""
-                    lem = tok.get("lemma") or w
-                    if w and (tok.get("is_word", True) or any(c.isalpha() for c in w)):
-                        if any(c.isalpha() for c in w):
-                            heading_words.append((w, lem))
-            else:
-                raw_words = re.findall(r'\b[^\W\d_]+\b', title, re.UNICODE)
-                for w in raw_words:
-                    if w.strip():
-                        heading_words.append((w.strip(), w.strip()))
+                heading_words = []
+                if tokens:
+                    for tok in tokens:
+                        w = tok.get("word") or tok.get("text") or ""
+                        lem = tok.get("lemma") or w
+                        if w and (tok.get("is_word", True) or any(c.isalpha() for c in w)):
+                            if any(c.isalpha() for c in w):
+                                heading_words.append((w, lem))
+                else:
+                    raw_words = re.findall(r'\b[^\W\d_]+\b', title, re.UNICODE)
+                    for w in raw_words:
+                        if w.strip():
+                            heading_words.append((w.strip(), w.strip()))
 
-            if heading_words:
-                pending_heading_lemmas.append({
-                    "words": heading_words,
-                    "heading_text": heading_text,
-                    "heading_translation": heading_translation,
-                    "sentence_index": heading_sent_idx,
-                    "deck": deck_path,
-                })
+                if heading_words:
+                    pending_heading_lemmas.append({
+                        "words": heading_words,
+                        "heading_text": heading_text,
+                        "heading_translation": heading_translation,
+                        "sentence_index": heading_sent_idx,
+                        "deck": deck_path,
+                    })
 
         for sess in sessions:
             s_zid = sess["session_zid"]
@@ -10878,7 +10893,7 @@ def format_provider_skeleton_label(provider_name: str) -> str:
     return f"{provider_name.capitalize()}..."
 
 
-def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level=None, theme=None, tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None, api_token="", server_enabled=False):
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level=None, theme=None, tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None, api_token="", server_enabled=False, read_only=False, preloaded_bundle=None, read_only_preview=False, preview_project_id=None, fingerprint=""):
     from kardenwort_state_runtime import preference_operation
     with preference_operation(config, resolved_paths,
                               refresh=resolved_paths.get('storage_backend') == 'sqlite') as config:
@@ -10892,7 +10907,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 return ""
             _ACTIVE_ZIDS.add(zid)
         try:
-            return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num, trace_id=trace_id, spawn_children=spawn_children, return_children=return_children, mismatch_info=mismatch_info, api_token=api_token, server_enabled=server_enabled)
+            return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num, trace_id=trace_id, spawn_children=spawn_children, return_children=return_children, mismatch_info=mismatch_info, api_token=api_token, server_enabled=server_enabled, read_only=read_only, preloaded_bundle=preloaded_bundle, read_only_preview=read_only_preview, preview_project_id=preview_project_id, fingerprint=fingerprint)
         finally:
             with _ACTIVE_ZIDS_LOCK:
                 _ACTIVE_ZIDS.discard(zid)
@@ -10942,7 +10957,7 @@ def tag_server_compound_tokens(source_tokens: List[Dict[str, Any]]) -> None:
         i += 1
 
 
-def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None, api_token="", server_enabled=False):
+def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None, api_token="", server_enabled=False, read_only=False, preloaded_bundle=None, read_only_preview=False, preview_project_id=None, fingerprint=""):
     is_mismatch = bool(mismatch_info and mismatch_info.get("is_mismatch"))
     if wordfill_cfg is None and config is not None:
         wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
@@ -10965,7 +10980,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     progressive_timeout_seconds = config.getint(SEC_PIPELINE, 'progressive_timeout_seconds', fallback=15)
     children_tsv_paths = []
     ahk_args = []
-    storage_adapter = get_storage_adapter(config, resolved_paths)
+    storage_adapter = get_storage_adapter(config, resolved_paths, read_only=read_only)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
     if tsv_path and not is_sqlite:
@@ -11048,13 +11063,13 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     parent_mode = smc.parent_mode
     multi_mode_decompose = smc.multi_mode_decompose
     session_exists_in_storage = False
-    if is_sqlite and zid and str(zid).strip() and str(zid).strip() != "00000000000000":
+    if is_sqlite and not preloaded_bundle and zid and str(zid).strip() and str(zid).strip() != "00000000000000":
         try:
             session_exists_in_storage = bool(storage_adapter.load_session(str(zid).strip()))
         except Exception:
             session_exists_in_storage = False
 
-    will_split = not is_mismatch and not tsv_path and not session_exists_in_storage and (
+    will_split = not read_only and not preloaded_bundle and not is_mismatch and not tsv_path and not session_exists_in_storage and (
         smc.should_split_sentences(len(source_sentences)) or
         # legacy_spawn_children only fires when sentences_mode is enabled to avoid
         # unexpected splits from old config files migrated with enabled=false.
@@ -11580,7 +11595,7 @@ html, body {{
     eff_mode = _effective_text_mode(text, text_mode)
 
     cached_session_bundle = None
-    if is_sqlite and not tsv_path:
+    if is_sqlite and not tsv_path and not read_only and preloaded_bundle is None:
         ttl_val = config.getint(SEC_STORAGE, 'cache_ttl_seconds', fallback=config.getint(SEC_SETTINGS, 'lookup_ttl_seconds', fallback=86400))
         if ttl_val > 0:
             cached_session_bundle = storage_adapter.get_cached_session(
@@ -11597,6 +11612,14 @@ html, body {{
         comments = []
         headers = ["WordSource", "WordDestination", "WordSourceInflectedForm", "WordSourceIPA", "WordSourceMorphologyAI", "DeskSelected"]
         data_rows = []
+    elif preloaded_bundle is not None:
+        working_tsv_path = str(preloaded_bundle.get("session_zid") or zid) if is_sqlite else (Path(tsv_path) if tsv_path else results_dir / f"{zid}-{slug}.{language}.tsv")
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file']) if (resolved_paths and 'anki_mapping_file' in resolved_paths and Path(resolved_paths['anki_mapping_file']).exists()) else {}
+        comments = list(preloaded_bundle.get("comments") or [])
+        headers = list(preloaded_bundle.get("headers") or [])
+        data_rows = [list(r) for r in (preloaded_bundle.get("data_rows") or [])]
+        if not headers:
+            headers = ["WordSource", "WordDestination", "WordSourceInflectedForm", "WordSourceIPA", "WordSourceMorphologyAI", "DeskSelected"]
     elif (tsv_path and (Path(tsv_path).exists() or is_sqlite)) or (is_sqlite and session_exists_in_storage):
         working_tsv_path = str(extract_zid(tsv_path) if tsv_path else zid) if is_sqlite else (Path(tsv_path) if tsv_path else results_dir / f"{zid}-{slug}.{language}.tsv")
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
@@ -11608,6 +11631,8 @@ html, body {{
             zid = str(cached_zid)
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
+    elif read_only:
+        raise StructuredError(ErrorCode.NOT_FOUND, f"Session '{zid}' is unavailable for read-only render.")
     else:
         working_tsv_path = prepare_lookup_tsv(
             text, language, target_lang, config, resolved_paths, zid,
@@ -11698,7 +11723,7 @@ html, body {{
     row_provenances = {}
     row_occurrences = {}
     occurrence_provenances = {}
-    if is_sqlite:
+    if is_sqlite and not preloaded_bundle:
         tsv_zid = extract_zid(working_tsv_path)
         for candidate_zid in [tsv_zid, zid]:
             if candidate_zid and str(candidate_zid).strip() and str(candidate_zid).strip() != "00000000000000":
@@ -11742,7 +11767,7 @@ html, body {{
 
 
     # --- Word-fill early pre-fill step ---
-    if not is_mismatch and wordfill_cfg and wordfill_cfg.get('enabled', False):
+    if not read_only and not is_mismatch and wordfill_cfg and wordfill_cfg.get('enabled', False):
         try:
             rows_before_wordfill = [row[:] for row in data_rows]
             col_lemma_wf = col_lemma if col_lemma != -1 else (headers.index('WordSource') if 'WordSource' in headers else -1)
@@ -11812,11 +11837,11 @@ html, body {{
     base_provider = lemma_base_provider
     enrich_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
 
-    storage_adapter = get_storage_adapter(config, resolved_paths)
+    storage_adapter = get_storage_adapter(config, resolved_paths, read_only=read_only)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
     source_text_path = None if is_sqlite else working_tsv_path.with_suffix('.txt')
-    if not is_sqlite and not is_mismatch:
+    if not read_only and not is_sqlite and not is_mismatch:
         if eff_mode == 'single':
             source_text_path.write_text(text, encoding='utf-8')
         elif not source_text_path.exists():
@@ -11862,7 +11887,7 @@ html, body {{
             has_untranslated_lemmas = True
 
     # Text and lemma triggers independently govern their synchronous work.
-    if not is_mismatch and not is_progressive:
+    if not read_only and not is_mismatch and not is_progressive:
         try:
             if run_text == 'auto' and not sentence_translated and not translation_fast_failed:
                 with TraceTimer("monolithic_text_translation", zid, config, resolved_paths):
@@ -12006,7 +12031,19 @@ html, body {{
 
     db_sents = None
     extracted_provenances = {}
-    if is_sqlite:
+    if isinstance(preloaded_bundle, dict) and preloaded_bundle.get("sentences"):
+        db_sents = list(preloaded_bundle["sentences"])
+        for s in db_sents:
+            s_idx = s.get("sentence_index", 1) - 1
+            s_dest = s.get("sentence_destination")
+            if s_dest and str(s_dest).strip() and str(s_dest).strip() != "[FAILED]" and not str(s_dest).strip().startswith("[Error"):
+                extracted_translations[s_idx] = str(s_dest).strip()
+                s_prov = s.get("text_provenance")
+                if s_prov and str(s_prov).strip():
+                    extracted_provenances[s_idx] = str(s_prov).strip()
+            elif str(s.get("sentence_source", "")).strip().startswith("#") and (s_idx not in extracted_translations or not extracted_translations[s_idx]):
+                extracted_translations[s_idx] = str(s.get("sentence_source", "")).strip()
+    elif is_sqlite and not preloaded_bundle:
         tsv_zid = extract_zid(working_tsv_path)
         for candidate_zid in [tsv_zid, zid]:
             if candidate_zid and str(candidate_zid).strip() and str(candidate_zid).strip() != "00000000000000":
@@ -12112,14 +12149,14 @@ html, body {{
             elif len(distinct_provs) == 1:
                 sentence_provenance = next(iter(distinct_provs))
 
-    if not is_sqlite and not is_mismatch:
+    if not read_only and not is_sqlite and not is_mismatch:
         save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
         translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
         eff_mode = _effective_text_mode(text, text_mode)
         _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=False)
 
     worker_launched = False
-    if not is_mismatch and not llm_filled:
+    if not read_only and not is_mismatch and not llm_filled:
         prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
 
         is_master_window = bool(children_tsv_paths)
@@ -12169,7 +12206,7 @@ html, body {{
                     run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
                     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
 
-    if is_progressive and not worker_launched:
+    if not read_only and is_progressive and not worker_launched:
         write_update_js(working_tsv_path, data_rows, headers, role_fields, stage="finished", empty_payload=True, row_provenances=row_provenances, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter)
         # Only flag WordDestination as [FAILED] if the base provider was expected to fill it but didn't.
         # IPA, Morphology, etc. are exclusively intellifiller fields — they must NOT be flagged here
@@ -13100,7 +13137,7 @@ html, body {{
 
         is_container = (smc.delivery_mode == "container")
         saved_overview_selections = set()
-        if is_container and zid and str(zid).strip() and str(zid).strip() != "00000000000000":
+        if is_container and not preloaded_bundle and zid and str(zid).strip() and str(zid).strip() != "00000000000000":
             try:
                 saved_overview_selections = storage_adapter.get_overview_selections(str(zid).strip())
             except Exception as e:
@@ -13593,7 +13630,11 @@ html, body {{
 
     # Stage 1: UI configuration and TTS settings
     ui_cfg = resolve_ui_config(config)
-    ui_cfg['client_view_enabled'] = storage_backend_setting(config, resolved_paths) == 'sqlite'
+    ui_cfg['client_view_enabled'] = (storage_backend_setting(config, resolved_paths) == 'sqlite') and not bool(read_only_preview)
+    ui_cfg['read_only_preview'] = bool(read_only_preview)
+    if preview_project_id is not None:
+        ui_cfg['preview_project_id'] = int(preview_project_id)
+    ui_cfg.pop("server_api_key", None)
     ui_cfg["compound_joiners"] = "".join(sorted(COMPOUND_JOINERS))
     ui_cfg["grammar"] = get_grammar_payload()
     ui_cfg["audio_lmb_play"] = (lmb_play_val == "true")
@@ -13673,6 +13714,15 @@ html, body {{
         [row[idx] if idx < len(row) else "" for idx in ui_col_indices]
         for row in (data_rows or [])
     ]
+    projected_fingerprint = (
+        str(fingerprint)
+        if fingerprint
+        else (
+            str(preloaded_bundle.get("fingerprint") or "")
+            if isinstance(preloaded_bundle, dict) and preloaded_bundle.get("fingerprint")
+            else (compute_content_fingerprint(data_rows) if read_only else "")
+        )
+    )
     session_data = {
         "zid": str(zid),
         "session_zid": str(zid),
@@ -13689,7 +13739,8 @@ html, body {{
         "server_enabled": effective_server_enabled,
         "api_token": effective_api_token,
         "server_url": "",
-        "fingerprint": "",
+        "fingerprint": projected_fingerprint,
+        "read_only_preview": bool(read_only_preview),
         "pos_display_order": POS_DISPLAY_ORDER,
     }
 
@@ -14726,6 +14777,24 @@ def render_declarative_web_shell(
     else:
         base_html = base_html.replace('id="kw-btn-filter-selected"', 'id="kw-btn-filter-selected" class=""')
 
+    if ui_cfg.get("read_only_preview"):
+        def _disable_preview_btn(match):
+            tag = match.group(1)
+            if not re.search(r'\bdisabled\b', tag):
+                tag += ' disabled'
+            if re.search(r'\btitle="[^"]*"', tag):
+                tag = re.sub(r'\btitle="[^"]*"', 'title="Read-only project preview"', tag, count=1)
+            else:
+                tag += ' title="Read-only project preview"'
+            return tag + '>'
+
+        for btn_id in ('kw-btn-save', 'kw-btn-update', 'kw-btn-retext', 'kw-btn-reword', 'kw-btn-export', 'kw-btn-delete'):
+            base_html = re.sub(
+                rf'(<button\b[^>]*id="{btn_id}"[^>]*)>',
+                _disable_preview_btn,
+                base_html,
+            )
+
     # Language mismatch modal
     if mismatch_info and mismatch_info.get("is_mismatch"):
         det_code = mismatch_info.get("detected_language") or ""
@@ -14824,12 +14893,12 @@ setTimeout(function() {{
 
     return base_html
 
-def render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=False, fingerprint=""):
+def render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=None, fingerprint=""):
     """@deprecated GoldenDict HTML lookup renderer is deprecated and frozen in maintenance-only mode."""
     with TraceTimer("html_generation", zid, config, resolved_paths):
         return _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=session_zid, api_token=api_token, server_enabled=server_enabled, fingerprint=fingerprint)
 
-def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=False, fingerprint=""):
+def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=None, fingerprint=""):
     """@deprecated Internal GoldenDict HTML lookup renderer implementation (frozen / maintenance-only)."""
     sections = goldendict.get('sections', ['translation', 'lemmas']) if isinstance(goldendict, dict) else ['translation', 'lemmas']
     column_tokens = goldendict.get('lemma_columns', ['inflected', 'lemma', 'translation']) if isinstance(goldendict, dict) else ['inflected', 'lemma', 'translation']
@@ -14848,8 +14917,11 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     occurrence_targets = lookup_occurrence_targets(headers, data_rows, role_fields)
     data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
 
-    effective_server_enabled = server_enabled or (isinstance(goldendict, dict) and goldendict.get('server_enabled', False))
-    effective_api_token = api_token or (isinstance(goldendict, dict) and goldendict.get('server_api_key', ''))
+    if server_enabled is None:
+        effective_server_enabled = bool(isinstance(goldendict, dict) and goldendict.get('server_enabled', False))
+    else:
+        effective_server_enabled = bool(server_enabled)
+    effective_api_token = str(api_token or "")
     if not effective_server_enabled:
         effective_api_token = ""
 
@@ -14931,14 +15003,26 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
 
     # Inject bootstrap payload into #kardenwort-bootstrap
     lookup_ui_config = dict(goldendict) if isinstance(goldendict, dict) else {}
-    if not effective_server_enabled:
-        lookup_ui_config.pop("server_api_key", None)
+    lookup_ui_config.pop("server_api_key", None)
     lookup_ui_config["grammar"] = get_grammar_payload()
     lookup_ui_config["has_highlight_col"] = role_fields.get('selected') in headers
     lookup_ui_config.setdefault("pos_display_order", POS_DISPLAY_ORDER)
     lookup_ui_config["lemma_col_name"] = role_fields.get("lemma", "WordSource")
     lookup_ui_config["inflected_col_name"] = role_fields.get("inflected", "WordSourceInflectedForm")
     lookup_ui_config["trans_col_name"] = role_fields.get("word_translation", "WordDestination")
+    lookup_ui_cfg_json = serialize_json_island(lookup_ui_config)
+    base_html = re.sub(
+        r'<script id="ui-config" type="application/json">.*?</script>',
+        lambda _: f'<script id="ui-config" type="application/json">\n{lookup_ui_cfg_json}\n</script>',
+        base_html,
+        flags=re.DOTALL
+    )
+    base_html = re.sub(
+        r'<script id="config-script">.*?</script>',
+        lambda _: f'<script id="config-script">\n    window.__CONFIG__ = {lookup_ui_cfg_json};\n    </script>',
+        base_html,
+        flags=re.DOTALL
+    )
     lookup_bootstrap = {
         "ui_config": lookup_ui_config,
         "session_data": session_payload,
@@ -15145,10 +15229,20 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             base_html = base_html.replace('</body>', f'<script>\n{s_code}\n</script>\n</body>')
 
     if not effective_server_enabled:
+        def _disable_lookup_btn(match):
+            tag = match.group(1)
+            if not re.search(r'\bdisabled\b', tag):
+                tag += ' disabled'
+            if re.search(r'\btitle="[^"]*"', tag):
+                tag = re.sub(r'\btitle="[^"]*"', 'title="Server interaction is disabled in this mode"', tag, count=1)
+            else:
+                tag += ' title="Server interaction is disabled in this mode"'
+            return tag + '>'
+
         for btn_id in ('kw-btn-save', 'kw-btn-update', 'kw-btn-retext', 'kw-btn-reword', 'kw-btn-export'):
             base_html = re.sub(
                 rf'(<button\b[^>]*id="{btn_id}"[^>]*)>',
-                lambda m: (m.group(1) if 'disabled' in m.group(1) else m.group(1) + ' disabled') + ' title="Server interaction is disabled in this mode">',
+                _disable_lookup_btn,
                 base_html
             )
 
@@ -15226,9 +15320,9 @@ def render_lookup_text(text, language, target_lang, config, resolved_paths, zid,
 
     return "\n".join(out).strip()
 
-def render_lookup_combined(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):
+def render_lookup_combined(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=False, fingerprint=""):
     import json
-    html_out = render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
+    html_out = render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=session_zid, api_token=api_token, server_enabled=server_enabled, fingerprint=fingerprint)
     text_out = render_lookup_text(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
     return json.dumps({
         "html": html_out,
@@ -15662,7 +15756,7 @@ def core_lookup(
     elif current_fmt == 'text':
         out = render_lookup_text(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
     else:
-        out = render_lookup_combined(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
+        out = render_lookup_combined(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=session_zid, api_token=api_token, server_enabled=server_enabled, fingerprint=fingerprint)
 
     text_provenance = None
     if current_fmt == 'html' and out:
