@@ -19930,17 +19930,27 @@ def parse_tsv_to_bundle(
     config: Optional[Any] = None,
     resolved_paths: Optional[Dict[str, Any]] = None,
     zid: Optional[str] = None,
+    allow_path: bool = True,
 ) -> Dict[str, Any]:
     """
-    Parses raw TSV content (or lines, or a Path) into an atomic session bundle dictionary
-    containing 'session', 'sentences', and 'words' structures suitable for SQLite insertion
-    via save_session_bundle.
+    Parses raw TSV content (or lines, or an explicitly allowed Path) into an atomic session
+    bundle dictionary containing 'session', 'sentences', and 'words' structures suitable for
+    SQLite insertion via save_session_bundle.
     """
     comments: List[str] = []
     headers: List[str] = []
     data_rows: List[List[str]] = []
 
-    if isinstance(tsv_content_or_path, Path) or (isinstance(tsv_content_or_path, str) and "\n" not in tsv_content_or_path and Path(tsv_content_or_path).is_file()):
+    if isinstance(tsv_content_or_path, Path) and not allow_path:
+        raise StructuredError(
+            ErrorCode.INVALID_PAYLOAD,
+            "Filesystem paths are not permitted for inline TSV import.",
+        )
+
+    if allow_path and (
+        isinstance(tsv_content_or_path, Path)
+        or (isinstance(tsv_content_or_path, str) and "\n" not in tsv_content_or_path and Path(tsv_content_or_path).is_file())
+    ):
         p = Path(tsv_content_or_path)
         if not filename:
             filename = p.name

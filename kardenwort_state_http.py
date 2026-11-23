@@ -62,7 +62,8 @@ def import_browser(server, body):
     result = store.import_browser(client, body.get('preferences', {}), body.get('revisions', {}), callback)
     snapshot = dict(values=result['values'], revisions=result['revisions'])
     projected = project_snapshot(server, snapshot)['preferences']
-    EventDispatcher.get_instance().publish_global(dict(type='preferences_updated', preferences=projected))
+    if result.get('imported'):
+        EventDispatcher.get_instance().publish_global(dict(type='preferences_updated', preferences=projected))
     return dict(ok=True, **result)
 
 

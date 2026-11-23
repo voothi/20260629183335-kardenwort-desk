@@ -7,6 +7,7 @@ from contextvars import ContextVar
 from functools import wraps
 import sqlite3
 from pathlib import Path
+from urllib.parse import urlparse
 
 from kardenwort_db import KardenwortDB
 from kardenwort_sqlite_preferences import PreferencesAdapter, read_snapshot
@@ -232,7 +233,7 @@ def request_preferences(uses_preferences):
     def decorate_request(command):
         @wraps(command)
         def captured_request(handler, *args, **kwargs):
-            path = handler.path.split('?', 1)[0]
+            path = urlparse(handler.path).path
             if not uses_preferences(path):
                 return command(handler, *args, **kwargs)
             with preference_operation(handler.server.config, handler.server.resolved_paths):

@@ -234,13 +234,13 @@ def test_tag_custom_selected_role_exact_coordinates_arbiter_cache_and_sse(http_w
     zid = "20261123051040"
     adapter = desk.get_storage_adapter(server.config, server.resolved_paths)
     rows = [
-        ["0", "Haus", "Haus", "дом", "1", "Das Haus.", "Дом.", "0"],
+        ["0", "Vogel", "Vogel", "птица", "1", "Ein Vogel.", "Птица.", "0"],
         ["0", "Haus", "Haus", "дом", "2", "Noch ein Haus.", "Ещё дом.", "0"],
         ["1", "Baum", "Baum", "дерево", "2", "Noch ein Haus.", "Ещё дом.", "0"],
     ]
     adapter.save_session(
         session_zid=zid, slug="custom-tag", source_language="de", target_language="ru",
-        text_mode="multi", source_raw_text="Das Haus.\nNoch ein Haus.",
+        text_mode="multi", source_raw_text="Ein Vogel.\nNoch ein Haus.",
         headers=list(custom_headers), data_rows=rows,
     )
     restored = adapter.restore_session(zid)

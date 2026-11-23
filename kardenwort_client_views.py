@@ -1,5 +1,6 @@
 """Client/session view state is independent of shared vocabulary membership."""
 import json
+import sqlite3
 import time
 
 from kardenwort_state_contract import client_identity, occurrence_identity
@@ -15,12 +16,34 @@ class ClientViewConflict(ValueError):
         self.current = current
 
 
+def _parse_stored_tokens(raw_tokens):
+    try:
+        tokens = json.loads(raw_tokens)
+    except (ValueError, TypeError) as error:
+        raise sqlite3.DatabaseError('Persisted client view state is corrupted') from error
+    if not isinstance(tokens, list):
+        raise sqlite3.DatabaseError('Persisted client view state is corrupted')
+    return tokens
+
+
+def _checked_stored_occurrences(tokens, valid):
+    kept = []
+    for item in tokens:
+        try:
+            key = occurrence_identity(item)
+        except ValueError as error:
+            raise sqlite3.DatabaseError('Persisted client view state is corrupted') from error
+        if key in valid:
+            kept.append(item)
+    return kept
+
+
 def _current_view_snapshot(row):
     if row is None:
         return empty_view()
     return dict(
         active_card=row['active_card'],
-        active_tokens=json.loads(row['active_tokens']),
+        active_tokens=_parse_stored_tokens(row['active_tokens']),
         revision=row['revision'],
         cleared=False,
     )
@@ -126,8 +149,8 @@ def inspect_view(connection, zid, client, now, touch_interval, include_import=Fa
         state = 'missing' if row is None else 'expired'
         return dict(state=state, row=row, result=empty_view(imported), valid=[])
     valid = session_occurrences(connection, zid)
-    tokens = json.loads(row['active_tokens'])
-    kept = [item for item in tokens if occurrence_identity(item) in valid]
+    tokens = _parse_stored_tokens(row['active_tokens'])
+    kept = _checked_stored_occurrences(tokens, valid)
     cleared = len(kept) != len(tokens)
     result = with_import_flag(dict(active_card=row['active_card'], active_tokens=kept,
                                    revision=row['revision'] + int(cleared), cleared=cleared), imported)

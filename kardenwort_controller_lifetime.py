@@ -85,7 +85,7 @@ def transport_failure(error):
 
 
 def expected_peer_disconnect(error):
-    return isinstance(error, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)) and transport_failure(error)
+    return isinstance(error, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, TimeoutError)) and transport_failure(error)
 
 
 class ControllerHTTPServer(ThreadingHTTPServer):

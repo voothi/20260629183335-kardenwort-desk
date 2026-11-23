@@ -1,9 +1,11 @@
 from kardenwort_state_runtime import (OperationConfiguration, operation_preferences,
-                                      operation_configuration, request_preferences)
+                                      operation_configuration, preference_operation,
+                                      request_preferences)
 import kardenwort_progressive_completion as progressive
+import math
 import sys
 from collections import deque
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from enum import Enum
 import sqlite3
@@ -52,6 +54,7 @@ from kardenwort_desk import (
     resolve_results_dir,
     load_anki_mapping,
     get_role_fields,
+    resolve_selected_column,
     load_tsv_rows,
     save_tsv_rows_safely,
     compute_content_fingerprint,
@@ -395,6 +398,11 @@ _RENDERED_SESSION_ALIASES_LOCK = threading.Lock()
 _MAX_RENDERED_SESSION_ALIASES = 256
 
 
+def _monotonic_now() -> float:
+    fn = getattr(time, "monotonic", None)
+    return float(fn() if callable(fn) else time.time())
+
+
 def _positive_int_config(config: Any, section: str, option: str, default: int) -> int:
     if config is None or not hasattr(config, "getint"):
         return default
@@ -466,7 +474,7 @@ def _store_draft_session(
     ttl_seconds: Optional[float] = None,
     now: Optional[float] = None,
 ) -> None:
-    stamp = time.monotonic() if now is None else float(now)
+    stamp = _monotonic_now() if now is None else float(now)
     cap = max_entries if max_entries is not None else _positive_int_config(
         config, "server", "draft_session_max", _DEFAULT_DRAFT_SESSION_MAX
     )
@@ -492,7 +500,7 @@ def _claim_draft_session(
     ttl_seconds: Optional[float] = None,
     now: Optional[float] = None,
 ) -> Tuple[Optional[dict], Optional[int], Optional[str], bool]:
-    stamp = time.monotonic() if now is None else float(now)
+    stamp = _monotonic_now() if now is None else float(now)
     ttl = ttl_seconds if ttl_seconds is not None else _positive_float_config(
         config, "server", "draft_session_ttl_seconds", _DEFAULT_DRAFT_SESSION_TTL_SECONDS
     )
@@ -741,6 +749,19 @@ class WindowsJobObject:
 # ---------------------------------------------------------------------------
 # Sidecar Process Supervisor
 # ---------------------------------------------------------------------------
+def _format_http_host(host: str) -> str:
+    text = str(host or "127.0.0.1").strip()
+    if not text:
+        return "127.0.0.1"
+    if text.startswith("[") and text.endswith("]"):
+        return text
+    try:
+        addr = ipaddress.ip_address(text)
+    except ValueError:
+        return text
+    return f"[{text}]" if addr.version == 6 else text
+
+
 class SidecarService:
     def __init__(self, name: str, port: int, launch_cmd: List[str], cwd: Optional[Path] = None, health_path: str = "/health", host: str = "127.0.0.1"):
         self.name = name
@@ -759,7 +780,7 @@ class SidecarService:
         self.health_data: Optional[Dict[str, Any]] = None
 
     def url(self) -> str:
-        return f"http://{self.host}:{self.port}"
+        return f"http://{_format_http_host(self.host)}:{self.port}"
 
 
 class _SupervisorState(Enum):
@@ -1449,7 +1470,7 @@ class EnrichmentQueue:
             times.pop(oldest, None)
 
     def _put_memo_locked(self, cache: dict, times: dict, key: Any, value: Any, max_entries: int, ttl_seconds: float, now: Optional[float] = None) -> None:
-        stamp = time.monotonic() if now is None else float(now)
+        stamp = _monotonic_now() if now is None else float(now)
         cache.pop(key, None)
         cache[key] = value
         times[key] = stamp
@@ -1458,7 +1479,7 @@ class EnrichmentQueue:
     def _get_memo_locked(self, cache: dict, times: dict, key: Any, ttl_seconds: float, now: Optional[float] = None):
         if key not in cache:
             return None
-        stamp = time.monotonic() if now is None else float(now)
+        stamp = _monotonic_now() if now is None else float(now)
         ts = times.get(key)
         if ts is not None and (stamp - ts) > ttl_seconds:
             cache.pop(key, None)
@@ -1525,7 +1546,7 @@ class EnrichmentQueue:
             )
 
     def prune_idle_caches(self, now: Optional[float] = None) -> None:
-        stamp = time.monotonic() if now is None else float(now)
+        stamp = _monotonic_now() if now is None else float(now)
         with self._lock:
             self._prune_memo_locked(self._cache, self._cache_times, self._enrichment_cache_max, self._enrichment_cache_ttl, stamp)
             self._prune_memo_locked(self._lemma_trans_cache, self._lemma_trans_times, self._translation_cache_max, self._translation_cache_ttl, stamp)
@@ -3053,7 +3074,7 @@ class SessionArbiter:
         rev = self._session_revisions.get(session_zid, 0) + 1
         self._session_revisions[session_zid] = rev
         if session_zid in self.sessions:
-            self._session_last_used[session_zid] = time.monotonic() if now is None else float(now)
+            self._session_last_used[session_zid] = _monotonic_now() if now is None else float(now)
         return rev
 
     def _evict_session_locked(self, session_zid: str) -> None:
@@ -3087,7 +3108,7 @@ class SessionArbiter:
         return EventDispatcher.get_instance().has_subscribers(session_zid)
 
     def prune_idle_caches(self, now: Optional[float] = None) -> None:
-        stamp = time.monotonic() if now is None else float(now)
+        stamp = _monotonic_now() if now is None else float(now)
         self.enrichment_queue.prune_idle_caches(now=stamp)
         with self.enrichment_queue._lock:
             active_prog = set(self.enrichment_queue._active_progressive_sessions.keys())
@@ -4397,10 +4418,17 @@ class SessionArbiter:
         col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else (headers.index('WordDestination') if 'WordDestination' in headers else -1)
         col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
 
-        # If session is active in-memory, preserve its exact data_rows order; otherwise sort initial load
+        # If session is active in-memory, preserve its coherent headers/data_rows order; otherwise sort initial load
         with self._lock:
-            if session_zid in self.sessions and self.sessions[session_zid].get("data_rows"):
-                data_rows = [list(r) for r in self.sessions[session_zid]["data_rows"]]
+            warm_sess = self.sessions.get(session_zid)
+            if warm_sess and warm_sess.get("data_rows"):
+                data_rows = [list(r) for r in warm_sess["data_rows"]]
+                if warm_sess.get("headers"):
+                    headers = list(warm_sess["headers"])
+                    role_fields = get_role_fields(mapping, headers)
+                    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else (headers.index('WordSource') if 'WordSource' in headers else -1)
+                    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else (headers.index('WordDestination') if 'WordDestination' in headers else -1)
+                    col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
             else:
                 data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
 
@@ -4576,19 +4604,36 @@ class SessionArbiter:
                         if t_ord_str.isdigit():
                             retried_row_provenances[int(t_ord_str)] = fast_prov
 
+        effective_text_prov = retry_text_plan[2] if retry_text_plan else (f"live:{text_provider}" if (need_sentence_trans and translated_text_res) else None)
+        refreshed_sentences = None
+        if is_sqlite and retry_text_plan:
+            refreshed_sentences = progressive.sentence_summary_rows(
+                storage_adapter.db.get_sentences_by_session(session_zid)
+            )
+
         new_fp = compute_content_fingerprint(data_rows)
         if is_sqlite and translated_map:
             with committed_delivery(session_zid, new_fp):
                 self.propagate_translations_to_siblings(translated_map, exclude_session_zid=session_zid, language=lang)
         with self._lock:
             if session_zid in self.sessions:
-                self.sessions[session_zid]["data_rows"] = data_rows
-                self.sessions[session_zid]["headers"] = headers
-                self.sessions[session_zid]["fingerprint"] = new_fp
+                sess_entry = self.sessions[session_zid]
+                sess_entry["data_rows"] = data_rows
+                sess_entry["headers"] = headers
+                sess_entry["role_fields"] = dict(role_fields)
+                sess_entry["fingerprint"] = new_fp
                 if retried_row_provenances:
-                    if "row_provenances" not in self.sessions[session_zid]:
-                        self.sessions[session_zid]["row_provenances"] = {}
-                    self.sessions[session_zid]["row_provenances"].update(retried_row_provenances)
+                    if "row_provenances" not in sess_entry:
+                        sess_entry["row_provenances"] = {}
+                    sess_entry["row_provenances"].update(retried_row_provenances)
+                if translated_text_res is not None:
+                    sess_entry["translated_text"] = translated_text_res
+                    sess_entry["translatedText"] = translated_text_res
+                if effective_text_prov:
+                    sess_entry["text_provenance"] = effective_text_prov
+                    sess_entry["textProvenance"] = effective_text_prov
+                if refreshed_sentences is not None:
+                    sess_entry["sentences"] = refreshed_sentences
                 self._bump_session_revision_locked(session_zid)
 
         with self._lock:
@@ -4600,7 +4645,6 @@ class SessionArbiter:
             display_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
 
         structured_rows = format_storage_update_rows(storage_adapter, session_zid, display_rows, headers, role_fields, retried_row_provenances)
-        effective_text_prov = retry_text_plan[2] if retry_text_plan else (f"live:{text_provider}" if (need_sentence_trans and translated_text_res) else None)
 
         if not is_sqlite and tsv_path:
             safe_write_update_js(tsv_path, display_rows, headers, role_fields, stage="translated", status="success", translated_text=translated_text_res, text_provenance=effective_text_prov, zid=session_zid, trace_id=eff_trace_id, row_provenances=retried_row_provenances, config=self.config, resolved_paths=self.resolved_paths, storage_adapter=storage_adapter)
@@ -4677,9 +4721,136 @@ def request_preference_scope(path):
         '/verify-language',
         '/api/v1/export',
         '/api/v1/confirm-language',
+        '/api/v1/tag',
+        '/api/v1/sessions/import-tsv',
+        '/api/v1/admin/sessions/import-tsv',
         '/api/v1/admin/projects/export-deck',
         '/api/v1/admin/projects/synthesize',
     )
+
+
+_ROUTE_ALLOWED_METHODS = {
+    '/health': ('GET', 'OPTIONS'),
+    '/api/v1/health': ('GET', 'OPTIONS'),
+    '/events': ('GET', 'OPTIONS'),
+    '/api/v1/events': ('GET', 'OPTIONS'),
+    '/api/v1/queue/status': ('GET', 'OPTIONS'),
+    '/session/queue/status': ('GET', 'OPTIONS'),
+    '/queue/status': ('GET', 'OPTIONS'),
+    '/session/status': ('GET', 'OPTIONS'),
+    '/verify-language': ('GET', 'OPTIONS'),
+    '/lookup': ('GET', 'OPTIONS'),
+    '/session/render': ('GET', 'OPTIONS'),
+    '/api/v1/lookup': ('GET', 'OPTIONS'),
+    '/admin': ('GET', 'OPTIONS'),
+    '/admin/': ('GET', 'OPTIONS'),
+    '/admin.css': ('GET', 'OPTIONS'),
+    '/admin.js': ('GET', 'OPTIONS'),
+    '/': ('GET', 'OPTIONS'),
+    '/index.html': ('GET', 'OPTIONS'),
+    '/favicon.ico': ('GET', 'OPTIONS'),
+    '/api/v1/admin/sessions': ('GET', 'OPTIONS'),
+    '/api/v1/admin/trash': ('GET', 'OPTIONS'),
+    '/api/v1/admin/backup/dump.sql': ('GET', 'OPTIONS'),
+    '/api/v1/admin/telemetry': ('GET', 'OPTIONS'),
+    '/session/create': ('POST', 'OPTIONS'),
+    '/internal/selection': ('POST', 'OPTIONS'),
+    '/internal/stage': ('POST', 'OPTIONS'),
+    '/session/save': ('POST', 'OPTIONS'),
+    '/session/retext': ('POST', 'OPTIONS'),
+    '/session/reword': ('POST', 'OPTIONS'),
+    '/session/retry': ('POST', 'OPTIONS'),
+    '/session/export': ('POST', 'OPTIONS'),
+    '/session/progressive/enqueue': ('POST', 'OPTIONS'),
+    '/api/v1/tag': ('POST', 'OPTIONS'),
+    '/api/v1/export': ('POST', 'OPTIONS'),
+    '/api/v1/confirm-language': ('POST', 'OPTIONS'),
+    '/api/v1/spawn-tabs': ('POST', 'OPTIONS'),
+    '/api/v1/audio/synthesize': ('POST', 'OPTIONS'),
+    '/api/v1/audio/play': ('POST', 'OPTIONS'),
+    '/session/play': ('POST', 'OPTIONS'),
+    '/api/v1/client-view': ('POST', 'OPTIONS'),
+    '/api/v1/browser-state/import': ('POST', 'OPTIONS'),
+    '/api/v1/set-language': ('POST', 'OPTIONS'),
+    '/api/v1/admin/projects/update': ('POST', 'OPTIONS'),
+    '/api/v1/admin/projects/delete': ('POST', 'OPTIONS'),
+    '/api/v1/admin/projects/link': ('POST', 'OPTIONS'),
+    '/api/v1/admin/projects/batch-link': ('POST', 'OPTIONS'),
+    '/api/v1/admin/projects/unlink': ('POST', 'OPTIONS'),
+    '/api/v1/admin/projects/reorder': ('POST', 'OPTIONS'),
+    '/api/v1/admin/projects/export-deck': ('POST', 'OPTIONS'),
+    '/api/v1/admin/sessions/delete': ('POST', 'OPTIONS'),
+    '/api/v1/admin/sessions/batch-delete': ('POST', 'OPTIONS'),
+    '/api/v1/sessions/import-tsv': ('POST', 'OPTIONS'),
+    '/api/v1/admin/sessions/import-tsv': ('POST', 'OPTIONS'),
+    '/api/v1/admin/trash/restore': ('POST', 'OPTIONS'),
+    '/api/v1/admin/trash/purge': ('POST', 'OPTIONS'),
+    '/api/v1/admin/backup/snapshot': ('POST', 'OPTIONS'),
+    '/api/v1/admin/db/vacuum': ('POST', 'OPTIONS'),
+    '/api/v1/shutdown': ('POST', 'OPTIONS'),
+    '/admin/shutdown': ('POST', 'OPTIONS'),
+    '/api/v1/config': ('GET', 'POST', 'OPTIONS'),
+    '/api/v1/render': ('GET', 'POST', 'OPTIONS'),
+    '/render': ('GET', 'POST', 'OPTIONS'),
+    '/api/v1/admin/projects': ('GET', 'POST', 'OPTIONS'),
+    '/api/v1/admin/projects/synthesize': ('GET', 'POST', 'OPTIONS'),
+}
+
+_WORKER_STATUS_RE = re.compile(r"^/(?:api/v1/)?session(?:s)?/([0-9a-zA-Z_\-]+)/worker_status$")
+_SESSION_TSV_RE = re.compile(r"^/(?:api/v1/admin/sessions|api/v1/sessions|sessions)/([0-9a-zA-Z_\-]+)/tsv$")
+_STRICT_ASCII_INT_RE = re.compile(r"^-?[0-9]+$")
+
+
+def _allowed_methods_for_path(path: str) -> Optional[Tuple[str, ...]]:
+    direct = _ROUTE_ALLOWED_METHODS.get(path)
+    if direct is not None:
+        return direct
+    if path.startswith(('/assets/', '/css/', '/js/', '/web/')):
+        return ('GET', 'OPTIONS')
+    if _WORKER_STATUS_RE.match(path) or _SESSION_TSV_RE.match(path):
+        return ('GET', 'OPTIONS')
+    return None
+
+
+def _parse_strict_int(
+    value: Any,
+    field_name: str,
+    *,
+    min_value: Optional[int] = None,
+    max_value: Optional[int] = None,
+    allow_str: bool = False,
+) -> int:
+    if isinstance(value, bool):
+        raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Field '{field_name}' must be an integer, not boolean")
+    if isinstance(value, int):
+        parsed = value
+    elif allow_str and isinstance(value, str) and value.isascii() and _STRICT_ASCII_INT_RE.match(value.strip()):
+        parsed = int(value.strip())
+    else:
+        raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Field '{field_name}' must be a valid integer")
+    if min_value is not None and parsed < min_value:
+        raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Field '{field_name}' must be >= {min_value}")
+    if max_value is not None and parsed > max_value:
+        raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Field '{field_name}' must be <= {max_value}")
+    return parsed
+
+
+def _parse_strict_non_negative_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Field '{field_name}' must be a number, not boolean")
+    try:
+        parsed = float(value)
+    except (ValueError, TypeError):
+        raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Field '{field_name}' must be a numeric value")
+    if not math.isfinite(parsed) or parsed < 0:
+        raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Field '{field_name}' must be a non-negative finite number")
+    return parsed
+
+
+def _parse_strict_bool(value: Any, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Field '{field_name}' must be a boolean")
+    return value
 
 
 def _sync_request_language(req_cfg, shared_cfg, lang_res):
@@ -4720,8 +4891,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         logger.info("%s - - [%s] %s" % (self.address_string(), self.log_date_time_string(), format_str % args))
 
     def _send_cors_headers(self):
-        origin = self.headers.get('Origin')
-        if origin and self._origin_allowed(origin):
+        origin = self._single_header('Origin')
+        if isinstance(origin, str) and self._origin_allowed(origin):
             self.send_header('Access-Control-Allow-Origin', origin)
             self.send_header('Vary', 'Origin')
         self.send_header('Access-Control-Allow-Headers', 'X-API-Token, X-ZID, Content-Type, Authorization')
@@ -4744,11 +4915,13 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
     def _validate_request_origin(self):
         if not ipaddress.ip_address(self.client_address[0]).is_loopback:
             raise StructuredError(ErrorCode.UNAUTHORIZED, 'Controller requires a loopback client')
-        origin = self.headers.get('Origin')
+        origin = self._single_header('Origin')
+        if origin is False:
+            raise StructuredError(ErrorCode.UNAUTHORIZED, 'Duplicate Origin header is not allowed')
         if origin and not self._origin_allowed(origin):
             raise StructuredError(ErrorCode.UNAUTHORIZED, 'Article origin is not allowed')
         if origin == 'null' and self.command != 'OPTIONS':
-            self._authenticate_token()
+            self._authenticate_token(capture_preferences=False)
 
     def _is_credential_bearing_request(self) -> bool:
         raw_path = getattr(self, 'path', '') or ''
@@ -4778,15 +4951,28 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         body = json.dumps({"status": "success", "data": data_obj}, ensure_ascii=False).encode('utf-8')
         self._send_bytes(status_code, body, 'application/json; charset=utf-8', credential_bearing=credential_bearing)
 
-    def _send_error_json(self, status_code: int, error_code, message: str, details=None, zid=None):
+    def _send_error_json(self, status_code: int, error_code, message: str, details=None, zid=None, extra_headers=None):
+        headers_out = dict(extra_headers or {})
+        clean_details = dict(details) if isinstance(details, dict) else details
+        if status_code == 405:
+            allow_header = None
+            if isinstance(clean_details, dict) and '_allow' in clean_details:
+                allow_header = clean_details.pop('_allow')
+            if not allow_header:
+                parsed_p = urllib.parse.urlparse(getattr(self, 'path', '') or '').path
+                allowed = _allowed_methods_for_path(parsed_p)
+                if allowed:
+                    allow_header = ', '.join(allowed)
+            if allow_header:
+                headers_out['Allow'] = allow_header
         payload = {
             "status": "error",
             "error_code": error_code.value if hasattr(error_code, 'value') else str(error_code),
             "message": message,
             "zid": zid or generate_server_zid(self.server),
         }
-        if details:
-            payload["details"] = details
+        if clean_details:
+            payload["details"] = clean_details
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         is_cred = self._is_credential_bearing_request()
         self._send_bytes(
@@ -4795,6 +4981,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             'application/json; charset=utf-8',
             credential_bearing=is_cred,
             allow_opaque_cors=False,
+            extra_headers=headers_out,
         )
 
     def _send_credential_cors_headers(self, *, allow_opaque: bool = True):
@@ -4808,7 +4995,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'X-API-Token, X-ZID, Content-Type, Authorization')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
 
-    def _send_bytes(self, status_code, body, content_type, *, credential_bearing: bool = False, allow_opaque_cors: bool = True):
+    def _send_bytes(self, status_code, body, content_type, *, credential_bearing: bool = False, allow_opaque_cors: bool = True, extra_headers=None):
         try:
             self.send_response(status_code)
             if credential_bearing:
@@ -4817,15 +5004,19 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 self.send_header('Referrer-Policy', 'no-referrer')
             else:
                 self._send_cors_headers()
+            for hdr_name, hdr_val in (extra_headers or {}).items():
+                self.send_header(hdr_name, hdr_val)
+            if getattr(self, 'close_connection', False):
+                self.send_header('Connection', 'close')
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(body)))
             if content_type.startswith('audio/'):
                 self.send_header('Cache-Control', 'no-store')
             self.end_headers()
             self.wfile.write(body)
-        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, TimeoutError):
             self.close_connection = True
-            logger.debug('Peer disconnected during response to %s', self.path)
+            logger.debug('Peer disconnected or timed out during response to %s', self.path)
 
     def _send_credential_html(self, html_text: str):
         body = html_text.encode('utf-8')
@@ -4838,9 +5029,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, TimeoutError):
             self.close_connection = True
-            logger.debug('Peer disconnected during HTML response to %s', self.path)
+            logger.debug('Peer disconnected or timed out during HTML response to %s', self.path)
 
     def _audio_request(self, path):
         self._authenticate_token(require_configured=True)
@@ -4878,14 +5069,22 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if path == '/api/v1/set-language':
             spawn_ahk(['--set-language', result['language']], base_dir=self.server.resolved_paths.get('base_dir'))
 
+    def _reject_transfer_encoding(self):
+        if self.headers.get_all('Transfer-Encoding'):
+            self.close_connection = True
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Transfer-Encoding is not supported")
+
     def _parse_bounded_content_length(self, max_bytes: int) -> int:
+        self._reject_transfer_encoding()
         raw_header = self._single_header('Content-Length')
         if raw_header is None:
             return 0
         if raw_header is False or not raw_header.isascii() or not raw_header.isdigit():
+            self.close_connection = True
             raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Invalid Content-Length header")
         content_length = int(raw_header)
         if content_length > max_bytes:
+            self.close_connection = True
             raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Payload size exceeds {max_bytes} byte limit")
         return content_length
 
@@ -4895,27 +5094,21 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             return b""
         raw_body = self.rfile.read(content_length)
         if len(raw_body) != content_length:
+            self.close_connection = True
             raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Incomplete request body")
         return raw_body
 
     def _read_json_body(self) -> dict:
-        content_length_str = self.headers.get('Content-Length', '0')
-        try:
-            content_length = int(content_length_str)
-        except ValueError:
-            raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Invalid Content-Length header")
-
-        if content_length > 1024 * 1024:  # 1MB limit
-            raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Payload size exceeds 1MB limit")
-
-        if content_length <= 0:
+        raw_body = self._read_bounded_body(1024 * 1024)
+        if not raw_body:
             return {}
-
-        raw_body = self.rfile.read(content_length)
         try:
-            return json.loads(raw_body.decode('utf-8'))
+            parsed = json.loads(raw_body.decode('utf-8'))
         except Exception as e:
             raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Malformed JSON payload: {e}")
+        if not isinstance(parsed, dict):
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, "JSON payload must be an object")
+        return parsed
 
     def _extract_provided_token(self, body_data=None, query_params=None):
         provided_token = self.headers.get('X-API-Token') or self.headers.get('X-API-Key')
@@ -4946,8 +5139,19 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         hosts = {f'127.0.0.1:{port}', f'localhost:{port}', f'[::1]:{port}'}
         bound = self.server.server_address[0] if hasattr(self.server, 'server_address') else ''
         if bound and bound not in ('0.0.0.0', '::', ''):
-            hosts.add(f'{bound.lower()}:{port}')
+            hosts.add(f'{_format_http_host(bound).lower()}:{port}')
         return hosts
+
+    def _enter_admitted_preferences(self):
+        stack = getattr(self, '_pref_stack', None)
+        if stack is None or getattr(self, '_pref_entered', False):
+            return
+        parsed_path = getattr(self, '_parsed_path', None)
+        if parsed_path is None:
+            parsed_path = urllib.parse.urlparse(getattr(self, 'path', '') or '').path
+        if request_preference_scope(parsed_path):
+            stack.enter_context(preference_operation(self.server.config, self.server.resolved_paths))
+            self._pref_entered = True
 
     def _is_valid_browser_document_navigation(self, method: str, host_val: str) -> bool:
         if method != 'GET':
@@ -4976,6 +5180,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 raise StructuredError(ErrorCode.TOKEN_NOT_CONFIGURED, "Controller authentication token is not configured")
             if not self._is_valid_browser_document_navigation(method, host_val):
                 raise StructuredError(ErrorCode.UNAUTHORIZED, "Document request requires own-origin browser navigation")
+            self._enter_admitted_preferences()
             return ""
 
         provided_token = self._extract_provided_token(body_data=body_data, query_params=query_params)
@@ -4983,18 +5188,22 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             import hmac
             if not hmac.compare_digest(str(provided_token).strip(), api_key):
                 raise StructuredError(ErrorCode.UNAUTHORIZED, "Invalid or missing API authentication token")
+            self._enter_admitted_preferences()
             return api_key
 
         if allow_browser_nav and self._is_valid_browser_document_navigation(method, host_val):
+            self._enter_admitted_preferences()
             return api_key
 
         raise StructuredError(ErrorCode.UNAUTHORIZED, "Invalid or missing API authentication token")
 
-    def _authenticate_token(self, body_data=None, query_params=None, *, require_configured: bool = False):
+    def _authenticate_token(self, body_data=None, query_params=None, *, require_configured: bool = False, capture_preferences: bool = True):
         api_key = str(getattr(self.server, 'api_key', '') or '').strip()
         if not api_key:
             if require_configured:
                 raise StructuredError(ErrorCode.TOKEN_NOT_CONFIGURED, "Controller authentication token is not configured")
+            if capture_preferences:
+                self._enter_admitted_preferences()
             return
 
         provided_token = self._extract_provided_token(body_data=body_data, query_params=query_params)
@@ -5002,6 +5211,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         import hmac
         if not provided_token or not hmac.compare_digest(str(provided_token).strip(), api_key):
             raise StructuredError(ErrorCode.UNAUTHORIZED, "Invalid or missing API authentication token")
+        if capture_preferences:
+            self._enter_admitted_preferences()
 
     def _serve_static_file(self, file_path: Path):
         if not file_path.is_file():
@@ -5030,25 +5241,39 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
         self._send_bytes(200, content, content_type)
 
-    def do_GET(self):
+    def _handle_method(self, method: str):
         try:
-            self._dispatch_route('GET')
+            with ExitStack() as stack:
+                self._pref_stack = stack
+                self._pref_entered = False
+                self._dispatch_route(method)
         except StructuredError as se:
             status_code = ERROR_STATUS_MATRIX.get(se.error_code, 500)
             self._send_error_json(status_code, se.error_code, se.message, se.details)
         except Exception as e:
-            logger.error(f"Unhandled Controller error on GET {self.path}: {e}\n{traceback.format_exc()}")
+            logger.error(f"Unhandled Controller error on {method} {self.path}: {e}\n{traceback.format_exc()}")
             self._send_error_json(500, ErrorCode.SERVER_ERROR, f"Internal server error: {e}")
+        finally:
+            self._pref_stack = None
+            self._pref_entered = False
+
+    def do_GET(self):
+        self._handle_method('GET')
 
     def do_POST(self):
-        try:
-            self._dispatch_route('POST')
-        except StructuredError as se:
-            status_code = ERROR_STATUS_MATRIX.get(se.error_code, 500)
-            self._send_error_json(status_code, se.error_code, se.message, se.details)
-        except Exception as e:
-            logger.error(f"Unhandled Controller error on POST {self.path}: {e}\n{traceback.format_exc()}")
-            self._send_error_json(500, ErrorCode.SERVER_ERROR, f"Internal server error: {e}")
+        self._handle_method('POST')
+
+    def do_PUT(self):
+        self._handle_method('PUT')
+
+    def do_DELETE(self):
+        self._handle_method('DELETE')
+
+    def do_PATCH(self):
+        self._handle_method('PATCH')
+
+    def do_HEAD(self):
+        self._handle_method('HEAD')
 
     def _event_dispatcher(self):
         return getattr(self.server, 'streams', None) or EventDispatcher.get_instance()
@@ -5156,13 +5381,20 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         )
         self._send_json(200, res)
 
-    @request_preferences(request_preference_scope)
     def _dispatch_route(self, method: str):
         self._validate_request_origin()
         EventDispatcher.get_instance().controller_owned = True
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
+        self._parsed_path = path
         qs = urllib.parse.parse_qs(parsed_url.query)
+        allowed_methods = _allowed_methods_for_path(path)
+        if allowed_methods is not None and method not in allowed_methods:
+            raise StructuredError(
+                ErrorCode.METHOD_NOT_ALLOWED,
+                f"Method {method} not allowed for {path}",
+                details={"_allow": ", ".join(allowed_methods)},
+            )
         if path in STATE_ROUTES:
             return self._state_request(path, method)
 
@@ -5465,12 +5697,21 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 mapping_path = Path(raw_mp)
             mapping = load_anki_mapping(mapping_path) if mapping_path and mapping_path.exists() else None
 
-            sess = None
+            safe_sess = None
             if hasattr(self.server, 'arbiter') and self.server.arbiter:
                 with self.server.arbiter._lock:
                     sess = self.server.arbiter.sessions.get(zid)
-            if sess:
-                safe_sess = {k: v for k, v in sess.items() if k != "lock"}
+                    if sess is not None:
+                        safe_sess = {k: v for k, v in sess.items() if k != "lock"}
+                        if isinstance(safe_sess.get("headers"), list):
+                            safe_sess["headers"] = list(safe_sess["headers"])
+                        if isinstance(safe_sess.get("data_rows"), list):
+                            safe_sess["data_rows"] = [list(r) for r in safe_sess["data_rows"]]
+                        if isinstance(safe_sess.get("row_provenances"), dict):
+                            safe_sess["row_provenances"] = dict(safe_sess["row_provenances"])
+                        if isinstance(safe_sess.get("sentences"), list):
+                            safe_sess["sentences"] = [dict(s) if isinstance(s, dict) else s for s in safe_sess["sentences"]]
+            if safe_sess is not None:
                 headers = safe_sess.get("headers", [])
                 data_rows = safe_sess.get("data_rows", [])
                 sess_lang = safe_sess.get("language") or safe_sess.get("lang") or "de"
@@ -5484,20 +5725,25 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     role_fields, sess_row_provs)
                 safe_sess["row_provenances"] = sess_row_provs
                 safe_sess["rowProvenances"] = sess_row_provs
-                # Cold-cache status fallback: query SQLite sentences table if text_provenance is missing
-                if not safe_sess.get("text_provenance") and not safe_sess.get("textProvenance"):
-                    if hasattr(self.server, 'resolved_paths') and hasattr(self.server, 'config'):
-                        storage_adapter = get_storage_adapter(operation_configuration(self.server.config), self.server.resolved_paths)
-                        if getattr(storage_adapter, 'backend_name', '') == 'sqlite' and hasattr(storage_adapter, 'db'):
-                            try:
-                                db_sents = storage_adapter.db.get_sentences_by_session(zid)
-                                if db_sents:
-                                    eff_prov = next((s.get("text_provenance") for s in db_sents if s.get("text_provenance")), None)
-                                    if eff_prov:
-                                        safe_sess["text_provenance"] = eff_prov
-                                        safe_sess["textProvenance"] = eff_prov
-                            except Exception:
-                                pass
+                # Cold-cache status fallback: read missing SQLite sentence fields from one read-only snapshot.
+                warm_db_sents = None
+                need_warm_sents = (
+                    (not safe_sess.get("text_provenance") and not safe_sess.get("textProvenance"))
+                    or (("translatedText" not in safe_sess or not safe_sess["translatedText"]) and not safe_sess.get("sentence_translation"))
+                    or ("sentences" not in safe_sess or not safe_sess["sentences"])
+                )
+                if need_warm_sents and getattr(storage_adapter, 'backend_name', '') == 'sqlite' and hasattr(storage_adapter, 'db'):
+                    try:
+                        with storage_adapter.db.get_connection(read_only=True) as ro_conn:
+                            bundle = storage_adapter.db.get_session_bundle(zid, connection=ro_conn)
+                            warm_db_sents = (bundle or {}).get("sentences") or []
+                    except Exception:
+                        warm_db_sents = None
+                if not safe_sess.get("text_provenance") and not safe_sess.get("textProvenance") and warm_db_sents:
+                    eff_prov = next((s.get("text_provenance") for s in warm_db_sents if s.get("text_provenance")), None)
+                    if eff_prov:
+                        safe_sess["text_provenance"] = eff_prov
+                        safe_sess["textProvenance"] = eff_prov
 
                 if safe_sess.get("text_provenance"):
                     safe_sess["textProvenance"] = safe_sess["text_provenance"]
@@ -5516,26 +5762,17 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                             config=operation_configuration(self.server.config),
                         )
                     else:
-                        # Extract sentence_destination from SQLite sentences when in-memory cache lacks translatedText
-                        if hasattr(self.server, 'resolved_paths') and hasattr(self.server, 'config'):
-                            storage_adapter = get_storage_adapter(operation_configuration(self.server.config), self.server.resolved_paths)
-                            if getattr(storage_adapter, 'backend_name', '') == 'sqlite' and hasattr(storage_adapter, 'db'):
-                                try:
-                                    db_sents = storage_adapter.db.get_sentences_by_session(zid)
-                                    if db_sents:
-                                        s_srcs, s_dests = pair_sentence_records(db_sents)
-                                        if s_dests:
-                                            st_mode = "multi" if len(s_dests) >= 2 else safe_sess.get("text_mode", "single")
-                                            st_text = "\n".join(s_srcs) if len(s_srcs) >= 2 else (safe_sess.get("text", "") or " ".join(s_srcs))
-                                            formatted_tt = format_translated_html(
-                                                s_dests,
-                                                text_mode=st_mode,
-                                                text=st_text,
-                                                config=operation_configuration(self.server.config),
-                                            )
-                                            safe_sess["translatedText"] = formatted_tt
-                                except Exception:
-                                    pass
+                        if warm_db_sents:
+                            s_srcs, s_dests = pair_sentence_records(warm_db_sents)
+                            if s_dests:
+                                st_mode = "multi" if len(s_dests) >= 2 else safe_sess.get("text_mode", "single")
+                                st_text = "\n".join(s_srcs) if len(s_srcs) >= 2 else (safe_sess.get("text", "") or " ".join(s_srcs))
+                                safe_sess["translatedText"] = format_translated_html(
+                                    s_dests,
+                                    text_mode=st_mode,
+                                    text=st_text,
+                                    config=operation_configuration(self.server.config),
+                                )
                         if not safe_sess.get("translatedText"):
                             safe_sess["translatedText"] = ""
 
@@ -5582,20 +5819,13 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
                 if "sentences" not in safe_sess or not safe_sess["sentences"]:
                     s_list = []
-                    if hasattr(self.server, 'resolved_paths') and hasattr(self.server, 'config'):
-                        storage_adapter = get_storage_adapter(operation_configuration(self.server.config), self.server.resolved_paths)
-                        if getattr(storage_adapter, 'backend_name', '') == 'sqlite' and hasattr(storage_adapter, 'db'):
-                            try:
-                                db_sents = storage_adapter.db.get_sentences_by_session(zid)
-                                if db_sents:
-                                    for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1)):
-                                        s_list.append({
-                                            "sentence_index": s.get("sentence_index", 1),
-                                            "sentence_source": str(s.get("sentence_source") or "").strip(),
-                                            "sentence_destination": str(s.get("sentence_destination") or "").strip(),
-                                        })
-                            except Exception:
-                                pass
+                    if warm_db_sents:
+                        for s in sorted(warm_db_sents, key=lambda x: x.get("sentence_index", 1)):
+                            s_list.append({
+                                "sentence_index": s.get("sentence_index", 1),
+                                "sentence_source": str(s.get("sentence_source") or "").strip(),
+                                "sentence_destination": str(s.get("sentence_destination") or "").strip(),
+                            })
                     if not s_list:
                         st = safe_sess.get("sentence_translation")
                         if isinstance(st, dict):
@@ -5611,9 +5841,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(200, safe_sess)
                 return
 
-            # Fallback: check persistent storage (SQLite or TSV)
+            # Fallback: check persistent storage (SQLite single read-only snapshot or TSV)
             results_dir = resolve_results_dir(self.server.resolved_paths, operation_configuration(self.server.config))
-            storage_adapter = get_storage_adapter(operation_configuration(self.server.config), self.server.resolved_paths)
+            storage_adapter = get_storage_adapter(operation_configuration(self.server.config), self.server.resolved_paths, read_only=True)
             is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
             tsv_path = find_working_tsv(results_dir, zid) if results_dir and not is_sqlite else None
@@ -5621,7 +5851,15 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             is_busy = False
             restored = None
 
-            if tsv_path and tsv_path.exists():
+            if is_sqlite and hasattr(storage_adapter, 'db'):
+                try:
+                    with storage_adapter.db.get_connection(read_only=True) as ro_conn:
+                        restored = storage_adapter.restore_session(zid, results_dir=results_dir, connection=ro_conn)
+                    if restored:
+                        session_found = True
+                except Exception:
+                    session_found = False
+            elif tsv_path and tsv_path.exists():
                 session_found = True
                 is_busy = check_coordination_busy(tsv_path)
                 try:
@@ -5654,7 +5892,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if not session_found:
                 raise StructuredError(ErrorCode.NOT_FOUND, f"Session '{zid}' not active in arbiter memory or persistent storage")
 
-            # Extract headers, data_rows, and translatedText from restored session
+            # Extract headers, data_rows, and translatedText from the single restored snapshot
             headers = []
             data_rows = []
             sentence_translation = ""
@@ -5672,7 +5910,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     if not sess_lang:
                         sess_lang = restored["session"].get("source_language") or restored["session"].get("language") or "de"
 
-            # If sentence_translation not found directly, try extracting from TSV columns or SQLite sentences
+            # If sentence_translation not found directly, try extracting from TSV columns or snapshot sentences
             role_fields = get_role_fields(mapping, headers) if mapping else {}
             is_single_para = (text_mode == 'single' and '\n' not in (source_text or '').strip() and '\r' not in (source_text or '').strip())
             joiner = " " if is_single_para else "\n"
@@ -5694,31 +5932,28 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         sentence_translation = joiner.join(sent_trans_list)
 
             sentences_list = []
-            if hasattr(storage_adapter, 'backend_name') and storage_adapter.backend_name == 'sqlite' and hasattr(storage_adapter, 'db'):
-                try:
-                    db_sents = storage_adapter.db.get_sentences_by_session(zid)
-                    if db_sents:
-                        for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1)):
-                            s_dest = s.get("sentence_destination")
-                            s_src = s.get("sentence_source")
-                            entry = {
-                                "sentence_index": s.get("sentence_index", 1),
-                                "sentence_source": str(s_src).strip() if s_src else "",
-                                "sentence_destination": str(s_dest).strip() if s_dest else "",
-                            }
-                            if s.get("text_provenance"):
-                                entry["text_provenance"] = s.get("text_provenance")
-                            sentences_list.append(entry)
-                        if not sentence_translation:
-                            clean_translations = [s["sentence_destination"] for s in sentences_list if s["sentence_destination"]]
-                            if clean_translations:
-                                sentence_translation = joiner.join(clean_translations)
-                except Exception:
-                    pass
+            snapshot_sents = (restored or {}).get("sentences") or []
+            if is_sqlite and snapshot_sents:
+                for s in sorted(snapshot_sents, key=lambda x: x.get("sentence_index", 1)):
+                    s_dest = s.get("sentence_destination")
+                    s_src = s.get("sentence_source")
+                    entry = {
+                        "sentence_index": s.get("sentence_index", 1),
+                        "sentence_source": str(s_src).strip() if s_src else "",
+                        "sentence_destination": str(s_dest).strip() if s_dest else "",
+                    }
+                    if s.get("text_provenance"):
+                        entry["text_provenance"] = s.get("text_provenance")
+                    sentences_list.append(entry)
+                if not sentence_translation:
+                    clean_translations = [s["sentence_destination"] for s in sentences_list if s["sentence_destination"]]
+                    if clean_translations:
+                        sentence_translation = joiner.join(clean_translations)
 
             if is_sqlite:
-                lifecycle = storage_adapter.db.get_worker_status(zid)
-                is_busy = lifecycle['worker_status'] in ('queued', 'running')
+                sess_row = (restored or {}).get("session") or {}
+                worker_state = sess_row.get("worker_status") if isinstance(sess_row, dict) else None
+                is_busy = worker_state in ('queued', 'running')
 
             # Semantic completion check: if untranslated lemmas remain and session is recent or locked.
             # Use 1800s (30 min) recency window - Argos can take many minutes for large texts.
@@ -5757,24 +5992,23 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             session_is_busy = is_busy or (has_untranslated_lemmas and is_recent)
 
-
             fallback_row_provs = {}
             if is_sqlite:
-                try:
-                    db_words = storage_adapter.db.get_words_by_session(zid)
-                    for w in db_words:
-                        w_prov = w.get("word_provenance")
-                        if w_prov:
-                            t_ord = str(w.get("token_order", ""))
-                            if t_ord:
-                                fallback_row_provs[t_ord] = w_prov
-                                if t_ord.isdigit():
-                                    fallback_row_provs[int(t_ord)] = w_prov
-                except Exception:
-                    pass
+                for w in (restored or {}).get("words") or []:
+                    w_prov = w.get("word_provenance")
+                    if w_prov:
+                        t_ord = str(w.get("token_order", ""))
+                        if t_ord:
+                            fallback_row_provs[t_ord] = w_prov
+                            if t_ord.isdigit():
+                                fallback_row_provs[int(t_ord)] = w_prov
 
-            rows_dict = format_storage_update_rows(storage_adapter, zid, data_rows, headers, role_fields,
-                fallback_row_provs)
+            if is_sqlite:
+                snapshot_meta = restored_occurrence_metadata(restored or {}) if ('TokenOrder' in headers and role_fields.get('sentence_index', 'SentenceSourceIndex') in headers) else {}
+                rows_dict = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=fallback_row_provs, **snapshot_meta)
+            else:
+                rows_dict = format_storage_update_rows(storage_adapter, zid, data_rows, headers, role_fields, fallback_row_provs)
+
             if len(sentences_list) >= 2:
                 s_srcs, s_dests = pair_sentence_records(sentences_list)
                 eff_status_mode = "multi" if len(s_dests) >= 2 else text_mode
@@ -5794,13 +6028,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 ) if sentence_translation else ""
 
             eff_text_prov = None
-            if is_sqlite:
-                try:
-                    db_sents = storage_adapter.db.get_sentences_by_session(zid)
-                    if db_sents:
-                        eff_text_prov = next((s.get("text_provenance") for s in db_sents if s.get("text_provenance")), None)
-                except Exception:
-                    pass
+            if is_sqlite and snapshot_sents:
+                eff_text_prov = next((s.get("text_provenance") for s in snapshot_sents if s.get("text_provenance")), None)
 
             stored_provs = get_session_active_providers(zid, config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths) if 'get_session_active_providers' in globals() else {}
             active_text_p = stored_provs.get("active_text_provider")
@@ -5859,8 +6088,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             text_mode = body.get('text_mode') or body.get('text-mode') or qs.get('text_mode', ['single'])[0]
             theme = body.get('theme') or qs.get('theme', [operation_configuration(self.server.config).get('ui', 'theme', fallback='dark')])[0]
             zoom = body.get('zoom') or qs.get('zoom', [operation_configuration(self.server.config).get('rendering', 'default_zoom', fallback='100')])[0]
-            seq_num = body.get('seq_num') or body.get('seq-num') or qs.get('seq_num', [None])[0]
-            split_gap = body.get('split_gap_limit') or body.get('split-gap-limit') or qs.get('split_gap_limit', [None])[0]
+            seq_num = body.get('seq_num') if 'seq_num' in body else (body.get('seq-num') if 'seq-num' in body else qs.get('seq_num', [None])[0])
+            split_gap = body.get('split_gap_limit') if 'split_gap_limit' in body else (body.get('split-gap-limit') if 'split-gap-limit' in body else qs.get('split_gap_limit', [None])[0])
+            parsed_seq_num = _parse_strict_int(seq_num, 'seq_num', min_value=1, allow_str=True) if (seq_num is not None and str(seq_num).strip() != '') else None
+            parsed_split_gap = _parse_strict_int(split_gap, 'split_gap_limit', min_value=0, allow_str=True) if (split_gap is not None and str(split_gap).strip() != '') else None
             tsv_path = body.get('tsv') or qs.get('tsv', [None])[0]
             raw_bypass = body.get('bypass_lang_check')
             if raw_bypass is None:
@@ -5916,8 +6147,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         zoom_level=str(zoom),
                         theme=theme,
                         tsv_path=resolved_tsv,
-                        split_gap_limit=int(split_gap) if split_gap else None,
-                        seq_num=int(seq_num) if seq_num else None,
+                        split_gap_limit=parsed_split_gap,
+                        seq_num=parsed_seq_num,
                         trace_id=f"{session_zid}:render:init",
                         spawn_children=False,
                         return_children=True,
@@ -6047,8 +6278,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     zoom_level=str(zoom),
                     theme=theme,
                     tsv_path=Path(tsv_path) if tsv_path else None,
-                    split_gap_limit=int(split_gap) if split_gap else None,
-                    seq_num=int(seq_num) if seq_num else None,
+                    split_gap_limit=parsed_split_gap,
+                    seq_num=parsed_seq_num,
                     trace_id=f"{active_zid}:render:init",
                     spawn_children=False,
                     return_children=True,
@@ -6119,10 +6350,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             )
 
             if project_id:
+                pid_int = _parse_strict_int(project_id, 'project_id', min_value=1, allow_str=True)
                 req_zid = generate_unique_zid()
                 try:
                     synthesized = synthesize_project_materials(
-                        project_id=int(project_id),
+                        project_id=pid_int,
                         config=operation_configuration(self.server.config),
                         resolved_paths=self.server.resolved_paths,
                         language=language,
@@ -6480,10 +6712,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             language = qs.get('language', [None])[0]
 
             if project_id:
+                pid_int = _parse_strict_int(project_id, 'project_id', min_value=1, allow_str=True)
                 req_zid = generate_unique_zid()
                 try:
                     synthesized = synthesize_project_materials(
-                        project_id=int(project_id),
+                        project_id=pid_int,
                         config=operation_configuration(self.server.config),
                         resolved_paths=self.server.resolved_paths,
                         language=language,
@@ -6662,16 +6895,51 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 if req_field not in body:
                     raise StructuredError(ErrorCode.MISSING_FIELD, f"Missing required payload field: '{req_field}'")
 
+            tag_status = _parse_strict_bool(body["status"], "status")
+            row_id_val = _parse_strict_int(body["row_id"], "row_id", min_value=0)
+            token_order_val = (
+                _parse_strict_int(body["token_order"], "token_order", min_value=0)
+                if "token_order" in body and body["token_order"] is not None
+                else row_id_val
+            )
+            session_zid_val = str(body["session_zid"]).strip()
+            cfg = operation_configuration(self.server.config)
+            mapping_file = self.server.resolved_paths.get('anki_mapping_file') if self.server.resolved_paths else None
+            mapping = load_anki_mapping(mapping_file) if mapping_file else None
+            selected_col = resolve_selected_column(mapping)
+
+            if "sentence_idx" in body and body["sentence_idx"] is not None:
+                sentence_idx_val = _parse_strict_int(body["sentence_idx"], "sentence_idx", min_value=1)
+            else:
+                adapter_ro = getattr(self.server.arbiter, 'storage_adapter', None) or get_storage_adapter(
+                    cfg, self.server.resolved_paths, read_only=True
+                )
+                distinct_sentences = set()
+                if getattr(adapter_ro, 'backend_name', '') == 'sqlite' and hasattr(adapter_ro, 'db'):
+                    for w in adapter_ro.db.get_words_by_session(session_zid_val):
+                        if w.get("sentence_index") is not None:
+                            distinct_sentences.add(int(w["sentence_index"]))
+                if len(distinct_sentences) > 1:
+                    raise StructuredError(
+                        ErrorCode.INVALID_PAYLOAD,
+                        "Explicit 'sentence_idx' is required when tagging a multi-sentence session",
+                    )
+                sentence_idx_val = next(iter(distinct_sentences), 1)
+
             req_zid = generate_server_zid(self.server)
-            deltas = [{"row_id": int(body["row_id"]), "token_order": int(body.get("token_order", body["row_id"])), "sentence_idx": int(body.get("sentence_idx", 1)), "column": "DeskSelected", "value": "1" if body["status"] else ""}]
-            res = core_edit_save(
-                tsv_path_or_session=body["session_zid"],
+            deltas = [{
+                "row_id": row_id_val,
+                "token_order": token_order_val,
+                "sentence_idx": sentence_idx_val,
+                "column": selected_col,
+                "value": "1" if tag_status else "",
+            }]
+            res = self.server.arbiter.save_session(
+                session_zid=session_zid_val,
                 deltas=deltas,
-                config=operation_configuration(self.server.config),
-                resolved_paths=self.server.resolved_paths,
                 fingerprint=body["fingerprint"],
-                zid=req_zid,
                 language=body["language"],
+                zid=req_zid,
             )
             self._send_json(200, {
                 "zid": res["zid"],
@@ -6786,11 +7054,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             # Construct URLs for browser tabs
             port = getattr(self.server, 'server_port', None) or (self.server.server_address[1] if hasattr(self.server, 'server_address') else 18335)
             host = self.server.server_address[0] if hasattr(self.server, 'server_address') and self.server.server_address[0] not in ('0.0.0.0', '') else '127.0.0.1'
+            formatted_host = _format_http_host(host)
             api_token = getattr(self.server, 'api_key', '')
             theme = draft.get("theme", "dark")
 
             def build_browser_url(s_zid, s_num):
-                return f"http://{host}:{port}/?session_zid={urllib.parse.quote(str(s_zid))}&seq_num={urllib.parse.quote(str(s_num))}&theme={urllib.parse.quote(str(theme))}"
+                return f"http://{formatted_host}:{port}/?session_zid={urllib.parse.quote(str(s_zid))}&seq_num={urllib.parse.quote(str(s_num))}&theme={urllib.parse.quote(str(theme))}"
 
             parent_mode = "full"
             delivery_mode = "container"
@@ -6876,7 +7145,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             port = getattr(self.server, 'server_port', None) or (self.server.server_address[1] if hasattr(self.server, 'server_address') else 18335)
             host = self.server.server_address[0] if hasattr(self.server, 'server_address') and self.server.server_address[0] not in ('0.0.0.0', '') else '127.0.0.1'
-            base_url = f"http://{host}:{port}"
+            base_url = f"http://{_format_http_host(host)}:{port}"
 
             spawned_urls = []
             for u in raw_urls:
@@ -7003,7 +7272,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 project_id = db.create_project(
                     title=title,
                     slug=slug,
-                    parent_id=int(parent_id) if parent_id is not None else None,
+                    parent_id=_parse_strict_int(parent_id, 'parent_id', min_value=1) if parent_id is not None else None,
                     description=description
                 )
                 self._send_json(200, {"ok": True, "project_id": project_id})
@@ -7019,11 +7288,16 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             project_id = body.get('project_id')
             if project_id is None:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
+            pid_int = _parse_strict_int(project_id, 'project_id', min_value=1)
             updates = {k: v for k, v in body.items() if k in ('title', 'slug', 'description', 'parent_id', 'order_index')}
+            if updates.get('parent_id') is not None:
+                updates['parent_id'] = _parse_strict_int(updates['parent_id'], 'parent_id', min_value=1)
+            if updates.get('order_index') is not None:
+                updates['order_index'] = _parse_strict_int(updates['order_index'], 'order_index', min_value=0)
             from kardenwort_db import KardenwortDB
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
-            ok = db.update_project(int(project_id), updates)
-            self._send_json(200, {"ok": ok, "project_id": project_id})
+            ok = db.update_project(pid_int, updates)
+            self._send_json(200, {"ok": ok, "project_id": pid_int})
             return
 
         if path == '/api/v1/admin/projects/delete':
@@ -7034,10 +7308,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             project_id = body.get('project_id')
             if project_id is None:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
+            pid_int = _parse_strict_int(project_id, 'project_id', min_value=1)
             from kardenwort_db import KardenwortDB
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
-            ok = db.soft_delete_project(int(project_id))
-            self._send_json(200, {"ok": ok, "project_id": project_id})
+            ok = db.soft_delete_project(pid_int)
+            self._send_json(200, {"ok": ok, "project_id": pid_int})
             return
 
         if path == '/api/v1/admin/projects/link':
@@ -7051,10 +7326,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
             if not session_zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
+            pid_int = _parse_strict_int(project_id, 'project_id', min_value=1)
             from kardenwort_db import KardenwortDB
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
-            ok = db.link_session_to_project(int(project_id), str(session_zid))
-            self._send_json(200, {"ok": ok, "project_id": project_id, "session_zid": session_zid})
+            ok = db.link_session_to_project(pid_int, str(session_zid))
+            self._send_json(200, {"ok": ok, "project_id": pid_int, "session_zid": session_zid})
             return
 
         if path == '/api/v1/admin/projects/batch-link':
@@ -7065,6 +7341,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             project_id = body.get('project_id')
             if project_id is None:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
+            pid_int = _parse_strict_int(project_id, 'project_id', min_value=1)
 
             mode = body.get('mode', 'explicit')
             session_zids = body.get('session_zids') or body.get('zids') or []
@@ -7075,13 +7352,18 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
 
             if mode == 'all_matching' or (not session_zids and body.get('all_matching')):
+                filter_pid = (
+                    _parse_strict_int(filter_params['project_id'], 'filter.project_id', min_value=1)
+                    if filter_params.get('project_id') is not None
+                    else None
+                )
                 linked_count = db.link_sessions_batch(
-                    project_id=int(project_id),
+                    project_id=pid_int,
                     session_zids=None,
                     query=filter_params.get('query'),
                     language=filter_params.get('language'),
                     assigned=filter_params.get('assigned'),
-                    filter_project_id=filter_params.get('project_id'),
+                    filter_project_id=filter_pid,
                     excluded_zids=excluded_zids,
                 )
             else:
@@ -7089,10 +7371,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     raise StructuredError(ErrorCode.MISSING_FIELD, "Missing or empty 'session_zids' in payload")
                 clean_list = [str(z) for z in session_zids if str(z) not in excluded_zids]
                 linked_count = db.link_sessions_batch(
-                    project_id=int(project_id),
+                    project_id=pid_int,
                     session_zids=clean_list,
                 )
-            self._send_json(200, {"ok": True, "project_id": project_id, "linked_count": linked_count})
+            self._send_json(200, {"ok": True, "project_id": pid_int, "linked_count": linked_count})
             return
 
         if path == '/api/v1/admin/projects/unlink':
@@ -7106,10 +7388,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
             if not session_zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
+            pid_int = _parse_strict_int(project_id, 'project_id', min_value=1)
             from kardenwort_db import KardenwortDB
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
-            ok = db.unlink_session_from_project(int(project_id), str(session_zid))
-            self._send_json(200, {"ok": ok, "project_id": project_id, "session_zid": session_zid})
+            ok = db.unlink_session_from_project(pid_int, str(session_zid))
+            self._send_json(200, {"ok": ok, "project_id": pid_int, "session_zid": session_zid})
             return
 
         if path == '/api/v1/admin/projects/reorder':
@@ -7121,12 +7404,13 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             session_zids = body.get('session_zids', [])
             if project_id is None:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
+            pid_int = _parse_strict_int(project_id, 'project_id', min_value=1)
             if not isinstance(session_zids, list):
                 raise StructuredError(ErrorCode.INVALID_PAYLOAD, "'session_zids' must be a list")
             from kardenwort_db import KardenwortDB
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
-            ok = db.reorder_project_sessions(int(project_id), session_zids)
-            self._send_json(200, {"ok": ok, "project_id": project_id, "session_zids": session_zids})
+            ok = db.reorder_project_sessions(pid_int, session_zids)
+            self._send_json(200, {"ok": ok, "project_id": pid_int, "session_zids": session_zids})
             return
 
         if path == '/api/v1/admin/projects/export-deck':
@@ -7137,10 +7421,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             project_id = body.get('project_id')
             if project_id is None:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
+            pid_int = _parse_strict_int(project_id, 'project_id', min_value=1)
             lang = body.get('language')
             req_zid = generate_server_zid(self.server)
             res = aggregate_project_materials(
-                project_id=int(project_id),
+                project_id=pid_int,
                 config=operation_configuration(self.server.config),
                 resolved_paths=self.server.resolved_paths,
                 language=lang,
@@ -7164,10 +7449,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             if project_id is None:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload/parameters")
+            pid_int = _parse_strict_int(project_id, 'project_id', min_value=1, allow_str=(method == 'GET'))
 
             req_zid = generate_server_zid(self.server)
             res = synthesize_project_materials(
-                project_id=int(project_id),
+                project_id=pid_int,
                 config=operation_configuration(self.server.config),
                 resolved_paths=self.server.resolved_paths,
                 language=lang,
@@ -7185,12 +7471,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             language = qs.get('language', [None])[0] or qs.get('lang', [None])[0]
             assigned_raw = qs.get('assigned', [None])[0]
             project_id_raw = qs.get('project_id', [None])[0]
-            limit_raw = qs.get('limit', ['50'])[0]
-            offset_raw = qs.get('offset', ['0'])[0]
+            limit_raw = qs.get('limit', [None])[0]
+            offset_raw = qs.get('offset', [None])[0]
 
-            limit = int(limit_raw) if limit_raw and limit_raw.isdigit() else 50
-            offset = int(offset_raw) if offset_raw and offset_raw.isdigit() else 0
-            project_id = int(project_id_raw) if project_id_raw and project_id_raw.isdigit() else None
+            limit = _parse_strict_int(limit_raw, 'limit', min_value=1, max_value=1000, allow_str=True) if limit_raw is not None else 50
+            offset = _parse_strict_int(offset_raw, 'offset', min_value=0, allow_str=True) if offset_raw is not None else 0
+            project_id = _parse_strict_int(project_id_raw, 'project_id', min_value=1, allow_str=True) if project_id_raw is not None and str(project_id_raw).strip() != '' else None
 
             from kardenwort_db import KardenwortDB
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
@@ -7333,6 +7619,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             if not tsv_content:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'tsv_content' in payload")
+            if not isinstance(tsv_content, str):
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, "'tsv_content' must be a string")
 
             from kardenwort_db import KardenwortDB
             req_zid = generate_server_zid(self.server)
@@ -7345,6 +7633,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 config=operation_configuration(self.server.config),
                 resolved_paths=self.server.resolved_paths,
                 zid=req_zid,
+                allow_path=False,
             )
 
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
@@ -7400,7 +7689,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": ok, "restored_type": "session", "zid": session_zid})
                 return
             elif 'project_id' in body and body['project_id'] is not None:
-                project_id = int(body['project_id'])
+                project_id = _parse_strict_int(body['project_id'], 'project_id', min_value=1)
                 ok = db.restore_project(project_id)
                 self._send_json(200, {"ok": ok, "restored_type": "project", "project_id": project_id})
                 return
@@ -7414,10 +7703,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._authenticate_token(body, require_configured=True)
             older_than_days = body.get('older_than_days')
             if older_than_days is not None:
-                try:
-                    older_than_days = float(older_than_days)
-                except ValueError:
-                    raise StructuredError(ErrorCode.INVALID_PAYLOAD, "'older_than_days' must be a numeric value")
+                older_than_days = _parse_strict_non_negative_float(older_than_days, 'older_than_days')
 
             from kardenwort_db import KardenwortDB
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
