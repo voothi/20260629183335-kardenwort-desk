@@ -54,8 +54,38 @@ def current_value(row, index):
     return row[index].strip()
 
 
+def _is_word_char(ch):
+    return ch.isalnum() or ch == '_'
+
+
+def _ends_http(token):
+    return token.endswith('http') and (len(token) == 4 or not _is_word_char(token[-5]))
+
+
+def _starts_429(token):
+    return token.startswith('429') and (len(token) == 3 or not _is_word_char(token[3]))
+
+
+def _is_provider_http_429(parts):
+    if parts[:2] != ['error', 'calling']:
+        return False
+    return any(_ends_http(left) and _starts_429(right) for left, right in zip(parts[2:], parts[3:]))
+
+
+def _is_rate_limit_failure(text):
+    if '\n' in text or '\r' in text:
+        return False
+    parts = text.lower().split()
+    return parts == ['http', '429', 'too', 'many', 'requests'] or _is_provider_http_429(parts)
+
+
 def _default_failure(value):
-    return value == '[FAILED]' or value.startswith('[Error')
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if text == '[FAILED]' or text.startswith('[Error'):
+        return True
+    return bool(text) and _is_rate_limit_failure(text)
 
 
 def incoming_value(match, names, is_failure=_default_failure):
@@ -194,8 +224,8 @@ def _sentence_index(key):
     if isinstance(key, bool):
         return None
     if isinstance(key, int):
-        return key + 1
-    return int(key) + 1 if isinstance(key, str) and key.isdigit() else None
+        return key + 1 if key >= 0 else None
+    return int(key) + 1 if isinstance(key, str) and key.isascii() and key.isdigit() else None
 
 
 def sentence_entries(raw):
@@ -212,7 +242,8 @@ def sentence_entries(raw):
 def padded_value(padded_dict, key):
     if not isinstance(padded_dict, dict):
         return None
-    candidates = (key, str(key), int(key)) if str(key).isdigit() else (key, str(key))
+    key_str = str(key)
+    candidates = (key, key_str, int(key_str)) if (key_str.isascii() and key_str.isdigit()) else (key, key_str)
     for candidate in candidates:
         value = padded_dict.get(candidate)
         if isinstance(value, str) and value:
@@ -220,9 +251,14 @@ def padded_value(padded_dict, key):
     return None
 
 
+def _has_valid_sentence_dest(row):
+    dest = str(row.get('sentence_destination') or '').strip()
+    return bool(dest) and not _default_failure(dest)
+
+
 def sentences_complete(db_sentences):
     sources = [row for row in db_sentences if str(row.get('sentence_source') or '').strip()]
-    return bool(sources) and all(str(row.get('sentence_destination') or '').strip() for row in sources)
+    return bool(sources) and all(_has_valid_sentence_dest(row) for row in sources)
 
 
 def committed_translation_map(sentences):
@@ -360,7 +396,7 @@ def extract_untranslated_lemmas(data_rows, col_lemma, col_word_dest):
 def _record_row_provenance(row, row_idx, col_token_order, chunk_prov, sess_row_provs, key=None, occurrence_provs=None):
     t_ord = current_value(row, col_token_order) or str(row_idx)
     sess_row_provs[t_ord] = chunk_prov
-    if t_ord.isdigit():
+    if t_ord.isascii() and t_ord.isdigit():
         sess_row_provs[int(t_ord)] = chunk_prov
     if occurrence_provs is not None and key is not None:
         occurrence_provs[(str(key[0]), str(key[1]))] = chunk_prov

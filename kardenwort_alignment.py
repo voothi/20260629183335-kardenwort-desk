@@ -41,8 +41,38 @@ def normalize_sentence_result(raw, single_unit=False):
     return main, padded
 
 
+def _is_word_char(ch):
+    return ch.isalnum() or ch == '_'
+
+
+def _ends_http(token):
+    return token.endswith('http') and (len(token) == 4 or not _is_word_char(token[-5]))
+
+
+def _starts_429(token):
+    return token.startswith('429') and (len(token) == 3 or not _is_word_char(token[3]))
+
+
+def _is_provider_http_429(parts):
+    if parts[:2] != ['error', 'calling']:
+        return False
+    return any(_ends_http(left) and _starts_429(right) for left, right in zip(parts[2:], parts[3:]))
+
+
+def _is_rate_limit_failure(text):
+    if '\n' in text or '\r' in text:
+        return False
+    parts = text.lower().split()
+    return parts == ['http', '429', 'too', 'many', 'requests'] or _is_provider_http_429(parts)
+
+
 def failed_sentence_text(value):
-    return value.strip() == '[FAILED]' or value.strip().startswith('[Error')
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if text == '[FAILED]' or text.startswith('[Error'):
+        return True
+    return bool(text) and _is_rate_limit_failure(text)
 
 
 def unresolved_sentences(records):
@@ -143,7 +173,7 @@ def row_sentence_index(row, column, main):
     if column >= len(row):
         return None
     value = str(row[column]).strip()
-    return int(value) if value.isdigit() else None
+    return int(value) if value.isascii() and value.isdigit() else None
 
 
 def patch_destination(row, column, value):

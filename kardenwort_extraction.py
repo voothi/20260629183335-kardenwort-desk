@@ -1,5 +1,14 @@
 """Strict JSONL record boundary for the configured word extractor."""
 import json
+import math
+
+
+def _valid_scalar(value):
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return isinstance(value, (str, int))
 
 
 def extraction_rows(stdout, headers):
@@ -10,6 +19,6 @@ def extraction_rows(stdout, headers):
 def extraction_row(record, headers):
     if not isinstance(record, dict) or set(record) != set(headers):
         raise ValueError('Extractor changed the requested column manifest')
-    if any(not isinstance(value, (str, int, float)) for value in record.values()):
+    if any(not _valid_scalar(value) for value in record.values()):
         raise ValueError('Extractor returned a non-scalar field')
     return [str(record[name]) for name in headers]

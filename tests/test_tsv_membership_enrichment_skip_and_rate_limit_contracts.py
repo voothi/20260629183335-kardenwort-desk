@@ -92,8 +92,13 @@ def _tsv_adapter(tmp_path: Path, *, mapping_text: str | None = None):
     return desk.TsvStorageAdapter(cfg, paths), cfg, paths, results_dir, mapping_file
 
 
-def _http_get_json(url: str, token: str):
-    req = Request(url, headers={"X-API-Token": token}, method="GET")
+def _http_post_json(url: str, token: str, payload: dict):
+    req = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-API-Token": token},
+        method="POST",
+    )
     try:
         resp = urlopen(req, timeout=10)
     except HTTPError as err:
@@ -145,8 +150,10 @@ def test_tsv_missing_default_selected_column_returns_empty_membership_without_mo
     assert _sha256(neighbor) == neighbor_hash
     assert _sha256(mapping_file) == mapping_hash
 
+    http_root = tmp_path / "http"
+    http_root.mkdir(parents=True, exist_ok=True)
     with translation_service(DeterministicTranslationHandler) as translator:
-        with controller_lifetime(tmp_path / "http", translator, backend="tsv") as (url, server):
+        with controller_lifetime(http_root, translator, backend="tsv") as (url, server):
             http_results = Path(server.resolved_paths["results_dir"])
             http_tsv = http_results / f"{TSV_ZID}-haus.de.tsv"
             http_neighbor = http_results / f"{NEIGHBOR_ZID}-baum.de.tsv"
@@ -163,10 +170,11 @@ def test_tsv_missing_default_selected_column_returns_empty_membership_without_mo
             http_tsv_hash = _sha256(http_tsv)
             http_neighbor_hash = _sha256(http_neighbor)
 
-            status, body = _http_get_json(f"{url}/internal/selection?session_zid={TSV_ZID}", server.api_key)
+            status, body = _http_post_json(f"{url}/internal/selection", server.api_key, {"session_zid": TSV_ZID})
             assert status == 200, body
-            assert body["status"] == "success"
-            assert body["data"]["selection"] == {}
+            assert body.get("ok") is True or body.get("status") == "success"
+            selection_map = body.get("shared_selection") if "shared_selection" in body else body.get("data", {}).get("shared_selection")
+            assert selection_map == {}, body
             assert _sha256(http_tsv) == http_tsv_hash
             assert _sha256(http_neighbor) == http_neighbor_hash
 

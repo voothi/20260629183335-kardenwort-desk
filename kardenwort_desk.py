@@ -3395,18 +3395,33 @@ class TsvStorageAdapter(StorageAdapter):
         self.config = config
         self.resolved_paths = resolved_paths or {}
 
+    def _configured_selected_column(self) -> str:
+        mapping_path = self.resolved_paths.get('anki_mapping_file')
+        mapping = load_anki_mapping(mapping_path) if mapping_path else None
+        return resolve_selected_column(mapping)
+
     def _read_shared_selection(self, session_zid, zid=None):
         results_dir = resolve_results_dir(self.resolved_paths, self.config)
         session = self.restore_session(session_zid, results_dir=results_dir)
-        headers = session['headers']
+        headers = session.get('headers')
+        if not headers:
+            raise ValueError('TSV session is missing headers')
+        selected_name = self._configured_selected_column()
+        if selected_name not in headers:
+            return {}
         lemma_column, selected_column = self._selection_columns(headers)
-        return project_shared_selection((row[lemma_column], row[selected_column]) for row in session['data_rows'])
+        required_width = max(lemma_column, selected_column) + 1
+        rows = session.get('data_rows') or []
+        if any(len(row) < required_width for row in rows):
+            raise IndexError('TSV row truncated before required selection columns')
+        return project_shared_selection((row[lemma_column], row[selected_column]) for row in rows)
 
     def _selection_columns(self, headers):
         mapping_path = self.resolved_paths.get('anki_mapping_file')
         mapping = load_anki_mapping(mapping_path) if mapping_path else None
         roles = get_role_fields(mapping, headers)
-        return headers.index(roles.get('lemma')), headers.index(roles.get('selected', 'DeskSelected'))
+        selected_name = resolve_selected_column(mapping)
+        return headers.index(roles.get('lemma')), headers.index(selected_name)
 
     def save_session(
         self,
@@ -3681,6 +3696,35 @@ class SqliteStorageAdapter(StorageAdapter):
         if col_idx is None or col_idx >= len(row) or row[col_idx] is None:
             return ""
         return str(row[col_idx]).strip()
+
+    @staticmethod
+    def _parse_strict_coord_int(value: Any, *, minimum: int, label: str, session_zid: str) -> int:
+        if isinstance(value, bool) or value is None:
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Invalid {label} '{value!r}' for session '{session_zid}'",
+            )
+        if isinstance(value, int):
+            number = value
+        elif isinstance(value, str):
+            raw = value.strip()
+            if not raw or not raw.isascii() or not raw.isdigit():
+                raise StructuredError(
+                    ErrorCode.INVALID_STATE,
+                    f"Invalid {label} '{value!r}' for session '{session_zid}'",
+                )
+            number = int(raw)
+        else:
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Invalid {label} '{value!r}' for session '{session_zid}'",
+            )
+        if number < minimum:
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Invalid {label} '{value!r}' below {minimum} for session '{session_zid}'",
+            )
+        return number
 
     @staticmethod
     def _parse_explicit_manifest_sentence_indices(
@@ -4115,17 +4159,41 @@ class SqliteStorageAdapter(StorageAdapter):
                     s_dict["text_provenance"] = text_provenance
                 for k in ("sentence_destination", "sentence_destination2"):
                     v = s_dict.get(k)
-                    if isinstance(v, str) and (v.strip() == "[FAILED]" or v.strip().startswith("[Error")):
+                    if is_stored_translation_failure(v):
                         s_dict[k] = ""
                 norm_sentences.append(s_dict)
         norm_words = []
         if words is not None:
+            seen_direct_coords: Set[Tuple[int, int]] = set()
+            allowed_legacy_sent_zero = (
+                bool(norm_sentences) and any(s.get("sentence_index") == 0 for s in norm_sentences)
+            )
             for w_idx, w in enumerate(words):
                 w_dict = dict(w)
+                s_min = 0 if allowed_legacy_sent_zero else 1
+                s_coord = self._parse_strict_coord_int(
+                    w_dict.get("sentence_index"), minimum=s_min, label="sentence_index", session_zid=session_zid
+                )
+                if "token_order" in w_dict and w_dict["token_order"] is not None:
+                    t_coord = self._parse_strict_coord_int(
+                        w_dict["token_order"], minimum=0, label="token_order", session_zid=session_zid
+                    )
+                else:
+                    t_coord = w_idx
+                if (s_coord, t_coord) in seen_direct_coords:
+                    raise StructuredError(
+                        ErrorCode.INVALID_STATE,
+                        f"Duplicate occurrence coordinate ({s_coord}, {t_coord}) for session '{session_zid}'",
+                    )
+                seen_direct_coords.add((s_coord, t_coord))
+                w_dict["sentence_index"] = s_coord
+                w_dict["token_order"] = t_coord
                 if row_provenances and not w_dict.get("word_provenance"):
-                    t_ord = w_dict.get("token_order", w_idx)
+                    t_ord = t_coord
                     prov_from_arg = (
-                        row_provenances.get(t_ord)
+                        row_provenances.get((s_coord, t_ord))
+                        or row_provenances.get((str(s_coord), str(t_ord)))
+                        or row_provenances.get(t_ord)
                         or row_provenances.get(str(t_ord))
                         or row_provenances.get(w_idx)
                     )
@@ -4207,7 +4275,7 @@ class SqliteStorageAdapter(StorageAdapter):
                         if col_sent_idx < len(row) and row[col_sent_idx] is not None
                         else ""
                     )
-                    if not raw_s_idx.isdigit():
+                    if not raw_s_idx.isascii() or not raw_s_idx.isdigit():
                         raise StructuredError(
                             ErrorCode.INVALID_STATE,
                             f"Missing or invalid SentenceSourceIndex at row {row_idx} for multi-sentence session '{session_zid}'",
@@ -4239,7 +4307,7 @@ class SqliteStorageAdapter(StorageAdapter):
                     return False, None
                 raw_val = str(row[col_idx])
                 stripped = raw_val.strip()
-                if stripped == "[FAILED]" or stripped.startswith("[Error"):
+                if is_stored_translation_failure(stripped):
                     return True, ""
                 if stripped == "":
                     return (True, "") if clear_sentence_destinations else (False, None)
@@ -4308,10 +4376,10 @@ class SqliteStorageAdapter(StorageAdapter):
                             sent_map[s_idx]["sentence_source_audio"] = aud_val
                 else:
                     dst_val = row[col_sent_dst] if col_sent_dst is not None and col_sent_dst < len(row) and str(row[col_sent_dst]).strip() else ("" if (clear_sentence_destinations and col_sent_dst is not None) else existing_sent.get("sentence_destination"))
-                    if dst_val and (str(dst_val).strip() == "[FAILED]" or str(dst_val).strip().startswith("[Error")):
+                    if dst_val and is_stored_translation_failure(str(dst_val)):
                         dst_val = ""
                     dst2_val = row[col_sent_dst2] if col_sent_dst2 is not None and col_sent_dst2 < len(row) and str(row[col_sent_dst2]).strip() else ("" if (clear_sentence_destinations and col_sent_dst2 is not None) else existing_sent.get("sentence_destination2"))
-                    if dst2_val and (str(dst2_val).strip() == "[FAILED]" or str(dst2_val).strip().startswith("[Error")):
+                    if dst2_val and is_stored_translation_failure(str(dst2_val)):
                         dst2_val = ""
 
                     if not src_val and source_raw_text:
@@ -4350,15 +4418,17 @@ class SqliteStorageAdapter(StorageAdapter):
                 morph = get_col_val(row, "wordsourcemorphologyai")
                 ipa = get_col_val(row, "wordsourceipa")
                 w_dest = get_col_val(row, "worddestination")
-                if w_dest and (w_dest.strip() == "[FAILED]" or w_dest.strip().startswith("[Error")):
+                w_dest_failed = is_stored_translation_failure(w_dest)
+                if w_dest_failed:
                     w_dest = ""
                 w_dest_inf = get_col_val(row, "worddestinationinflectedform")
-                if w_dest_inf and (w_dest_inf.strip() == "[FAILED]" or w_dest_inf.strip().startswith("[Error")):
+                w_dest_inf_failed = is_stored_translation_failure(w_dest_inf)
+                if w_dest_inf_failed:
                     w_dest_inf = ""
                 sel_raw = get_col_val(row, selected_field)
                 selected = 1 if str(sel_raw).strip() in ("1", "true", "True") else 0
                 box_raw = get_col_val(row, "leitnerbox")
-                box = int(box_raw) if box_raw.isdigit() else 1
+                box = int(box_raw) if (box_raw.isascii() and box_raw.isdigit()) else 1
                 due = get_col_val(row, "leitnerdue") or None
                 deck = get_col_val(row, "deck") or None
                 oxford = get_col_val(row, "classificationoxford") or None
@@ -4374,13 +4444,26 @@ class SqliteStorageAdapter(StorageAdapter):
                         if val:
                             extra[h_name] = val
 
-                t_ord_raw = get_col_val(row, "tokenorder")
-                token_order = int(t_ord_raw) if (t_ord_raw is not None and str(t_ord_raw).strip().isdigit()) else row_idx
+                col_t_ord = headers_lower.get("tokenorder")
+                if col_t_ord is None:
+                    col_t_ord = headers_lower.get("token_order")
+                if col_t_ord is not None:
+                    raw_t_ord = row[col_t_ord] if col_t_ord < len(row) else ""
+                    if raw_t_ord is not None and str(raw_t_ord).strip() != "":
+                        token_order = self._parse_strict_coord_int(
+                            raw_t_ord, minimum=0, label="TokenOrder", session_zid=session_zid
+                        )
+                    else:
+                        token_order = row_idx
+                else:
+                    token_order = row_idx
 
                 prov_from_arg = None
                 if row_provenances:
                     prov_from_arg = (
-                        row_provenances.get(token_order)
+                        row_provenances.get((s_idx, token_order))
+                        or row_provenances.get((str(s_idx), str(token_order)))
+                        or row_provenances.get(token_order)
                         or row_provenances.get(str(token_order))
                         or row_provenances.get(row_idx)
                     )
@@ -4389,14 +4472,22 @@ class SqliteStorageAdapter(StorageAdapter):
                 if existing_w and lemma and existing_w.get("lemma") and existing_w["lemma"].strip().lower() != lemma.strip().lower():
                     existing_w = existing_words_by_lemma.get(lemma.strip().lower(), {})
                 effective_w_dest = (
-                    w_dest
-                    if (w_dest and "skeleton-loader" not in w_dest)
-                    else existing_w.get("word_destination")
+                    None
+                    if w_dest_failed
+                    else (
+                        w_dest
+                        if (w_dest and "skeleton-loader" not in w_dest)
+                        else existing_w.get("word_destination")
+                    )
                 )
                 effective_w_prov = (
                     prov_from_arg
-                    or existing_w.get("word_provenance")
-                    or ("cached:sqlite" if (effective_w_dest and "skeleton-loader" not in str(effective_w_dest)) else None)
+                    if w_dest_failed
+                    else (
+                        prov_from_arg
+                        or existing_w.get("word_provenance")
+                        or ("cached:sqlite" if (effective_w_dest and "skeleton-loader" not in str(effective_w_dest)) else None)
+                    )
                 )
 
                 word_entry = {
@@ -4411,7 +4502,7 @@ class SqliteStorageAdapter(StorageAdapter):
                     "morphology": morph or existing_w.get("morphology") or None,
                     "ipa": ipa or existing_w.get("ipa") or None,
                     "word_destination": effective_w_dest or None,
-                    "word_destination_inflected": w_dest_inf or existing_w.get("word_destination_inflected") or None,
+                    "word_destination_inflected": None if w_dest_inf_failed else (w_dest_inf or existing_w.get("word_destination_inflected") or None),
                     "selected": selected,
                     "leitner_box": box,
                     "leitner_due": due,
@@ -4422,6 +4513,16 @@ class SqliteStorageAdapter(StorageAdapter):
                     "extra_fields": extra if extra else None,
                 }
                 word_list.append(word_entry)
+
+            seen_tabular_coords: Set[Tuple[int, int]] = set()
+            for w_entry in word_list:
+                coord = (w_entry["sentence_index"], w_entry["token_order"])
+                if coord in seen_tabular_coords:
+                    raise StructuredError(
+                        ErrorCode.INVALID_STATE,
+                        f"Duplicate occurrence coordinate {coord} for session '{session_zid}'",
+                    )
+                seen_tabular_coords.add(coord)
 
 
             if is_multi_sentence_existing:
@@ -4674,13 +4775,13 @@ class SqliteStorageAdapter(StorageAdapter):
                 dst_left = " ".join(dst_left_parts)
                 dst_right = " ".join(dst_right_parts)
                 dst_curr = sent_record.get("sentence_destination") or ""
-                if dst_curr.strip() == "[FAILED]" or dst_curr.strip().startswith("[Error"):
+                if is_stored_translation_failure(dst_curr):
                     dst_curr = ""
 
                 dst2_left = " ".join(dst2_left_parts)
                 dst2_right = " ".join(dst2_right_parts)
                 dst2_curr = sent_record.get("sentence_destination2") or ""
-                if dst2_curr.strip() == "[FAILED]" or dst2_curr.strip().startswith("[Error"):
+                if is_stored_translation_failure(dst2_curr):
                     dst2_curr = ""
 
                 sent_ipa = sent_record.get("sentence_source_ipa") or ""
@@ -4772,7 +4873,7 @@ class SqliteStorageAdapter(StorageAdapter):
             sentence_trans_parts = []
             for s in db_sentences:
                 st = (s.get("sentence_destination") or s.get("sentence_destination2") or "").strip()
-                if st and st != "[FAILED]" and not st.startswith("[Error"):
+                if st and not is_stored_translation_failure(st):
                     sentence_trans_parts.append(st)
             text_mode_val = session.get("text_mode", "single") if session else "single"
             is_single_para = (text_mode_val == 'single' and '\n' not in (source_text or '').strip() and '\r' not in (source_text or '').strip())
@@ -8800,7 +8901,7 @@ def _extract_translation_entries(sentence_translations):
 
 def _clean_translation_line(raw_val, norm_brackets):
     text_s = str(raw_val).strip()
-    if not text_s or text_s == "[FAILED]" or text_s.startswith("[Error"):
+    if not text_s or is_stored_translation_failure(text_s):
         return ""
     stripped = re.sub(r'</?[a-zA-Z][^>]*>', '', str(raw_val)).strip()
     if not stripped:
@@ -12023,7 +12124,7 @@ html, body {{
         for c_d in dest_cols:
             if len(row) > c_d and row[c_d].strip():
                 val_c = row[c_d].strip()
-                if val_c != "[FAILED]" and not val_c.startswith("[Error"):
+                if not is_stored_translation_failure(val_c):
                     cand_dest = val_c
                     break
         if cand_dest:
@@ -12036,7 +12137,7 @@ html, body {{
         for s in db_sents:
             s_idx = s.get("sentence_index", 1) - 1
             s_dest = s.get("sentence_destination")
-            if s_dest and str(s_dest).strip() and str(s_dest).strip() != "[FAILED]" and not str(s_dest).strip().startswith("[Error"):
+            if s_dest and str(s_dest).strip() and not is_stored_translation_failure(str(s_dest)):
                 extracted_translations[s_idx] = str(s_dest).strip()
                 s_prov = s.get("text_provenance")
                 if s_prov and str(s_prov).strip():
@@ -12053,7 +12154,7 @@ html, body {{
                         for s in db_sents:
                             s_idx = s.get("sentence_index", 1) - 1
                             s_dest = s.get("sentence_destination")
-                            if s_dest and str(s_dest).strip() and str(s_dest).strip() != "[FAILED]" and not str(s_dest).strip().startswith("[Error"):
+                            if s_dest and str(s_dest).strip() and not is_stored_translation_failure(str(s_dest)):
                                 extracted_translations[s_idx] = str(s_dest).strip()
                                 s_prov = s.get("text_provenance")
                                 if s_prov and str(s_prov).strip():
@@ -12121,8 +12222,7 @@ html, body {{
                     for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1))
                     if s.get("sentence_destination")
                     and str(s.get("sentence_destination")).strip()
-                    and str(s.get("sentence_destination")).strip() != "[FAILED]"
-                    and not str(s.get("sentence_destination")).strip().startswith("[Error")
+                    and not is_stored_translation_failure(str(s.get("sentence_destination")))
                 ]
                 if clean_lines:
                     sentence_translations[0] = " ".join(clean_lines)
@@ -12596,7 +12696,7 @@ html, body {{
         sentence_html = ""
     else:
         has_real_text = any(
-            t and str(t).strip() and str(t).strip() != "[FAILED]" and not str(t).strip().startswith("[Error")
+            t and str(t).strip() and not is_stored_translation_failure(str(t))
             for t in sentence_translations.values()
         )
         text_provider_label = format_provider_skeleton_label(main_text_provider)
@@ -12703,7 +12803,7 @@ html, body {{
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
         inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
         trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
-        if trans_val.strip() == "[FAILED]" or trans_val.strip().startswith("[Error"):
+        if is_stored_translation_failure(trans_val):
             trans_val = ""
         morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
         ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
@@ -13574,7 +13674,7 @@ html, body {{
                                 recovered_w["row_html"] = re.sub(r'data-sentence-idx="[^"]*"', f'data-sentence-idx="{sent_i}"', recovered_w["row_html"])
                             sent_words.append(recovered_w)
 
-            s_has_real_trans = bool(s_trans and s_trans != "[FAILED]" and not s_trans.startswith("[Error"))
+            s_has_real_trans = bool(s_trans and not is_stored_translation_failure(s_trans))
             s_prov = (extracted_provenances.get(idx) or sentence_provenance) if s_has_real_trans else None
             child_cards.append({
                 "index": idx + 1,
@@ -13723,7 +13823,7 @@ html, body {{
             clean_sentence_trans = display_sentence_text(sentence_translations)
         elif sentence_translations:
             st = str(sentence_translations).strip()
-            if st != "[FAILED]" and not st.startswith("[Error"):
+            if not is_stored_translation_failure(st):
                 clean_sentence_trans = st
 
     effective_server_enabled = bool(server_enabled)
@@ -17759,6 +17859,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
     storage_adapter = get_storage_adapter(config, resolved_paths)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
     try:
+        lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
         batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=30)
         if selected_rows is None:
             selected_rows = list(range(len(data_rows)))
@@ -17801,7 +17902,6 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
             return data_rows
 
         prompt_val = getattr(args, 'prompt', None) or config.get(SEC_LANGUAGES, f"{getattr(args, 'language', 'en')}_prompt", fallback="")
-        lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
         hb_interval = config.getfloat(SEC_PROGRESSIVE, 'worker_heartbeat_interval_seconds', fallback=3.0) if hasattr(config, 'getfloat') else 3.0
         record_worker_heartbeat(zid, getattr(storage_adapter, 'db', None), min_interval_seconds=hb_interval)
 
@@ -18301,13 +18401,13 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
                         target_c = headers.index(col_name)
 
                         sib_val_str = str(sib_val).strip()
-                        if sib_val_str and 'skeleton-loader' not in sib_val_str and sib_val_str != '[FAILED]' and not sib_val_str.startswith('[Error'):
+                        if sib_val_str and not is_unfinished_translation(sib_val_str):
                             for target_row_idx in missing_lemmas[sib_lemma]:
                                 target_row = data_rows[target_row_idx]
                                 if len(target_row) <= target_c:
                                     target_row.extend([''] * (target_c - len(target_row) + 1))
                                 target_val = target_row[target_c].strip()
-                                if not target_val or 'skeleton-loader' in target_val or target_val == '[FAILED]' or target_val.startswith('[Error'):
+                                if is_unfinished_translation(target_val):
                                     target_row[target_c] = sib_val_str
                                     modified = True
             except Exception as e:
@@ -18349,9 +18449,9 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
                             for sib_c, target_c in col_map.items():
                                 if len(sib_row) > sib_c:
                                     sib_val = sib_row[sib_c].strip()
-                                    if sib_val and 'skeleton-loader' not in sib_val and sib_val != '[FAILED]' and not sib_val.startswith('[Error'):
+                                    if sib_val and not is_unfinished_translation(sib_val):
                                         target_val = target_row[target_c].strip()
-                                        if not target_val or 'skeleton-loader' in target_val or target_val == '[FAILED]' or target_val.startswith('[Error'):
+                                        if is_unfinished_translation(target_val):
                                             target_row[target_c] = sib_row[sib_c]
                                             modified = True
 
@@ -18567,6 +18667,8 @@ def edit_occurrence_coordinates(sentence_idx, token_order):
     """Parse explicit persistence coordinates without guessing display positions."""
     values = []
     for name, value, minimum in (("sentence_idx", sentence_idx, 1), ("token_order", token_order, 0)):
+        if isinstance(value, bool):
+            raise StructuredError(ErrorCode.INVALID_STATE, f"Invalid or missing {name}")
         raw = str(value).strip()
         if not raw.isascii() or not raw.isdigit() or int(raw) < minimum:
             raise StructuredError(ErrorCode.INVALID_STATE, f"Invalid or missing {name}")
