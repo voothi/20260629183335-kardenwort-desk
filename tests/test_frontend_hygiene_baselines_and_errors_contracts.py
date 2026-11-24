@@ -102,9 +102,12 @@ def test_1_3_geometry_theme_editor_tokens_and_large_view_scan_baseline(page, tmp
     # Zero geometry reads inside highlight loop and exact line-box invariance.
     assert metrics["geomReads"] == 0, f"Geometry reads occurred in hot highlight loop: {metrics}"
     assert page.evaluate(geometry_js) == before_geom, f"Text/line geometry shifted in {theme} theme"
-    # Bounded query budget: highlighting 160 spans must NOT issue O(N) DOM queries per pass.
+    # Bounded query & attribute-scan budget: highlighting 160 spans must NOT issue O(N) DOM queries or redundant scans.
     assert metrics["qsCount"] + metrics["qsaCount"] <= 12, (
         f"Excessive DOM queries inside updateBidirectionalHighlights ({metrics})"
+    )
+    assert metrics["attrReads"] <= 600, (
+        f"Excessive attribute scans inside updateBidirectionalHighlights ({metrics}; Phase 1 baseline was 1089)"
     )
 
     # Cell editor input must use theme tokens rather than hardcoded dark hex inline styles.

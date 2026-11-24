@@ -4250,7 +4250,7 @@
                 }, 4000);
                 fetch(resolveBackendUrl('/session/status?zid=' + encodeURIComponent(session) +
                     (options.committed ? '&committed=1' : '')), options).then(function(response) {
-                    return response.json().then(function(data) { return {ok: response.ok, status: response.status, data: data}; });
+                    return readJsonResponse(response, 'Session status failed');
                 }).then(resolve, reject);
             }).finally(function() {
                 clearTimeout(timeout);
@@ -8211,17 +8211,27 @@
         }
         window.applyOccurrenceView = applyOccurrenceView;
 
-        function rowHighlightGroup(tr) {
+        function rowHighlightGroup(tr, lemmaLookup) {
             var ids = getRowGroupIds(tr);
-            return { ids: ids, lemmas: ids.map(function(id) { return String(getLemmaByRowId(id) || '').trim().toLowerCase(); }) };
+            var lookup = lemmaLookup || getLemmaByRowId;
+            return { ids: ids, lemmas: ids.map(function(id) { return String(lookup(id) || '').trim().toLowerCase(); }) };
         }
 
-        function collectCompoundVisualIndices(span, cache) {
-            var key = span.getAttribute('data-word-idx');
+        function collectCompoundVisualIndices(span, cache, knownKey) {
+            var key = knownKey !== undefined ? knownKey : String(span.getAttribute('data-word-idx'));
             if (!cache[key]) {
                 var siblings = findCompoundSiblingSpans(span);
-                var indices = siblings.map(function(sibling) { return String(sibling.getAttribute('data-word-idx')); });
-                siblings.forEach(function(sibling) { cache[sibling.getAttribute('data-word-idx')] = indices; });
+                if (siblings.length === 1 && siblings[0] === span) {
+                    cache[key] = [key];
+                } else {
+                    var indices = [];
+                    for (var s = 0; s < siblings.length; s++) {
+                        indices.push(siblings[s] === span ? key : String(siblings[s].getAttribute('data-word-idx')));
+                    }
+                    for (var k = 0; k < indices.length; k++) {
+                        cache[indices[k]] = indices;
+                    }
+                }
             }
             return cache[key];
         }
@@ -8241,17 +8251,21 @@
             return true;
         }
 
-        function collectRowHighlightOccurrences(tokensByVisual) {
+        function collectRowHighlightOccurrences(tokensByVisual, spanEntries) {
             var activeSentence = window.WorkspaceTabs ? window.WorkspaceTabs.getActiveSentenceIdx() : 0;
             var compounds = {};
-            return Array.prototype.map.call(document.querySelectorAll('#source-container span.word'), function(span) {
-                var visual = String(span.getAttribute('data-word-idx'));
+            var list = spanEntries || Array.prototype.map.call(document.querySelectorAll('#source-container span.word'), function(span) {
+                return { span: span, visual: String(span.getAttribute('data-word-idx')) };
+            });
+            return list.map(function(entry) {
+                var span = entry.span;
+                var visual = entry.visual;
                 var token = tokensByVisual[visual] || {};
                 var sentence = span.getAttribute('data-sentence-idx') || token.source_sentence_idx;
                 var occurrence = rowHighlightTokenData(token);
                 occurrence.visual = visual;
                 occurrence.renderable = sourceSpanIsRendered(span) && (activeSentence === 0 || String(sentence) === String(activeSentence));
-                occurrence.compoundVisuals = collectCompoundVisualIndices(span, compounds);
+                occurrence.compoundVisuals = collectCompoundVisualIndices(span, compounds, visual);
                 return occurrence;
             });
         }
@@ -8354,7 +8368,7 @@
 
         function updateBidirectionalHighlights() {
             try { applyOccurrenceView(); } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-            var tokByVidx = {},  spanByVidx = {},  sentByRowId = {};
+            var tokByVidx = {},  spanByVidx = {},  sentByRowId = {},  spanEntries = [];
             for (var m = 0; m < tokenMap.length; m++) {
                 var t = tokenMap[m];
                 tokByVidx[String(t.visual_idx)] = t;
@@ -8368,6 +8382,7 @@
             for (var i = 0; i < tokenSpans.length; i++) {
                 var span = tokenSpans[i];
                 var sk = String(span.getAttribute('data-word-idx'));
+                spanEntries.push({ span: span, visual: sk });
                 if (!spanByVidx.hasOwnProperty(sk)) spanByVidx[sk] = span;
                 try {
                     removeClass(span, 'highlight-orange-active');
@@ -8411,7 +8426,7 @@
                 var trId = String(tr.getAttribute('data-row-id'));
                 var trSelected = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
                 if (trSelected) {
-                    selectedHighlightGroups.push(rowHighlightGroup(tr));
+                    selectedHighlightGroups.push(rowHighlightGroup(tr, fastRowLemma));
                     var trIdInt = parseInt(String(trId), 10);
                     var primarySentIdx = null;
                     if (!isNaN(trIdInt)) {
@@ -8561,7 +8576,7 @@
             if (window.AppState) window.AppState.activeLemmas = activeLemmas;
             var rowHighlightRoles = null;
             if (!hasActiveTokens && !isLegacyOverview) {
-                rowHighlightRoles = resolveRowHighlightRoles(collectRowHighlightOccurrences(tokByVidx), selectedHighlightGroups, isSameLemmaOn);
+                rowHighlightRoles = resolveRowHighlightRoles(collectRowHighlightOccurrences(tokByVidx, spanEntries), selectedHighlightGroups, isSameLemmaOn);
             }
             for (var i = 0; i < tokenMap.length; i++) {
                 var token = tokenMap[i];
@@ -11679,7 +11694,7 @@
 
                 renderWithCommittedLanguage(detLang, renderPayload, headers)
                 .then(function(res) {
-                    return res.json().then(function(data) { return { ok: res.ok, status: res.status, data: data }; });
+                    return readJsonResponse(res, 'Language switch failed');
                 })
                 .then(function(resObj) {
                     setLangModalLoading(false);
@@ -11764,7 +11779,7 @@
                     body: JSON.stringify(renderPayload)
                 })
                 .then(function(res) {
-                    return res.json().then(function(data) { return { ok: res.ok, status: res.status, data: data }; });
+                    return readJsonResponse(res, 'Render failed');
                 })
                 .then(function(resObj) {
                     setLangModalLoading(false);
@@ -12176,7 +12191,10 @@
             project: projectCommittedPreference, capture: captureClientView, restore: restoreClientView});
         window.receivePreferenceSnapshot = stateClient.receive;
         window.saveClientView = stateClient.save;
-        if (window.WorkspacePresentation) window.WorkspacePresentation.bind(stateClient);
+        if (window.WorkspacePresentation && window.__CONFIG__ && window.__CONFIG__.state_authority === 'sqlite' &&
+            window.__CONFIG__.client_view_enabled !== false && !(bData && bData.mismatch_info && bData.mismatch_info.is_mismatch)) {
+            window.WorkspacePresentation.bind(stateClient);
+        }
         window.__stateReady = stateClient.start();
         if (window.__CONFIG__ && window.__CONFIG__.read_only_preview) {
             document.documentElement.setAttribute('data-workspace-phase', 'ready');

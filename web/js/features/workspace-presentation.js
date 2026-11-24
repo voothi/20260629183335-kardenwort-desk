@@ -9,7 +9,10 @@
     var regionSelector = '#source-container, #translation-container, #lemma-table, .kw-tab-chip';
     var buttonSelector = '#kw-action-toolbar button:not(#kw-btn-hand-tool), #kw-tab-prev, #kw-tab-next';
     var actionEvents = ['click', 'mousedown', 'mouseup', 'dblclick', 'contextmenu'];
-    function isReady() { return root.getAttribute('data-workspace-phase') === 'ready'; }
+    function isReady() {
+        var phase = root.getAttribute('data-workspace-phase');
+        return !phase || phase === 'ready';
+    }
     function unknownIdentity() {
         return root.getAttribute('data-workspace-scope') === 'cards' && root.getAttribute('data-workspace-identity') === 'unknown';
     }
@@ -90,7 +93,8 @@
         if (client && typeof client.start === 'function') window.__stateReady = client.start();
     }
     function suspend() {
-        if (client) client.dispose();
+        if (!client) return;
+        client.dispose();
         if (root.getAttribute('data-workspace-scope') === 'cards') {
             root.setAttribute('data-workspace-identity', 'unknown');
             document.title = 'Kardenwort - Restoring view';
