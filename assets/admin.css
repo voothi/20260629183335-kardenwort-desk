@@ -30,6 +30,30 @@
     --font-size-md: 16px;
 }
 
+body.theme-light {
+    --bg-primary: #f6f8fa;
+    --bg-secondary: #eef1f5;
+    --bg-card: #ffffff;
+    --bg-hover: #eaeef2;
+    --border-color: rgba(31, 35, 40, 0.15);
+    --border-subtle: rgba(31, 35, 40, 0.08);
+    --text-main: #1f2328;
+    --text-muted: #59636e;
+    --text-dim: #6e7781;
+}
+
+body.theme-white {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8f9fa;
+    --bg-card: #ffffff;
+    --bg-hover: #f0f2f5;
+    --border-color: rgba(0, 0, 0, 0.12);
+    --border-subtle: rgba(0, 0, 0, 0.06);
+    --text-main: #111111;
+    --text-muted: #555555;
+    --text-dim: #777777;
+}
+
 * {
     box-sizing: border-box;
     margin: 0;
@@ -982,8 +1006,15 @@ body {
     color: #ffffff;
 }
 
-/* Batch Toolbar */
+/* Batch Toolbar (Fixed Overlay: Zero Flow Reflow & Zero Unused Gap) */
 .batch-toolbar {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    z-index: 900;
+    min-width: min(680px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -991,12 +1022,12 @@ body {
     border: 1px solid var(--border-color);
     border-left: 3px solid #f5b700;
     padding: 8px 12px;
-    margin-bottom: 8px;
     border-radius: var(--radius-sm);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 .batch-toolbar.hidden {
-    visibility: hidden;
+    display: none;
 }
 
 .batch-count-badge {
@@ -1010,23 +1041,29 @@ body {
     gap: 8px;
 }
 
-/* Selection Banner */
+/* Selection Banner (Fixed Overlay Above Batch Toolbar) */
 .selection-banner {
+    position: fixed;
+    left: 50%;
+    bottom: 64px;
+    transform: translateX(-50%);
+    z-index: 899;
+    max-width: calc(100vw - 32px);
     display: flex;
     justify-content: center;
     align-items: center;
     gap: 8px;
-    background: rgba(245, 183, 0, 0.12);
-    border: 1px solid rgba(245, 183, 0, 0.35);
+    background: var(--bg-card);
+    border: 1px solid rgba(245, 183, 0, 0.45);
     padding: 8px 14px;
-    margin-bottom: 8px;
     font-size: var(--font-size-xs);
-    color: #ffd866;
+    color: var(--text-main);
     border-radius: var(--radius-sm);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
 }
 
 .selection-banner.hidden {
-    visibility: hidden;
+    display: none;
 }
 
 .btn-banner-action {

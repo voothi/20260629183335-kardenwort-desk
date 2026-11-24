@@ -12601,7 +12601,7 @@ html, body {{
         )
         text_provider_label = format_provider_skeleton_label(main_text_provider)
         if is_progressive and run_text == 'auto' and not has_real_text:
-            sentence_html = f'<div class="skeleton-loader" data-pending="true" title="{text_provider_label}">{text_provider_label}</div>'
+            sentence_html = _make_skeleton_span(text_provider_label, tag="div", extra_cls="")
         else:
             effective_prov = sentence_provenances if sentence_provenances else (sentence_provenance if has_real_text else None)
             sentence_html = format_translated_html(
@@ -12646,24 +12646,25 @@ html, body {{
     th_elements = []
     for h in header_cols:
         h_lower = h.lower()
+        h_esc = html.escape(str(h))
         if h_lower in [r.lower() for r in dynamic_roles]:
             th_elements.append('<th class="col-classification">CEFR</th>')
         elif h_lower == "inflected":
-            th_elements.append(f'<th class="col-inflected">{h}</th>')
+            th_elements.append(f'<th class="col-inflected">{h_esc}</th>')
         elif h_lower == "lemma":
-            th_elements.append(f'<th class="col-lemma">{h}</th>')
+            th_elements.append(f'<th class="col-lemma">{h_esc}</th>')
         elif h_lower == "translation":
-            th_elements.append(f'<th class="col-translation">{h}</th>')
+            th_elements.append(f'<th class="col-translation">{h_esc}</th>')
         elif h_lower == "ipa":
-            th_elements.append(f'<th class="col-ipa">{h}</th>')
+            th_elements.append(f'<th class="col-ipa">{h_esc}</th>')
         elif h_lower == "morphology":
-            th_elements.append(f'<th class="col-morphology">{h}</th>')
+            th_elements.append(f'<th class="col-morphology">{h_esc}</th>')
         elif h_lower == "pos":
             th_elements.append('<th class="col-pos">POS</th>')
         elif h_lower == "g":
             th_elements.append('<th class="col-gender">Gender</th>')
         else:
-            th_elements.append(f'<th>{h}</th>')
+            th_elements.append(f'<th>{h_esc}</th>')
     table_header_html = "<tr>" + "".join(th_elements) + "</tr>"
 
     # Extract resolved column names and editable styling once outside the loop for orthogonal behavior and safety when data_rows is empty
@@ -12675,6 +12676,14 @@ html, body {{
     pos_col_name = role_fields.get('pos', 'WordSourcePOS')
     gender_col_name = role_fields.get('gender', 'WordSourceGender')
     selected_col_name = role_fields.get('selected', 'DeskSelected')
+
+    lemma_col_attr = html.escape(str(lemma_col_name), quote=True)
+    trans_col_attr = html.escape(str(trans_col_name), quote=True)
+    inflected_col_attr = html.escape(str(inflected_col_name), quote=True)
+    ipa_col_attr = html.escape(str(ipa_col_name), quote=True)
+    morph_col_attr = html.escape(str(morph_col_name), quote=True)
+    pos_col_attr = html.escape(str(pos_col_name), quote=True)
+    gender_col_attr = html.escape(str(gender_col_name), quote=True)
 
     editable_cols = mapping.get('desk_editable', 'editable_columns', fallback='')
     lemma_class = "editable" if lemma_col_name in editable_cols else ""
@@ -12710,13 +12719,14 @@ html, body {{
         pos_val = format_pos_cell(pos_raw)
         gender_badge = format_gender_badge(gender_raw)
 
-        # Skeleton loaders for cells pending when a configured provider is expected to fill them:
-        if run_base == 'auto' and not trans_val.strip() and has_untranslated_lemmas:
-            trans_val = f'<span class="skeleton-loader kw-skeleton-cell" title="{lemma_provider_label}">{lemma_provider_label}</span>'
-        if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ipa_val.strip() and not llm_filled:
-            ipa_val = f'<span class="skeleton-loader kw-skeleton-cell" title="{enrich_provider_label}">{enrich_provider_label}</span>'
-        if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not morph_val.strip() and not llm_filled:
-            morph_val = f'<span class="skeleton-loader kw-skeleton-cell" title="{enrich_provider_label}">{enrich_provider_label}</span>'
+        # Explicit pending flags for trusted skeleton generation (never infer from untrusted substrings)
+        is_trans_pending = bool(run_base == 'auto' and not trans_val.strip() and has_untranslated_lemmas)
+        is_ipa_pending = bool(run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ipa_val.strip() and not llm_filled)
+        is_morph_pending = bool(run_enrich == 'auto' and enrich_provider == 'intellifiller' and not morph_val.strip() and not llm_filled)
+
+        trans_cell_html = _make_skeleton_span(lemma_provider_label) if is_trans_pending else html.escape(trans_val)
+        ipa_cell_html = _make_skeleton_span(enrich_provider_label) if is_ipa_pending else html.escape(ipa_val)
+        morph_cell_html = _make_skeleton_span(enrich_provider_label) if is_morph_pending else html.escape(morph_val)
 
         row_highlight_class = "highlight-purple" if (row_id in paired_rows) else "highlight-orange"
 
@@ -12741,16 +12751,16 @@ html, body {{
             row_sentence = text
 
         inflected_tooltip = format_inflected_sentence_tooltip(row_sentence, inflected_val, token_order=token_order_val, lemma=lemma_val)
-        inflected_title_attr = f' title="{html.escape(inflected_tooltip)}"' if inflected_tooltip else ''
+        inflected_title_attr = f' title="{html.escape(inflected_tooltip, quote=True)}"' if inflected_tooltip else ''
 
         lemma_tooltip = format_lemma_article_tooltip(lemma_val, gender_raw, lang=language, pos=pos_raw)
-        lemma_title_attr = f' title="{html.escape(lemma_tooltip)}"' if lemma_tooltip else ''
+        lemma_title_attr = f' title="{html.escape(lemma_tooltip, quote=True)}"' if lemma_tooltip else ''
 
-        ipa_title_attr = f' title="{html.escape(ipa_val)}"' if (ipa_val and "skeleton-loader" not in ipa_val) else ''
-        morph_title_attr = f' title="{html.escape(morph_val)}"' if (morph_val and "skeleton-loader" not in morph_val) else ''
+        ipa_title_attr = f' title="{html.escape(ipa_val, quote=True)}"' if (ipa_val and not is_ipa_pending) else ''
+        morph_title_attr = f' title="{html.escape(morph_val, quote=True)}"' if (morph_val and not is_morph_pending) else ''
 
         pos_tooltip = format_pos_tooltip(pos_raw)
-        pos_title_attr = f' title="{html.escape(pos_tooltip)}"' if pos_tooltip else ''
+        pos_title_attr = f' title="{html.escape(pos_tooltip, quote=True)}"' if pos_tooltip else ''
 
         prov_val = row_provenances.get(row_id) or row_provenances.get(token_order_val) or row_provenances.get(str(token_order_val))
         prov_val = occurrence_provenances.get((str(sent_idx_val), str(token_order_val)), prov_val)
@@ -12758,10 +12768,10 @@ html, body {{
             prov_val = row[col_provenance]
 
         gender_tooltip = format_gender_tooltip(gender_raw, lemma=lemma_val, provenance=prov_val)
-        gender_title_attr = f' title="{html.escape(gender_tooltip)}"' if gender_tooltip else ''
+        gender_title_attr = f' title="{html.escape(gender_tooltip, quote=True)}"' if gender_tooltip else ''
 
-        pos_td = f'<td class="col-pos" data-col="{pos_col_name}"{pos_title_attr}><div class="scrollable-cell">{pos_val}</div></td>'
-        gender_td = f'<td class="col-gender" data-col="{gender_col_name}"{gender_title_attr}><div class="scrollable-cell">{gender_badge}</div></td>'
+        pos_td = f'<td class="col-pos" data-col="{pos_col_attr}"{pos_title_attr}><div class="scrollable-cell">{html.escape(pos_val)}</div></td>'
+        gender_td = f'<td class="col-gender" data-col="{gender_col_attr}"{gender_title_attr}><div class="scrollable-cell">{gender_badge}</div></td>'
 
         dynamic_tds = ""
         for role, d_idx in zip(dynamic_roles, dynamic_cols_indices):
@@ -12771,24 +12781,25 @@ html, body {{
             if ":" in val:
                 parts = val.split(":", 1)
                 possible_prefix = parts[0].strip()
-                if len(possible_prefix) <= 5 and "/" not in possible_prefix and "\\" not in possible_prefix:
+                if re.fullmatch(r'[A-Za-z0-9_-]{1,5}', possible_prefix):
                     display_val = parts[1].strip()
                     span_class = f"level-{possible_prefix.lower()}"
 
             if span_class:
-                inner_html = f'<span class="{span_class}">{display_val}</span>'
+                inner_html = f'<span class="{html.escape(span_class, quote=True)}">{html.escape(display_val)}</span>'
             else:
-                inner_html = display_val
+                inner_html = html.escape(display_val)
 
             cls_tooltip = format_classification_tooltip(val, role=role)
-            cls_title_attr = f' title="{html.escape(cls_tooltip)}"' if cls_tooltip else ''
-            dynamic_tds += f'<td class="col-classification" data-col="{role}"{cls_title_attr}><div class="scrollable-cell">{inner_html}</div></td>'
+            cls_title_attr = f' title="{html.escape(cls_tooltip, quote=True)}"' if cls_tooltip else ''
+            role_attr = html.escape(str(role), quote=True)
+            dynamic_tds += f'<td class="col-classification" data-col="{role_attr}"{cls_title_attr}><div class="scrollable-cell">{inner_html}</div></td>'
 
         prov_attr = ""
-        if trans_val and "skeleton-loader" not in trans_val:
+        if trans_val and not is_trans_pending:
             tooltip_title = format_translation_cell_tooltip(trans_val, prov_val)
-            prov_data = f' data-provenance="{prov_val}"' if prov_val else ''
-            prov_title = f' title="{html.escape(tooltip_title)}"' if tooltip_title else ''
+            prov_data = f' data-provenance="{html.escape(str(prov_val), quote=True)}"' if prov_val else ''
+            prov_title = f' title="{html.escape(tooltip_title, quote=True)}"' if tooltip_title else ''
             prov_attr = f'{prov_data}{prov_title}'
 
         occ_attr = ""
@@ -12836,13 +12847,15 @@ html, body {{
         occurrence_target = lookup_row_occurrence(row, col_index, col_token_order)
         occurrence_targets = [occurrence_target] if occurrence_target else []
         targets_attr = html.escape(json.dumps(occurrence_targets), quote=True)
+        tok_ord_attr = html.escape(str(token_order_val), quote=True)
+        sent_idx_attr = html.escape(str(sent_idx_val), quote=True)
         row_html_line = (
-            f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}"{occ_attr} data-occurrence-targets="{targets_attr}" data-sentence-idx="{sent_idx_val}" data-selected="{is_selected}" class="{row_highlight_class}">'
-            f'<td class="{inflected_class} col-inflected" data-col="{inflected_col_name}"{inflected_title_attr}><div class="scrollable-cell">{inflected_val}</div></td>'
-            f'<td class="{lemma_class} col-lemma" data-col="{lemma_col_name}"{lemma_title_attr}><div class="scrollable-cell">{lemma_val}</div></td>'
-            f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{prov_attr}><div class="scrollable-cell"{prov_attr}>{trans_val}</div></td>'
-            f'<td class="col-ipa" data-col="{ipa_col_name}"{ipa_title_attr}><div class="scrollable-cell">{ipa_val}</div></td>'
-            f'<td class="col-morphology" data-col="{morph_col_name}"{morph_title_attr}><div class="scrollable-cell">{morph_val}</div></td>'
+            f'<tr data-row-id="{row_id}" data-token-order="{tok_ord_attr}"{occ_attr} data-occurrence-targets="{targets_attr}" data-sentence-idx="{sent_idx_attr}" data-selected="{is_selected}" class="{row_highlight_class}">'
+            f'<td class="{inflected_class} col-inflected" data-col="{inflected_col_attr}"{inflected_title_attr}><div class="scrollable-cell">{html.escape(inflected_val)}</div></td>'
+            f'<td class="{lemma_class} col-lemma" data-col="{lemma_col_attr}"{lemma_title_attr}><div class="scrollable-cell">{html.escape(lemma_val)}</div></td>'
+            f'<td class="{trans_class} col-translation" data-col="{trans_col_attr}"{prov_attr}><div class="scrollable-cell"{prov_attr}>{trans_cell_html}</div></td>'
+            f'<td class="col-ipa" data-col="{ipa_col_attr}"{ipa_title_attr}><div class="scrollable-cell">{ipa_cell_html}</div></td>'
+            f'<td class="col-morphology" data-col="{morph_col_attr}"{morph_title_attr}><div class="scrollable-cell">{morph_cell_html}</div></td>'
             f'{pos_td}'
             f'{gender_td}'
             f'{dynamic_tds}'
@@ -12856,9 +12869,14 @@ html, body {{
             "sentence_text": row_sentence,
             "inflected": inflected_val,
             "lemma": lemma_val,
-            "translation": trans_val,
-            "ipa": ipa_val,
-            "morphology": morph_val,
+            "translation": "" if is_trans_pending else trans_val,
+            "ipa": "" if is_ipa_pending else ipa_val,
+            "morphology": "" if is_morph_pending else morph_val,
+            "is_pending": is_trans_pending,
+            "is_ipa_pending": is_ipa_pending,
+            "is_morph_pending": is_morph_pending,
+            "pending_provider": base_provider if is_trans_pending else "",
+            "enrich_pending_provider": enrich_provider if (is_ipa_pending or is_morph_pending) else "",
             "pos": pos_val,
             "gender": gender_raw,
             "selected": is_selected,
@@ -13153,12 +13171,6 @@ html, body {{
                 ov_trans = ""
             ov_morph = ov_r[col_morph] if col_morph != -1 and len(ov_r) > col_morph else ""
             ov_ipa = ov_r[col_ipa] if col_ipa != -1 and len(ov_r) > col_ipa else ""
-            if run_base == 'auto' and not ov_trans.strip() and has_untranslated_lemmas:
-                ov_trans = f'<span class="skeleton-loader kw-skeleton-cell" title="{lemma_provider_label}">{lemma_provider_label}</span>'
-            if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ov_ipa.strip() and not llm_filled:
-                ov_ipa = f'<span class="skeleton-loader kw-skeleton-cell" title="{enrich_provider_label}">{enrich_provider_label}</span>'
-            if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ov_morph.strip() and not llm_filled:
-                ov_morph = f'<span class="skeleton-loader kw-skeleton-cell" title="{enrich_provider_label}">{enrich_provider_label}</span>'
             ov_token_order = ov_r[col_token_order] if col_token_order != -1 and len(ov_r) > col_token_order and str(ov_r[col_token_order]).strip() else str(ov_id)
 
             ov_lem_clean = ov_lemma.strip().lower()
@@ -13195,7 +13207,7 @@ html, body {{
                 for mid in sorted_matched_ids:
                     if 0 <= mid < len(overview_data_rows) and len(overview_data_rows[mid]) > col_word_dest:
                         tr_cand = str(overview_data_rows[mid][col_word_dest] or "").strip()
-                        if tr_cand and tr_cand != "[FAILED]" and "skeleton-loader" not in tr_cand and tr_cand not in ("-", "--"):
+                        if tr_cand and tr_cand != "[FAILED]" and tr_cand not in ("-", "--"):
                             trans_items.append((mid, tr_cand))
                 if trans_items:
                     ov_trans = aggregate_sequential_distinct(trans_items, delimiter=", ")
@@ -13210,7 +13222,7 @@ html, body {{
                 for mid in sorted_matched_ids:
                     if 0 <= mid < len(overview_data_rows) and len(overview_data_rows[mid]) > col_morph:
                         m_cand = str(overview_data_rows[mid][col_morph] or "").strip()
-                        if m_cand and m_cand != "[FAILED]" and "skeleton-loader" not in m_cand and m_cand not in ("-", "--"):
+                        if m_cand and m_cand != "[FAILED]" and m_cand not in ("-", "--"):
                             morph_items.append((mid, m_cand))
                 if morph_items:
                     ov_morph = aggregate_sequential_distinct(morph_items, delimiter="; ")
@@ -13247,6 +13259,14 @@ html, body {{
             if col_pos != -1 and len(ov_r) > col_pos and ov_pos_raw:
                 ov_r[col_pos] = ov_pos_raw
 
+            ov_trans_pending = bool(run_base == 'auto' and not ov_trans.strip() and has_untranslated_lemmas)
+            ov_ipa_pending = bool(run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ov_ipa.strip() and not llm_filled)
+            ov_morph_pending = bool(run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ov_morph.strip() and not llm_filled)
+
+            ov_trans_html = _make_skeleton_span(lemma_provider_label) if ov_trans_pending else html.escape(ov_trans)
+            ov_ipa_html = _make_skeleton_span(enrich_provider_label) if ov_ipa_pending else html.escape(ov_ipa)
+            ov_morph_html = _make_skeleton_span(enrich_provider_label) if ov_morph_pending else html.escape(ov_morph)
+
             primary_id = next((mid for mid in matched_ids if mid not in used_primary_ids), matched_ids[0])
             used_primary_ids.add(primary_id)
             all_ids_str = ",".join(str(x) for x in matched_ids)
@@ -13273,16 +13293,16 @@ html, body {{
                     ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order, lemma=ov_lemma)
             else:
                 ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order, lemma=ov_lemma)
-            ov_inf_title = f' title="{html.escape(ov_inf_tooltip)}"' if ov_inf_tooltip else ''
+            ov_inf_title = f' title="{html.escape(ov_inf_tooltip, quote=True)}"' if ov_inf_tooltip else ''
 
             ov_lemma_tooltip = format_lemma_article_tooltip(ov_lemma, ov_gender_raw, lang=language, pos=ov_pos_raw)
-            ov_lemma_title = f' title="{html.escape(ov_lemma_tooltip)}"' if ov_lemma_tooltip else ''
+            ov_lemma_title = f' title="{html.escape(ov_lemma_tooltip, quote=True)}"' if ov_lemma_tooltip else ''
 
-            ov_ipa_title = f' title="{html.escape(ov_ipa)}"' if (ov_ipa and "skeleton-loader" not in ov_ipa) else ''
-            ov_morph_title = f' title="{html.escape(ov_morph)}"' if (ov_morph and "skeleton-loader" not in ov_morph) else ''
+            ov_ipa_title = f' title="{html.escape(ov_ipa, quote=True)}"' if (ov_ipa and not ov_ipa_pending) else ''
+            ov_morph_title = f' title="{html.escape(ov_morph, quote=True)}"' if (ov_morph and not ov_morph_pending) else ''
 
             ov_pos_tooltip = format_pos_tooltip(ov_pos_raw)
-            ov_pos_title = f' title="{html.escape(ov_pos_tooltip)}"' if ov_pos_tooltip else ''
+            ov_pos_title = f' title="{html.escape(ov_pos_tooltip, quote=True)}"' if ov_pos_tooltip else ''
 
             ov_prov_val = row_provenances.get(ov_id) or row_provenances.get(ov_token_order) or row_provenances.get(str(ov_token_order))
             if col_index != -1 and col_token_order != -1:
@@ -13293,10 +13313,10 @@ html, body {{
                 ov_prov_val = ov_r[col_provenance]
 
             ov_gender_tooltip = format_gender_tooltip(ov_gender_raw, lemma=ov_lemma, provenance=ov_prov_val)
-            ov_gender_title = f' title="{html.escape(ov_gender_tooltip)}"' if ov_gender_tooltip else ''
+            ov_gender_title = f' title="{html.escape(ov_gender_tooltip, quote=True)}"' if ov_gender_tooltip else ''
 
-            ov_pos_td = f'<td class="col-pos" data-col="{pos_col_name}"{ov_pos_title}><div class="scrollable-cell">{ov_pos}</div></td>'
-            ov_gender_td = f'<td class="col-gender" data-col="{gender_col_name}"{ov_gender_title}><div class="scrollable-cell">{ov_gender}</div></td>'
+            ov_pos_td = f'<td class="col-pos" data-col="{pos_col_attr}"{ov_pos_title}><div class="scrollable-cell">{html.escape(ov_pos)}</div></td>'
+            ov_gender_td = f'<td class="col-gender" data-col="{gender_col_attr}"{ov_gender_title}><div class="scrollable-cell">{ov_gender}</div></td>'
 
             ov_dynamic_tds = ""
             for role, d_idx in zip(dynamic_roles, dynamic_cols_indices):
@@ -13306,19 +13326,20 @@ html, body {{
                 if ":" in val:
                     parts = val.split(":", 1)
                     possible_prefix = parts[0].strip()
-                    if len(possible_prefix) <= 5 and "/" not in possible_prefix and "\\" not in possible_prefix:
+                    if re.fullmatch(r'[A-Za-z0-9_-]{1,5}', possible_prefix):
                         display_val = parts[1].strip()
                         span_class = f"level-{possible_prefix.lower()}"
                 if span_class:
-                    inner_html = f'<span class="{span_class}">{display_val}</span>'
+                    inner_html = f'<span class="{html.escape(span_class, quote=True)}">{html.escape(display_val)}</span>'
                 else:
-                    inner_html = display_val
+                    inner_html = html.escape(display_val)
                 ov_cls_tooltip = format_classification_tooltip(val, role=role)
-                ov_cls_title = f' title="{html.escape(ov_cls_tooltip)}"' if ov_cls_tooltip else ''
-                ov_dynamic_tds += f'<td class="col-classification" data-col="{role}"{ov_cls_title}><div class="scrollable-cell">{inner_html}</div></td>'
+                ov_cls_title = f' title="{html.escape(ov_cls_tooltip, quote=True)}"' if ov_cls_tooltip else ''
+                role_attr = html.escape(str(role), quote=True)
+                ov_dynamic_tds += f'<td class="col-classification" data-col="{role_attr}"{ov_cls_title}><div class="scrollable-cell">{inner_html}</div></td>'
 
             ov_prov_attr = ""
-            if ov_trans and "skeleton-loader" not in ov_trans:
+            if ov_trans and not ov_trans_pending:
                 if matched_ids and len(matched_ids) > 1:
                     mapping_pairs = []
                     seen_pair_keys = set()
@@ -13327,7 +13348,7 @@ html, body {{
                             r_mid = overview_data_rows[mid]
                             m_inf = resolve_row_inflected_form(r_mid, col_inflected, col_inflected2, col_quotation, col_lemma).strip()
                             m_tr = r_mid[col_word_dest].strip() if col_word_dest != -1 and len(r_mid) > col_word_dest else ""
-                            if m_inf and m_tr and m_tr != "[FAILED]" and "skeleton-loader" not in m_tr and m_tr not in ("-", "--"):
+                            if m_inf and m_tr and m_tr != "[FAILED]" and m_tr not in ("-", "--"):
                                 if (m_inf, m_tr) not in seen_pair_keys:
                                     seen_pair_keys.add((m_inf, m_tr))
                                     mapping_pairs.append(f"{m_inf}: {m_tr}")
@@ -13341,8 +13362,8 @@ html, body {{
                 else:
                     ov_tooltip_title = format_translation_cell_tooltip(ov_trans, ov_prov_val)
 
-                ov_prov_data = f' data-provenance="{ov_prov_val}"' if ov_prov_val else ''
-                ov_prov_title = f' title="{html.escape(ov_tooltip_title)}"' if ov_tooltip_title else ''
+                ov_prov_data = f' data-provenance="{html.escape(str(ov_prov_val), quote=True)}"' if ov_prov_val else ''
+                ov_prov_title = f' title="{html.escape(ov_tooltip_title, quote=True)}"' if ov_tooltip_title else ''
                 ov_prov_attr = f'{ov_prov_data}{ov_prov_title}'
 
             ov_occ_attr = ""
@@ -13376,7 +13397,7 @@ html, body {{
                                     m_inf = resolve_row_inflected_form(r_mid, col_inflected, col_inflected2, col_quotation, col_lemma).strip().lower()
                                     if raw_w in [f.strip() for f in m_inf.split(',')]:
                                         cand_tr = r_mid[col_word_dest].strip() if len(r_mid) > col_word_dest else ""
-                                        if cand_tr and cand_tr != "[FAILED]" and "skeleton-loader" not in cand_tr and cand_tr not in ("-", "--"):
+                                        if cand_tr and cand_tr != "[FAILED]" and cand_tr not in ("-", "--"):
                                             trans_inferred = cand_tr
                                             break
 
@@ -13434,20 +13455,21 @@ html, body {{
                 except Exception:
                     ov_occ_attr = ""
 
-            all_ids_attr = f' data-all-row-ids="{all_ids_str}"' if all_ids_str else ""
+            all_ids_attr = f' data-all-row-ids="{html.escape(all_ids_str, quote=True)}"' if all_ids_str else ""
             ov_hl_class = "highlight-orange"
             if ov_is_sel == "1":
                 ov_hl_class += " selected kw-row-selected"
             overview_targets = [lookup_row_occurrence(overview_data_rows[mid], col_index, col_token_order) for mid in matched_ids]
             overview_targets = overview_targets if all(overview_targets) else []
             targets_attr = html.escape(json.dumps(overview_targets), quote=True)
+            ov_tok_ord_attr = html.escape(str(ov_token_order), quote=True)
             ov_row_html = (
-                f'<tr data-row-id="{primary_id}"{all_ids_attr} data-token-order="{ov_token_order}"{ov_occ_attr} data-occurrence-targets="{targets_attr}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="{ov_hl_class}">'
-                f'<td class="{inflected_class} col-inflected" data-col="{inflected_col_name}"{ov_inf_title}><div class="scrollable-cell">{ov_inflected}</div></td>'
-                f'<td class="{lemma_class} col-lemma" data-col="{lemma_col_name}"{ov_lemma_title}><div class="scrollable-cell">{ov_lemma}</div></td>'
-                f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{ov_prov_attr}><div class="scrollable-cell"{ov_prov_attr}>{ov_trans}</div></td>'
-                f'<td class="col-ipa" data-col="{ipa_col_name}"{ov_ipa_title}><div class="scrollable-cell">{ov_ipa}</div></td>'
-                f'<td class="col-morphology" data-col="{morph_col_name}"{ov_morph_title}><div class="scrollable-cell">{ov_morph}</div></td>'
+                f'<tr data-row-id="{primary_id}"{all_ids_attr} data-token-order="{ov_tok_ord_attr}"{ov_occ_attr} data-occurrence-targets="{targets_attr}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="{ov_hl_class}">'
+                f'<td class="{inflected_class} col-inflected" data-col="{inflected_col_attr}"{ov_inf_title}><div class="scrollable-cell">{html.escape(ov_inflected)}</div></td>'
+                f'<td class="{lemma_class} col-lemma" data-col="{lemma_col_attr}"{ov_lemma_title}><div class="scrollable-cell">{html.escape(ov_lemma)}</div></td>'
+                f'<td class="{trans_class} col-translation" data-col="{trans_col_attr}"{ov_prov_attr}><div class="scrollable-cell"{ov_prov_attr}>{ov_trans_html}</div></td>'
+                f'<td class="col-ipa" data-col="{ipa_col_attr}"{ov_ipa_title}><div class="scrollable-cell">{ov_ipa_html}</div></td>'
+                f'<td class="col-morphology" data-col="{morph_col_attr}"{ov_morph_title}><div class="scrollable-cell">{ov_morph_html}</div></td>'
                 f'{ov_pos_td}'
                 f'{ov_gender_td}'
                 f'{ov_dynamic_tds}'
@@ -13461,9 +13483,14 @@ html, body {{
                 "sentence_text": ov_sentence,
                 "inflected": ov_inflected,
                 "lemma": ov_lemma,
-                "translation": ov_trans,
-                "ipa": ov_ipa,
-                "morphology": ov_morph,
+                "translation": "" if ov_trans_pending else ov_trans,
+                "ipa": "" if ov_ipa_pending else ov_ipa,
+                "morphology": "" if ov_morph_pending else ov_morph,
+                "is_pending": ov_trans_pending,
+                "is_ipa_pending": ov_ipa_pending,
+                "is_morph_pending": ov_morph_pending,
+                "pending_provider": base_provider if ov_trans_pending else "",
+                "enrich_pending_provider": enrich_provider if (ov_ipa_pending or ov_morph_pending) else "",
                 "pos": ov_pos,
                 "gender": ov_gender_raw,
                 "selected": ov_is_sel,
@@ -13590,7 +13617,7 @@ html, body {{
         active_seq_num = active_c["seq_num"]
         active_sentence = active_c["sentence_idx"]
         if active_sentence:
-            pending_html = f'<div class="skeleton-loader" data-pending="true" title="{text_provider_label}">{text_provider_label}</div>' if is_progressive and run_text == 'auto' else ""
+            pending_html = _make_skeleton_span(text_provider_label, tag="div", extra_cls="") if is_progressive and run_text == 'auto' else ""
             sentence_html = format_initial_card_translations(sentence_cards, active_sentence, text_mode, config, pending_html, container_prov_attr)
         if active_seq_num == 1:
             table_rows_html = "\n".join(w["row_html"] for w in overview_word_objs)
@@ -13605,8 +13632,9 @@ html, body {{
         chips = []
         for c in sentence_cards:
             active_cls = " active" if c["seq_num"] == active_seq_num else ""
+            chip_label = html.escape(str(c["label"]))
             chips.append(
-                f'<button type="button" class="kw-tab-chip{active_cls}" data-tab-seq="{c["seq_num"]}" data-sentence-idx="{c["sentence_idx"]}" title="Ctrl+{min(c["seq_num"], 9)}: Sentence {c["sentence_idx"] if c["sentence_idx"] > 0 else "All"}">{c["label"]}</button>'
+                f'<button type="button" class="kw-tab-chip{active_cls}" data-tab-seq="{c["seq_num"]}" data-sentence-idx="{c["sentence_idx"]}" title="Ctrl+{min(c["seq_num"], 9)}: Sentence {c["sentence_idx"] if c["sentence_idx"] > 0 else "All"}">{chip_label}</button>'
             )
         dock_pos = smc.tab_bar_position if smc.tab_bar_position in ("top", "bottom", "inline") else "top"
         dock_class = f" kw-tab-dock-{dock_pos}"
@@ -14209,17 +14237,17 @@ def render_section(token, ctx):
             elif col_token.lower() in ("oxford", "cambridge", "goethe", "cefr", "classification"):
                 html_output += '<th class="col-classification">CEFR</th>'
             elif col_token.lower() == "inflected":
-                html_output += f'<th class="col-inflected">{col_token.capitalize()}</th>'
+                html_output += f'<th class="col-inflected">{html.escape(col_token.capitalize())}</th>'
             elif col_token.lower() == "lemma":
-                html_output += f'<th class="col-lemma">{col_token.capitalize()}</th>'
+                html_output += f'<th class="col-lemma">{html.escape(col_token.capitalize())}</th>'
             elif col_token.lower() == "translation":
-                html_output += f'<th class="col-translation">{col_token.capitalize()}</th>'
+                html_output += f'<th class="col-translation">{html.escape(col_token.capitalize())}</th>'
             elif col_token.lower() == "ipa":
-                html_output += f'<th class="col-ipa">{col_token.capitalize()}</th>'
+                html_output += f'<th class="col-ipa">{html.escape(col_token.capitalize())}</th>'
             elif col_token.lower() == "morphology":
-                html_output += f'<th class="col-morphology">{col_token.capitalize()}</th>'
+                html_output += f'<th class="col-morphology">{html.escape(col_token.capitalize())}</th>'
             else:
-                html_output += f'<th>{col_token.capitalize()}</th>'
+                html_output += f'<th>{html.escape(col_token.capitalize())}</th>'
         html_output += '</tr></thead>\n<tbody>\n'
 
         col_indices = {}
@@ -14301,50 +14329,53 @@ def render_section(token, ctx):
                 val = row[idx] if idx != -1 and len(row) > idx else ""
                 if isinstance(val, str):
                     val = val.replace('\r', '')
+                else:
+                    val = "" if val is None else str(val).replace('\r', '')
+                safe_val = html.escape(val)
                 if t == "inflected":
                     lem_idx = col_indices.get('lemma', -1)
                     lem_v = row[lem_idx] if lem_idx != -1 and len(row) > lem_idx else ""
                     inf_tooltip = format_inflected_sentence_tooltip(ctx.get('text', ''), val, token_order=token_order_val, lemma=lem_v)
-                    inf_title_attr = f' title="{html.escape(inf_tooltip)}"' if inf_tooltip else ''
+                    inf_title_attr = f' title="{html.escape(inf_tooltip, quote=True)}"' if inf_tooltip else ''
                     if use_scroll:
-                        html_output += f'<td class="editable col-inflected" data-col="{field_attr}"{inf_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                        html_output += f'<td class="editable col-inflected" data-col="{field_attr}"{inf_title_attr}><div class="scrollable-cell">{safe_val}</div></td>'
                     else:
-                        html_output += f'<td class="col-inflected"{inf_title_attr}>{val}</td>'
+                        html_output += f'<td class="col-inflected"{inf_title_attr}>{safe_val}</td>'
                 elif t == "lemma":
                     gender_idx = col_indices.get('gender', col_indices.get('g', -1))
                     g_val = row[gender_idx] if gender_idx != -1 and len(row) > gender_idx else ""
                     pos_idx = col_indices.get('pos', -1)
                     pos_val_for_lem = row[pos_idx] if pos_idx != -1 and len(row) > pos_idx else ""
                     lem_tooltip = format_lemma_article_tooltip(val, g_val, lang=ctx.get('language', 'de'), pos=pos_val_for_lem)
-                    lem_title_attr = f' title="{html.escape(lem_tooltip)}"' if lem_tooltip else ''
+                    lem_title_attr = f' title="{html.escape(lem_tooltip, quote=True)}"' if lem_tooltip else ''
                     if use_scroll:
-                        html_output += f'<td class="editable col-lemma" data-col="{field_attr}"{lem_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                        html_output += f'<td class="editable col-lemma" data-col="{field_attr}"{lem_title_attr}><div class="scrollable-cell">{safe_val}</div></td>'
                     else:
-                        html_output += f'<td class="col-lemma"{lem_title_attr}>{val}</td>'
+                        html_output += f'<td class="col-lemma"{lem_title_attr}>{safe_val}</td>'
                 elif t == "translation":
                     prov_val = row[lookup_col_prov] if lookup_col_prov != -1 and len(row) > lookup_col_prov else ""
                     trans_tooltip = format_translation_cell_tooltip(val, prov_val)
-                    trans_title_attr = f' title="{html.escape(trans_tooltip)}"' if trans_tooltip else ''
+                    trans_title_attr = f' title="{html.escape(trans_tooltip, quote=True)}"' if trans_tooltip else ''
                     if use_scroll:
-                        html_output += f'<td class="editable col-translation" data-col="{field_attr}"{trans_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                        html_output += f'<td class="editable col-translation" data-col="{field_attr}"{trans_title_attr}><div class="scrollable-cell">{safe_val}</div></td>'
                     else:
-                        html_output += f'<td class="col-translation"{trans_title_attr}>{val}</td>'
+                        html_output += f'<td class="col-translation"{trans_title_attr}>{safe_val}</td>'
                 elif t == "ipa":
-                    ipa_title_attr = f' title="{html.escape(val)}"' if val else ''
+                    ipa_title_attr = f' title="{html.escape(val, quote=True)}"' if val else ''
                     if use_scroll:
-                        html_output += f'<td class="col-ipa" data-col="WordSourceIPA"{ipa_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                        html_output += f'<td class="col-ipa" data-col="WordSourceIPA"{ipa_title_attr}><div class="scrollable-cell">{safe_val}</div></td>'
                     else:
-                        html_output += f'<td class="col-ipa"{ipa_title_attr}>{val}</td>'
+                        html_output += f'<td class="col-ipa"{ipa_title_attr}>{safe_val}</td>'
                 elif t == "morphology":
-                    morph_title_attr = f' title="{html.escape(val)}"' if val else ''
+                    morph_title_attr = f' title="{html.escape(val, quote=True)}"' if val else ''
                     if use_scroll:
-                        html_output += f'<td class="col-morphology" data-col="WordSourceMorphologyAI"{morph_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                        html_output += f'<td class="col-morphology" data-col="WordSourceMorphologyAI"{morph_title_attr}><div class="scrollable-cell">{safe_val}</div></td>'
                     else:
-                        html_output += f'<td class="col-morphology"{morph_title_attr}>{val}</td>'
+                        html_output += f'<td class="col-morphology"{morph_title_attr}>{safe_val}</td>'
                 elif t == "pos":
-                    cell_val = format_pos_cell(val)
+                    cell_val = html.escape(format_pos_cell(val))
                     pos_tooltip = format_pos_tooltip(val)
-                    pos_title_attr = f' title="{html.escape(pos_tooltip)}"' if pos_tooltip else ''
+                    pos_title_attr = f' title="{html.escape(pos_tooltip, quote=True)}"' if pos_tooltip else ''
                     if use_scroll:
                         html_output += f'<td class="col-pos" data-col="WordSourcePOS"{pos_title_attr}><div class="scrollable-cell">{cell_val}</div></td>'
                     else:
@@ -14354,23 +14385,24 @@ def render_section(token, ctx):
                     lem_val_for_g = row[lookup_col_lemma] if lookup_col_lemma != -1 and len(row) > lookup_col_lemma else ""
                     prov_val_for_g = row[lookup_col_prov] if lookup_col_prov != -1 and len(row) > lookup_col_prov else None
                     g_tooltip = format_gender_tooltip(val, lemma=lem_val_for_g, provenance=prov_val_for_g)
-                    g_title_attr = f' title="{html.escape(g_tooltip)}"' if g_tooltip else ''
+                    g_title_attr = f' title="{html.escape(g_tooltip, quote=True)}"' if g_tooltip else ''
                     if use_scroll:
                         html_output += f'<td class="col-gender" data-col="WordSourceGender"{g_title_attr}><div class="scrollable-cell">{cell_val}</div></td>'
                     else:
                         html_output += f'<td class="col-gender"{g_title_attr}>{cell_val}</td>'
                 elif t in ("oxford", "cambridge", "goethe", "cefr", "classification"):
                     cls_tooltip = format_classification_tooltip(val, role=t)
-                    cls_title_attr = f' title="{html.escape(cls_tooltip)}"' if cls_tooltip else ''
+                    cls_title_attr = f' title="{html.escape(cls_tooltip, quote=True)}"' if cls_tooltip else ''
+                    t_attr = html.escape(t, quote=True)
                     if use_scroll:
-                        html_output += f'<td class="col-classification" data-col="{t}"{cls_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                        html_output += f'<td class="col-classification" data-col="{t_attr}"{cls_title_attr}><div class="scrollable-cell">{safe_val}</div></td>'
                     else:
-                        html_output += f'<td class="col-classification"{cls_title_attr}>{val}</td>'
+                        html_output += f'<td class="col-classification"{cls_title_attr}>{safe_val}</td>'
                 else:
                     if use_scroll:
-                        html_output += f'<td><div class="scrollable-cell">{val}</div></td>'
+                        html_output += f'<td><div class="scrollable-cell">{safe_val}</div></td>'
                     else:
-                        html_output += f'<td>{val}</td>'
+                        html_output += f'<td>{safe_val}</td>'
             html_output += '</tr>\n'
 
         html_output += '</tbody></table></div>\n'
@@ -14445,6 +14477,54 @@ def get_web_index_html(reload=False):
 
 
 _SUPPORTED_SHELL_THEMES = frozenset(("dark", "light", "white", "compact"))
+_SAFE_DATA_IMAGE_RE = re.compile(
+    r'^data:image/(?:png|x-icon|vnd\.microsoft\.icon|gif|webp|jpeg);base64,[A-Za-z0-9+/=]+$',
+    re.IGNORECASE,
+)
+
+
+def _make_skeleton_span(label, *, tag="span", extra_cls=" kw-skeleton-cell"):
+    safe_label = html.escape(str(label or ""), quote=True)
+    return f'<{tag} class="skeleton-loader{extra_cls}" data-pending="true" title="{safe_label}">{safe_label}</{tag}>'
+
+
+def _sanitize_favicon_href(href) -> str:
+    raw = str(href or "").strip()
+    if not raw or any(ch in raw for ch in ('\r', '\n', '\x00', '"', "'", '<', '>')):
+        return ""
+    parsed = urllib.parse.urlsplit(raw)
+    scheme = (parsed.scheme or "").lower()
+    if scheme == "":
+        if raw.startswith("//") or ":" in raw.split("/", 1)[0]:
+            return ""
+        return html.escape(raw, quote=True)
+    if scheme in ("http", "https"):
+        if not parsed.netloc:
+            return ""
+        return html.escape(raw, quote=True)
+    if scheme == "data":
+        if _SAFE_DATA_IMAGE_RE.fullmatch(raw):
+            return html.escape(raw, quote=True)
+        return ""
+    return ""
+
+
+def _sanitize_raw_island_token(value, pattern: str, default: str = "") -> str:
+    raw = str(value or "").strip()
+    if raw and re.fullmatch(pattern, raw):
+        return raw
+    return default
+
+
+def _sanitize_raw_text_island(value) -> str:
+    raw = str(value or "")
+    if not raw:
+        return ""
+    # Inside <script type="text/plain">, HTML entities are not decoded and </script breaks out.
+    # Emit verbatim only when angle brackets are absent; full exact values live in #kardenwort-bootstrap JSON.
+    if "<" in raw or ">" in raw:
+        return ""
+    return raw
 
 
 def _sanitize_shell_theme(theme, default: str = "compact") -> str:
@@ -14477,9 +14557,10 @@ def render_declarative_web_shell(
     base_html = get_web_index_html()
 
     if page_title:
-        base_html = re.sub(r'<title>.*?</title>', f'<title>{html.escape(page_title)}</title>', base_html)
-    if favicon_href:
-        base_html = re.sub(r'<link\s+rel=["\']icon["\'][^>]*>', f'<link rel="icon" type="image/x-icon" href="{favicon_href}">', base_html)
+        base_html = re.sub(r'<title>.*?</title>', lambda _: f'<title>{html.escape(str(page_title))}</title>', base_html)
+    safe_favicon = _sanitize_favicon_href(favicon_href)
+    if safe_favicon:
+        base_html = re.sub(r'<link\s+rel=["\']icon["\'][^>]*>', lambda _: f'<link rel="icon" type="image/x-icon" href="{safe_favicon}">', base_html)
 
     safe_theme = _sanitize_shell_theme(theme, default="compact")
     safe_dock_class = html.escape(str(dock_body_class or ""), quote=True)
@@ -14576,7 +14657,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    deliv_mode = bootstrap_payload.get("delivery_mode", "container")
+    deliv_mode = _sanitize_raw_island_token(bootstrap_payload.get("delivery_mode", "container"), r'[A-Za-z0-9_-]{1,32}', "container")
     base_html = re.sub(
         r'<script id="delivery-mode" type="text/plain">.*?</script>',
         lambda _: f'<script id="delivery-mode" type="text/plain">{deliv_mode}</script>',
@@ -14584,7 +14665,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    web_tab_m = bootstrap_payload.get("web_tab_mode", "tabs")
+    web_tab_m = _sanitize_raw_island_token(bootstrap_payload.get("web_tab_mode", "tabs"), r'[A-Za-z0-9_-]{1,32}', "tabs")
     base_html = re.sub(
         r'<script id="web-tab-mode" type="text/plain">.*?</script>',
         lambda _: f'<script id="web-tab-mode" type="text/plain">{web_tab_m}</script>',
@@ -14592,7 +14673,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    tab_pos = bootstrap_payload.get("tab_bar_position", "top")
+    tab_pos = _sanitize_raw_island_token(bootstrap_payload.get("tab_bar_position", "top"), r'(?:top|bottom|inline)', "top")
     base_html = re.sub(
         r'<script id="tab-bar-position" type="text/plain">.*?</script>',
         lambda _: f'<script id="tab-bar-position" type="text/plain">{tab_pos}</script>',
@@ -14609,7 +14690,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    tsv_p = bootstrap_payload.get("working_tsv_path") or bootstrap_payload.get("tsv_path") or ""
+    tsv_p = _sanitize_raw_text_island(bootstrap_payload.get("working_tsv_path") or bootstrap_payload.get("tsv_path") or "")
     base_html = re.sub(
         r'<script id="tsv-path" type="text/plain">.*?</script>',
         lambda _: f'<script id="tsv-path" type="text/plain">{tsv_p}</script>',
@@ -14617,7 +14698,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    txt_m = bootstrap_payload.get("text_mode") or "single"
+    txt_m = _sanitize_raw_island_token(bootstrap_payload.get("text_mode") or "single", r'(?:single|multi)', "single")
     base_html = re.sub(
         r'<script id="text-mode" type="text/plain">.*?</script>',
         lambda _: f'<script id="text-mode" type="text/plain">{txt_m}</script>',
@@ -14633,7 +14714,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    s_zid = bootstrap_payload.get("session_zid") or bootstrap_payload.get("zid") or ""
+    s_zid = _sanitize_raw_island_token(bootstrap_payload.get("session_zid") or bootstrap_payload.get("zid") or "", r'[A-Za-z0-9_-]{1,64}', "")
     base_html = re.sub(
         r'<script id="session-zid" type="text/plain">.*?</script>',
         lambda _: f'<script id="session-zid" type="text/plain">{s_zid}</script>',
@@ -14641,7 +14722,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    s_lang = bootstrap_payload.get("language") or ""
+    s_lang = _sanitize_raw_island_token(bootstrap_payload.get("language") or "", r'[A-Za-z0-9_-]{1,32}', "")
     base_html = re.sub(
         r'<script id="session-lang" type="text/plain">.*?</script>',
         lambda _: f'<script id="session-lang" type="text/plain">{s_lang}</script>',
@@ -14649,7 +14730,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    t_lang = bootstrap_payload.get("target_language") or bootstrap_payload.get("target_lang") or ""
+    t_lang = _sanitize_raw_island_token(bootstrap_payload.get("target_language") or bootstrap_payload.get("target_lang") or "", r'[A-Za-z0-9_-]{1,32}', "")
     base_html = re.sub(
         r'<script id="session-target-lang" type="text/plain">.*?</script>',
         lambda _: f'<script id="session-target-lang" type="text/plain">{t_lang}</script>',
@@ -14657,7 +14738,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    disp_m = bootstrap_payload.get("display_mode") or "monolithic"
+    disp_m = _sanitize_raw_island_token(bootstrap_payload.get("display_mode") or "monolithic", r'(?:monolithic|progressive)', "monolithic")
     base_html = re.sub(
         r'<script id="display-mode" type="text/plain">.*?</script>',
         lambda _: f'<script id="display-mode" type="text/plain">{disp_m}</script>',
@@ -14673,7 +14754,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    run_enr = bootstrap_payload.get("run_enrichment") or "manual"
+    run_enr = _sanitize_raw_island_token(bootstrap_payload.get("run_enrichment") or "manual", r'[A-Za-z0-9_-]{1,32}', "manual")
     base_html = re.sub(
         r'<script id="run-enrichment" type="text/plain">.*?</script>',
         lambda _: f'<script id="run-enrichment" type="text/plain">{run_enr}</script>',
@@ -14689,7 +14770,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    tb_prov = bootstrap_payload.get("text_base_provider") or "google"
+    tb_prov = _sanitize_raw_island_token(bootstrap_payload.get("text_base_provider") or "google", r'[A-Za-z0-9_.:,-]{1,64}', "google")
     base_html = re.sub(
         r'<script id="text-base-provider" type="text/plain">.*?</script>',
         lambda _: f'<script id="text-base-provider" type="text/plain">{tb_prov}</script>',
@@ -14697,7 +14778,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    lb_prov = bootstrap_payload.get("lemma_base_provider") or "google"
+    lb_prov = _sanitize_raw_island_token(bootstrap_payload.get("lemma_base_provider") or "google", r'[A-Za-z0-9_.:,-]{1,64}', "google")
     base_html = re.sub(
         r'<script id="lemma-base-provider" type="text/plain">.*?</script>',
         lambda _: f'<script id="lemma-base-provider" type="text/plain">{lb_prov}</script>',
@@ -14705,10 +14786,10 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    sent_prov = bootstrap_payload.get("sentence_provenance") or ""
+    sent_prov = _sanitize_raw_text_island(bootstrap_payload.get("sentence_provenance") or "")
     base_html = re.sub(
         r'<script id="sentence-provenance" type="text/plain">.*?</script>',
-        lambda _: f'<script id="sentence-provenance" type="text/plain">{html.escape(sent_prov)}</script>',
+        lambda _: f'<script id="sentence-provenance" type="text/plain">{sent_prov}</script>',
         base_html,
         flags=re.DOTALL
     )
@@ -14808,12 +14889,13 @@ def render_declarative_web_shell(
         base_html = base_html.replace('id="kw-lang-modal-body"></div>', f'id="kw-lang-modal-body">{html.escape(lang_mismatch_body)}</div>')
 
     # Script #hl-mvp-script
-    bm = bootstrap_payload.get("hover_highlight_bookmarks", 3)
+    bm_raw = bootstrap_payload.get("hover_highlight_bookmarks", 3)
+    bm = html.escape(str(bm_raw), quote=True)
     rb = "1" if bootstrap_payload.get("hover_highlight_rainbow") else "0"
     en = "1" if bootstrap_payload.get("hover_highlight_enabled", True) else "0"
     base_html = re.sub(
         r'<script id="hl-mvp-script"[^>]*>.*?</script>',
-        f'<script id="hl-mvp-script" type="text/plain" data-bookmarks="{bm}" data-rainbow="{rb}" data-enabled="{en}"></script>',
+        lambda _: f'<script id="hl-mvp-script" type="text/plain" data-bookmarks="{bm}" data-rainbow="{rb}" data-enabled="{en}"></script>',
         base_html,
         flags=re.DOTALL
     )
@@ -14876,7 +14958,7 @@ def render_declarative_web_shell(
             base_html = base_html.replace('</body>', f'<script>\n{s_code}\n</script>\n</body>')
 
     if children_tsv_paths:
-        paths_str = ",".join(str(path) for path in children_tsv_paths)
+        paths_str = html.escape(",".join(str(path) for path in children_tsv_paths))
         children_div = f'<div id="kardenwort-children" style="display:none;">{paths_str}</div>'
         base_html = base_html.replace("</body>", f"{children_div}\n</body>")
 
@@ -15053,21 +15135,21 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     if '<!-- KARDENWORT_BOOTSTRAP -->' in base_html:
         base_html = base_html.replace('<!-- KARDENWORT_BOOTSTRAP -->', '')
 
-    s_zid = str(session_zid or zid or "")
+    s_zid = _sanitize_raw_island_token(session_zid or zid or "", r'[A-Za-z0-9_-]{1,64}', "")
     base_html = re.sub(
         r'<script id="session-zid" type="text/plain">.*?</script>',
         lambda _: f'<script id="session-zid" type="text/plain">{s_zid}</script>',
         base_html,
         flags=re.DOTALL
     )
-    s_lang = str(language or "")
+    s_lang = _sanitize_raw_island_token(language or "", r'[A-Za-z0-9_-]{1,32}', "")
     base_html = re.sub(
         r'<script id="session-lang" type="text/plain">.*?</script>',
         lambda _: f'<script id="session-lang" type="text/plain">{s_lang}</script>',
         base_html,
         flags=re.DOTALL
     )
-    t_lang = str(target_lang or "")
+    t_lang = _sanitize_raw_island_token(target_lang or "", r'[A-Za-z0-9_-]{1,32}', "")
     base_html = re.sub(
         r'<script id="session-target-lang" type="text/plain">.*?</script>',
         lambda _: f'<script id="session-target-lang" type="text/plain">{t_lang}</script>',

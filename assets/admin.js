@@ -49,6 +49,98 @@ if (typeof window !== 'undefined') {
     window.state = state;
 }
 
+// Helper: Extract clean error text from JSON or non-JSON HTTP error responses
+async function parseResponseErrorMessage(response) {
+    const statusLabel = `HTTP ${response.status}${response.statusText ? ' ' + response.statusText : ''}`;
+    let rawText = '';
+    try {
+        if (typeof response.text === 'function') {
+            rawText = await response.text();
+        }
+    } catch (e) {
+        return statusLabel;
+    }
+    const trimmed = String(rawText || '').trim();
+    if (!trimmed) {
+        return statusLabel;
+    }
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object') {
+            return parsed.message || parsed.error || statusLabel;
+        }
+    } catch (e) {
+        let snippet = trimmed;
+        if (typeof DOMParser !== 'undefined' && /<[a-zA-Z]/.test(trimmed)) {
+            const doc = new DOMParser().parseFromString(trimmed, 'text/html');
+            snippet = (doc && doc.body && doc.body.textContent) ? doc.body.textContent : trimmed;
+        }
+        snippet = String(snippet).replace(/\s+/g, ' ').trim().slice(0, 140);
+        return snippet ? `${statusLabel}: ${snippet}` : statusLabel;
+    }
+    return statusLabel;
+}
+
+// Helper: Populate <select> safely via DOM nodes (never raw HTML interpolation)
+function populateSelectOptions(selectEl, items) {
+    if (!selectEl) return;
+    selectEl.textContent = '';
+    for (const item of items) {
+        const opt = document.createElement('option');
+        opt.value = String(item.value !== undefined && item.value !== null ? item.value : '');
+        opt.textContent = String(item.label !== undefined && item.label !== null ? item.label : '');
+        selectEl.appendChild(opt);
+    }
+}
+
+// Helper: Authenticated bounded download using X-API-Token header and Blob URL cleanup
+const MAX_ADMIN_DOWNLOAD_BYTES = 64 * 1024 * 1024;
+
+function triggerBlobDownload(blob, filename) {
+    if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+        return;
+    }
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = filename;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+    } finally {
+        if (typeof URL.revokeObjectURL === 'function') {
+            setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+        }
+    }
+}
+
+async function downloadAuthenticatedBlob(endpoint, filename, maxBytes = MAX_ADMIN_DOWNLOAD_BYTES) {
+    const headers = {};
+    if (state.token) {
+        headers['X-API-Token'] = state.token;
+    }
+    const response = await fetch(endpoint, { headers });
+    if (!response.ok) {
+        const errMsg = await parseResponseErrorMessage(response);
+        throw new Error(errMsg);
+    }
+    const contentLen = response.headers && typeof response.headers.get === 'function'
+        ? parseInt(response.headers.get('content-length') || '', 10)
+        : NaN;
+    if (!Number.isNaN(contentLen) && contentLen > maxBytes) {
+        throw new Error(`Download exceeds maximum allowed size (${Math.round(maxBytes / (1024 * 1024))} MB)`);
+    }
+    const blob = typeof response.blob === 'function'
+        ? await response.blob()
+        : new Blob([await response.text()]);
+    if (blob.size > maxBytes) {
+        throw new Error(`Download exceeds maximum allowed size (${Math.round(maxBytes / (1024 * 1024))} MB)`);
+    }
+    triggerBlobDownload(blob, filename);
+}
+
 // Helper: HTTP Request with API Token (header-only; never append URL tokens)
 async function apiFetch(endpoint, options = {}) {
     const headers = Object.assign({}, options.headers || {});
@@ -59,9 +151,19 @@ async function apiFetch(endpoint, options = {}) {
 
     try {
         const response = await fetch(endpoint, { ...options, headers });
-        const data = await response.json();
         if (!response.ok) {
-            throw new Error(data.message || data.error || `HTTP ${response.status}`);
+            const errMsg = await parseResponseErrorMessage(response);
+            throw new Error(errMsg);
+        }
+        const rawText = typeof response.text === 'function' ? await response.text() : '';
+        if (!rawText || !rawText.trim()) {
+            return {};
+        }
+        let data;
+        try {
+            data = JSON.parse(rawText);
+        } catch (parseErr) {
+            throw new Error(`HTTP ${response.status}: Invalid JSON response from server`);
         }
         return data.data !== undefined ? data.data : data;
     } catch (err) {
@@ -575,21 +677,25 @@ async function openLinkSessionModal(projectId) {
     const modal = document.getElementById('link-session-modal');
     document.getElementById('link-modal-project-id').value = projectId;
     const select = document.getElementById('link-session-select');
-    select.innerHTML = '<option value="">Loading sessions...</option>';
+    populateSelectOptions(select, [{ value: '', label: 'Loading sessions...' }]);
     modal.classList.remove('hidden');
 
     try {
         const res = await apiFetch('/api/v1/admin/sessions?limit=200');
         const sessions = res.sessions || [];
         if (sessions.length === 0) {
-            select.innerHTML = '<option value="">No sessions available</option>';
+            populateSelectOptions(select, [{ value: '', label: 'No sessions available' }]);
             return;
         }
-        select.innerHTML = sessions.map(s => 
-            `<option value="${s.zid}">${escapeHtml(s.zid)} - ${escapeHtml(s.slug || 'Untitled')} (${s.source_language || ''})</option>`
-        ).join('');
+        populateSelectOptions(
+            select,
+            sessions.map(s => ({
+                value: s.zid,
+                label: `${s.zid} - ${s.slug || 'Untitled'} (${s.source_language || ''})`
+            }))
+        );
     } catch (e) {
-        select.innerHTML = '<option value="">Failed to load sessions</option>';
+        populateSelectOptions(select, [{ value: '', label: 'Failed to load sessions' }]);
     }
 }
 
@@ -644,7 +750,7 @@ async function openAssignProjectModal(session) {
     infoBox.innerHTML = `<strong>${escapeHtml(session.zid)}</strong> &bull; <span>${escapeHtml(session.slug || 'untitled')}</span> <span class="text-muted">(${escapeHtml(session.source_language || '')})</span>`;
 
     const select = document.getElementById('assign-project-select');
-    select.innerHTML = '<option value="">Loading projects...</option>';
+    populateSelectOptions(select, [{ value: '', label: 'Loading projects...' }]);
     modal.classList.remove('hidden');
 
     try {
@@ -654,14 +760,15 @@ async function openAssignProjectModal(session) {
         }
         const flatProjects = flattenProjectTree(state.projectTree);
         if (flatProjects.length === 0) {
-            select.innerHTML = '<option value="">No projects available - create a project first</option>';
+            populateSelectOptions(select, [{ value: '', label: 'No projects available - create a project first' }]);
             return;
         }
-        select.innerHTML = flatProjects.map(p => 
-            `<option value="${p.id}">${escapeHtml(p.label)}</option>`
-        ).join('');
+        populateSelectOptions(
+            select,
+            flatProjects.map(p => ({ value: p.id, label: p.label }))
+        );
     } catch (e) {
-        select.innerHTML = '<option value="">Failed to load projects</option>';
+        populateSelectOptions(select, [{ value: '', label: 'Failed to load projects' }]);
     }
 }
 
@@ -685,7 +792,7 @@ async function openBatchAssignProjectModal() {
     }
 
     const select = document.getElementById('assign-project-select');
-    select.innerHTML = '<option value="">Loading projects...</option>';
+    populateSelectOptions(select, [{ value: '', label: 'Loading projects...' }]);
     modal.classList.remove('hidden');
 
     try {
@@ -695,14 +802,15 @@ async function openBatchAssignProjectModal() {
         }
         const flatProjects = flattenProjectTree(state.projectTree);
         if (flatProjects.length === 0) {
-            select.innerHTML = '<option value="">No projects available - create a project first</option>';
+            populateSelectOptions(select, [{ value: '', label: 'No projects available - create a project first' }]);
             return;
         }
-        select.innerHTML = flatProjects.map(p => 
-            `<option value="${p.id}">${escapeHtml(p.label)}</option>`
-        ).join('');
+        populateSelectOptions(
+            select,
+            flatProjects.map(p => ({ value: p.id, label: p.label }))
+        );
     } catch (e) {
-        select.innerHTML = '<option value="">Failed to load projects</option>';
+        populateSelectOptions(select, [{ value: '', label: 'Failed to load projects' }]);
     }
 }
 
@@ -1157,26 +1265,42 @@ async function openTsvInspectorModal(session) {
     viewer.value = 'Loading TSV...';
     modal.classList.remove('hidden');
 
-    let downloadUrl = `/api/v1/sessions/${encodeURIComponent(session.zid)}/tsv`;
-    if (state.token) {
-        downloadUrl += `?token=${encodeURIComponent(state.token)}`;
-    }
+    const tsvEndpoint = `/api/v1/sessions/${encodeURIComponent(session.zid)}/tsv`;
     const slugPart = session.slug ? `-${session.slug}` : '';
     const langPart = (session.source_language || session.source_lang) ? `.${session.source_language || session.source_lang}` : '';
     const tsvFilename = `${session.zid}${slugPart}${langPart}.tsv`;
-    downloadBtn.setAttribute('href', downloadUrl);
+    downloadBtn.setAttribute('href', '#download-tsv');
     downloadBtn.setAttribute('download', tsvFilename);
+    let loadedTsvText = null;
+    downloadBtn.onclick = async (e) => {
+        e.preventDefault();
+        try {
+            if (loadedTsvText !== null) {
+                const blob = new Blob([loadedTsvText], { type: 'text/tab-separated-values;charset=utf-8' });
+                if (blob.size > MAX_ADMIN_DOWNLOAD_BYTES) {
+                    throw new Error('TSV download exceeds maximum allowed size');
+                }
+                triggerBlobDownload(blob, tsvFilename);
+            } else {
+                await downloadAuthenticatedBlob(tsvEndpoint, tsvFilename);
+            }
+        } catch (dlErr) {
+            showToast(`Failed to download TSV: ${dlErr.message}`, 'error');
+        }
+    };
 
     try {
         const headers = {};
         if (state.token) {
             headers['X-API-Token'] = state.token;
         }
-        const resp = await fetch(downloadUrl, { headers });
+        const resp = await fetch(tsvEndpoint, { headers });
         if (!resp.ok) {
-            throw new Error(`Failed to fetch TSV: HTTP ${resp.status}`);
+            const errMsg = await parseResponseErrorMessage(resp);
+            throw new Error(`Failed to fetch TSV: ${errMsg}`);
         }
         const text = await resp.text();
+        loadedTsvText = text;
         viewer.value = text;
 
         const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
@@ -1378,10 +1502,62 @@ async function deleteSessionFromLibrary(zid) {
 // ---------------------------------------------------------------------------
 // 5. Recycle Bin (Trash) Management
 // ---------------------------------------------------------------------------
+function wireDelegatedTrashRestore(listEl) {
+    if (!listEl || listEl.dataset.delegatedRestoreWired === '1') return;
+    listEl.dataset.delegatedRestoreWired = '1';
+    listEl.addEventListener('click', (e) => {
+        const btn = e.target && e.target.closest ? e.target.closest('button[data-restore-type]') : null;
+        if (!btn) return;
+        const type = btn.dataset.restoreType;
+        const rawId = btn.dataset.restoreId;
+        if (!type || rawId === undefined) return;
+        const parsedId = type === 'project' ? parseInt(rawId, 10) : rawId;
+        if (typeof window.restoreTrash === 'function') {
+            window.restoreTrash(type, parsedId);
+        }
+    });
+}
+
+function createTrashItemElement(titleText, metaText, restoreType, restoreId) {
+    const item = document.createElement('div');
+    item.className = 'trash-item';
+
+    const info = document.createElement('div');
+    info.className = 'trash-item-info';
+
+    const strong = document.createElement('strong');
+    strong.textContent = String(titleText || '');
+    info.appendChild(strong);
+
+    const meta = document.createElement('span');
+    meta.className = 'text-muted';
+    meta.style.fontSize = '12px';
+    meta.textContent = String(metaText || '');
+    info.appendChild(meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'trash-item-actions';
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-secondary btn-sm';
+    btn.dataset.restoreType = restoreType;
+    btn.dataset.restoreId = String(restoreId);
+    btn.textContent = 'Restore';
+    actions.appendChild(btn);
+
+    item.appendChild(info);
+    item.appendChild(actions);
+    return item;
+}
+
 async function loadTrash() {
     const sessionsList = document.getElementById('deleted-sessions-list');
     const projectsList = document.getElementById('deleted-projects-list');
     const badge = document.getElementById('trash-count-badge');
+
+    wireDelegatedTrashRestore(sessionsList);
+    wireDelegatedTrashRestore(projectsList);
 
     try {
         const data = await apiFetch('/api/v1/admin/trash');
@@ -1393,42 +1569,61 @@ async function loadTrash() {
             badge.textContent = totalCount;
         }
 
-        // Render deleted sessions
+        // Render deleted sessions via safe DOM nodes + delegated events
+        sessionsList.textContent = '';
         if (state.deletedSessions.length === 0) {
-            sessionsList.innerHTML = '<div class="empty-state">No deleted sessions</div>';
+            const empty = document.createElement('div');
+            empty.className = 'empty-state';
+            empty.textContent = 'No deleted sessions';
+            sessionsList.appendChild(empty);
         } else {
-            sessionsList.innerHTML = state.deletedSessions.map(s => `
-                <div class="trash-item">
-                    <div class="trash-item-info">
-                        <strong>${escapeHtml(s.zid)}</strong>
-                        <span class="text-muted" style="font-size: 12px;">${escapeHtml(s.slug || 'Untitled')} &bull; Deleted: ${escapeHtml(s.deleted_at || '')}</span>
-                    </div>
-                    <div class="trash-item-actions">
-                        <button class="btn btn-secondary btn-sm" onclick="restoreTrash('session', '${s.zid}')">Restore</button>
-                    </div>
-                </div>
-            `).join('');
+            const frag = document.createDocumentFragment();
+            for (const s of state.deletedSessions) {
+                frag.appendChild(
+                    createTrashItemElement(
+                        s.zid,
+                        `${s.slug || 'Untitled'} \u2022 Deleted: ${s.deleted_at || ''}`,
+                        'session',
+                        s.zid
+                    )
+                );
+            }
+            sessionsList.appendChild(frag);
         }
 
-        // Render deleted projects
+        // Render deleted projects via safe DOM nodes + delegated events
+        projectsList.textContent = '';
         if (state.deletedProjects.length === 0) {
-            projectsList.innerHTML = '<div class="empty-state">No deleted projects</div>';
+            const empty = document.createElement('div');
+            empty.className = 'empty-state';
+            empty.textContent = 'No deleted projects';
+            projectsList.appendChild(empty);
         } else {
-            projectsList.innerHTML = state.deletedProjects.map(p => `
-                <div class="trash-item">
-                    <div class="trash-item-info">
-                        <strong>${escapeHtml(p.title)}</strong>
-                        <span class="text-muted" style="font-size: 12px;">ID: ${p.id} &bull; Deleted: ${escapeHtml(p.deleted_at || '')}</span>
-                    </div>
-                    <div class="trash-item-actions">
-                        <button class="btn btn-secondary btn-sm" onclick="restoreTrash('project', ${p.id})">Restore</button>
-                    </div>
-                </div>
-            `).join('');
+            const frag = document.createDocumentFragment();
+            for (const p of state.deletedProjects) {
+                frag.appendChild(
+                    createTrashItemElement(
+                        p.title,
+                        `ID: ${p.id} \u2022 Deleted: ${p.deleted_at || ''}`,
+                        'project',
+                        p.id
+                    )
+                );
+            }
+            projectsList.appendChild(frag);
         }
     } catch (e) {
-        sessionsList.innerHTML = '<div class="empty-state">Error loading trash</div>';
-        projectsList.innerHTML = '<div class="empty-state">Error loading trash</div>';
+        sessionsList.textContent = '';
+        const errS = document.createElement('div');
+        errS.className = 'empty-state';
+        errS.textContent = 'Error loading trash';
+        sessionsList.appendChild(errS);
+
+        projectsList.textContent = '';
+        const errP = document.createElement('div');
+        errP.className = 'empty-state';
+        errP.textContent = 'Error loading trash';
+        projectsList.appendChild(errP);
     }
 }
 
@@ -1479,12 +1674,12 @@ function initMaintenance() {
         }
     });
 
-    btnSqlDump.addEventListener('click', () => {
-        let dumpUrl = '/api/v1/admin/backup/dump.sql';
-        if (state.token) {
-            dumpUrl += `?token=${encodeURIComponent(state.token)}`;
+    btnSqlDump.addEventListener('click', async () => {
+        try {
+            await downloadAuthenticatedBlob('/api/v1/admin/backup/dump.sql', 'kardenwort_backup.sql');
+        } catch (err) {
+            showToast(`SQL dump failed: ${err.message}`, 'error');
         }
-        window.open(dumpUrl, '_blank');
     });
 
     btnVacuum.addEventListener('click', async () => {

@@ -9,7 +9,7 @@
 (function () {
     function compatibilityTranslationHtml(text) {
         if (typeof window.escapeHtml !== 'function') throw new Error('Required canonical escapeHtml helper is unavailable');
-        return text.indexOf('<span') === -1 ? window.escapeHtml(text) : text;
+        return window.escapeHtml(text);
     }
 
     function translationContext(container) {

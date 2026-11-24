@@ -146,7 +146,7 @@ def _offline_config_and_paths(tmp_path):
 @pytest.mark.parametrize(
     "route_name,path,method,body",
     [
-        ("session_create", "/session/create", "POST", {"text": "Das Haus.", "language": "de", "bypass_lang_check": True}),
+        ("session_create", "/session/create", "POST", {"text": "Das Haus ist alt.", "language": "de", "bypass_lang_check": True}),
         ("admin_root", "/admin", "GET", None),
         ("admin_slash", "/admin/", "GET", None),
         ("api_lookup", f"/api/v1/lookup?session_zid={SESSION_ZID}&language=de", "GET", None),
@@ -405,6 +405,7 @@ def test_1_2_backend_desk_overview_lookup_raw_islands_skeleton_and_favicon_sinks
         config=config,
         resolved_paths=paths,
         tsv_path=str(tsv),
+        seq_num=1,
         spawn_children=False,
     )
 
@@ -440,6 +441,15 @@ def test_1_2_backend_desk_overview_lookup_raw_islands_skeleton_and_favicon_sinks
             assert page.locator("#lemma-table .skeleton-loader").count() == 0, (
                 f"[{label}] untrusted 'skeleton-loader' string became trusted .skeleton-loader DOM element"
             )
+            if label == "desk_container":
+                # Also verify per-sentence child tabs (Sentence 1 & Sentence 2)
+                page.locator('button.kw-tab-chip[data-tab-seq="2"]').click()
+                assert page.evaluate("() => Boolean(window.__xss)") is False
+                assert HOSTILE_LITERAL in page.locator("#lemma-table").inner_text()
+                page.locator('button.kw-tab-chip[data-tab-seq="3"]').click()
+                assert page.evaluate("() => Boolean(window.__xss)") is False
+                assert SKELETON_POISON in page.locator("#lemma-table").inner_text()
+                assert page.locator("#lemma-table .skeleton-loader").count() == 0
         finally:
             context.close()
 

@@ -625,11 +625,12 @@
 
     function canonicalTranslationHtml(text) {
         if (window.WorkspaceTabs && window.WorkspaceTabs.getTranslationHtml) return window.WorkspaceTabs.getTranslationHtml(text);
-        var clean = (text || '').trim();
+        var clean = String(text || '').trim();
         if (clean.indexOf('<div') !== -1 || clean.indexOf('</div') !== -1) {
-            var probe = document.createElement('div');
-            probe.innerHTML = clean;
-            clean = (probe.textContent || '').trim();
+            if (typeof DOMParser !== 'undefined') {
+                var parsed = new DOMParser().parseFromString(clean, 'text/html');
+                clean = (parsed && parsed.body && parsed.body.textContent ? parsed.body.textContent : '').trim();
+            }
         }
         return escapeHtml(clean);
     }
@@ -782,7 +783,17 @@
             return;
         }
         if (typeof text === 'string' && text) {
-            tc.innerHTML = text;
+            tc.textContent = '';
+            var tLines = text.replace(/\r/g, '').split('\n');
+            if (tLines.length > 1) {
+                for (var tl = 0; tl < tLines.length; tl++) {
+                    var lineDiv = document.createElement('div');
+                    lineDiv.textContent = tLines[tl] || '\u00a0';
+                    tc.appendChild(lineDiv);
+                }
+            } else {
+                tc.textContent = text;
+            }
         }
 
         var sc = document.getElementById('source-container');
@@ -1451,12 +1462,6 @@
                         var nodeVal = text;
                         if (nodeVal && typeof nodeVal === 'object' && nodeVal.nodeType) {
                             scrollDiv.appendChild(nodeVal);
-                        } else if (typeof text === 'string' && text.indexOf('skeleton-loader') !== -1) {
-                            if (text.indexOf('kw-skeleton-cell') === -1) {
-                                scrollDiv.innerHTML = text.replace('class="skeleton-loader', 'class="skeleton-loader kw-skeleton-cell');
-                            } else {
-                                scrollDiv.innerHTML = text;
-                            }
                         } else {
                             scrollDiv.textContent = String(text || '');
                         }
@@ -1569,7 +1574,7 @@
                         window.AppState.translated_text = tText;
                         var tc = document.getElementById('translation-container');
                         if (tc) {
-                            tc.innerHTML = tText;
+                            tc.innerHTML = canonicalTranslationHtml(tText);
                             tokenizeTranslation();
                         }
                     }
@@ -1579,7 +1584,7 @@
                         window.AppState.source_text = sText;
                         var sc = document.getElementById('source-container');
                         if (sc) {
-                            sc.innerHTML = sText;
+                            sc.textContent = String(sText || '');
                             tokenizeSource();
                         }
                     }
@@ -3696,8 +3701,8 @@
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (globalStage === 'translated_words' || isTerm) {
-                            if (!morphCell.classList.contains('editing')) div.innerHTML = val;
-                            if (val && val.indexOf('skeleton-loader') === -1) {
+                            if (!morphCell.classList.contains('editing')) setCellText(div, val);
+                            if (val) {
                                 morphCell.setAttribute('title', String(val));
                                 if (div && div !== morphCell) div.setAttribute('title', String(val));
                             } else {
@@ -3706,24 +3711,19 @@
                             }
                             updated = true;
                         } else if (val !== "") {
-                            var oldVal = morphCell.classList.contains('editing') ? null : div.innerHTML;
+                            var oldVal = morphCell.classList.contains('editing') ? null : div.textContent;
                             if (oldVal !== val || hasSkeleton) {
-                                if (!morphCell.classList.contains('editing')) div.innerHTML = val;
-                                if (val.indexOf('skeleton-loader') === -1) {
-                                    morphCell.setAttribute('title', String(val));
-                                    if (div && div !== morphCell) div.setAttribute('title', String(val));
-                                } else {
-                                    morphCell.removeAttribute('title');
-                                    if (div && div !== morphCell) div.removeAttribute('title');
-                                }
+                                if (!morphCell.classList.contains('editing')) setCellText(div, val);
+                                morphCell.setAttribute('title', String(val));
+                                if (div && div !== morphCell) div.setAttribute('title', String(val));
                                 updated = true;
                             }
                         } else {
                             morphCell.removeAttribute('title');
                             if (div && div !== morphCell) div.removeAttribute('title');
                         }
-                        if (val && val.indexOf('skeleton-loader') === -1) {
-                            var unrolledMorphHtml = val ? String(val).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
+                        if (val) {
+                            var unrolledMorphHtml = escapeHtml(String(val));
                             morphCell.setAttribute('data-orig-html', String(unrolledMorphHtml));
                             morphCell.setAttribute('data-orig-title', String(val));
                             if (div && div !== morphCell) div.setAttribute('data-orig-title', String(val));
@@ -3734,27 +3734,44 @@
                         }
                     }
                     if (rowData.hasOwnProperty('classifications') && rowData.classifications !== undefined) {
+                        var clsTds = tr.querySelectorAll('td[data-col]');
                         for (var class_name in rowData.classifications) {
                             if (rowData.classifications.hasOwnProperty(class_name)) {
-                                var val = rowData.classifications[class_name] || "";
-                                var cell = (tr.querySelector('td[data-col="' + class_name + '"]'));
+                                var val = String(rowData.classifications[class_name] || "");
+                                var cell = null;
+                                for (var ci = 0; ci < clsTds.length; ci++) {
+                                    if (clsTds[ci].getAttribute('data-col') === class_name) {
+                                        cell = clsTds[ci];
+                                        break;
+                                    }
+                                }
                                 if (cell) {
                                     var div = (cell.querySelector('.scrollable-cell'));
+                                    var target = div || cell;
                                     var displayVal = val;
                                     var spanClass = "";
-                                    if (val.indexOf(':') !== -1) {
-                                        var parts = val.split(':', 2);
-                                        var possiblePrefix = parts[0].trim();
-                                        if (possiblePrefix.length <= 5 && possiblePrefix.indexOf('/') === -1 && possiblePrefix.indexOf('\\\\') === -1) {
-                                            displayVal = parts[1].trim();
+                                    var colonIdx = val.indexOf(':');
+                                    if (colonIdx !== -1) {
+                                        var possiblePrefix = val.slice(0, colonIdx).trim();
+                                        if (/^[A-Za-z0-9_-]{1,5}$/.test(possiblePrefix)) {
+                                            displayVal = val.slice(colonIdx + 1).trim();
                                             spanClass = "level-" + possiblePrefix.toLowerCase();
                                         }
                                     }
-                                    var innerHtml = spanClass ? '<span class="' + spanClass + '">' + displayVal + '</span>' : displayVal;
-                                    var oldHtml = div ? div.innerHTML : cell.innerHTML;
-                                    if (oldHtml !== innerHtml) {
-                                        if (div) div.innerHTML = innerHtml;
-                                        else cell.innerHTML = innerHtml;
+                                    var existingSpan = target.querySelector('span');
+                                    var sameCls = spanClass
+                                        ? (existingSpan && existingSpan.className === spanClass && existingSpan.textContent === displayVal && target.childNodes.length === 1)
+                                        : (!existingSpan && target.textContent === displayVal);
+                                    if (!sameCls) {
+                                        target.textContent = '';
+                                        if (spanClass) {
+                                            var levelSpan = document.createElement('span');
+                                            levelSpan.className = spanClass;
+                                            levelSpan.textContent = displayVal;
+                                            target.appendChild(levelSpan);
+                                        } else {
+                                            target.textContent = displayVal;
+                                        }
                                         updated = true;
                                     }
                                     var clsTip = formatClassificationTooltip(val, class_name);
@@ -10638,7 +10655,7 @@
                             }
                         } else {
                             if (tc) {
-                                tc.innerHTML = tText;
+                                tc.innerHTML = canonicalTranslationHtml(tText);
                             }
                         }
                     }

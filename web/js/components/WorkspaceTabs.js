@@ -269,32 +269,47 @@
         }
 
         /**
+         * Extract plain text lines from legacy HTML-formatted translation strings using an inert DOMParser.
+         * Never assigns untrusted text to a live DOM element's innerHTML.
+         * @param {string} rawHtml
+         * @returns {Array<string>}
+         */
+        function extractInertTextLines(rawHtml) {
+            var input = String(rawHtml || '');
+            if (typeof DOMParser !== 'undefined') {
+                var doc = new DOMParser().parseFromString(input, 'text/html');
+                if (doc && doc.body) {
+                    var childDivs = doc.body.querySelectorAll('div, p');
+                    if (childDivs.length > 0) {
+                        var extracted = [];
+                        for (var cd = 0; cd < childDivs.length; cd++) {
+                            extracted.push((childDivs[cd].textContent || '').trim());
+                        }
+                        return extracted;
+                    }
+                    var brs = doc.body.querySelectorAll('br');
+                    for (var b = 0; b < brs.length; b++) {
+                        brs[b].replaceWith(doc.createTextNode('\n'));
+                    }
+                    var plain = (doc.body.textContent || '').trim();
+                    return plain.replace(/\r/g, '').split('\n');
+                }
+            }
+            return input.replace(/\r/g, '').split('\n');
+        }
+
+        /**
          * @param {string|undefined|null} tText
          * @returns {string}
          */
         function getTranslationHtml(tText) {
             var w = (window);
-            if (tText && typeof tText === 'string' && tText.indexOf('skeleton-loader') !== -1) {
-                return tText;
-            }
-            if (tText && tText.trim() && tText.indexOf('skeleton-loader') === -1 && tText !== '[FAILED]' && (typeof tText !== 'string' || tText.indexOf('[Error') !== 0)) {
+            if (tText && typeof tText === 'string' && tText.trim() && tText !== '[FAILED]' && tText.indexOf('[Error') !== 0) {
                 var clean = tText.trim();
 
                 var lines = [];
                 if (clean.indexOf('<div') !== -1 || clean.indexOf('</div') !== -1 || clean.indexOf('<p') !== -1 || clean.indexOf('<br') !== -1) {
-                    var tmp = document.createElement('div');
-                    tmp.innerHTML = clean;
-                    var childDivs = tmp.querySelectorAll('div, p');
-                    if (childDivs.length > 0) {
-                        for (var cd = 0; cd < childDivs.length; cd++) {
-                            lines.push((childDivs[cd].textContent ||  (childDivs[cd]).innerText || '').trim());
-                        }
-                    }
-                    if (lines.length === 0) {
-                        var brClean = tmp.innerHTML.replace(/<br\s*[/]?>/gi, String.fromCharCode(10));
-                        tmp.innerHTML = brClean;
-                        clean = (tmp.textContent || tmp.innerText || '').trim();
-                    }
+                    lines = extractInertTextLines(clean);
                 }
                 if (lines.length === 0) {
                     lines = clean.replace(new RegExp(String.fromCharCode(13), 'g'), '').split(String.fromCharCode(10));
@@ -735,7 +750,7 @@
                             wordObj.translation = '';
                         }
                     }
-                    var isSkel = wordObj.is_pending || (typeof wordObj.translation === 'string' && wordObj.translation.indexOf('skeleton-loader') !== -1);
+                    var isSkel = Boolean(wordObj.is_pending);
                     var transDisplay = '';
                     if (isSkel) {
                         var effProv = wordObj.pending_provider || (typeof w.getLemmaBaseProvider === 'function' ? w.getLemmaBaseProvider() : (getTextBaseProvider() || 'google'));
@@ -744,7 +759,18 @@
                     } else {
                         transDisplay = escapeHtml(wordObj.translation || '');
                     }
-                    var transClean = isSkel ? '' : (wordObj.translation || '').trim();
+                    var isIpaSkel = Boolean(wordObj.is_ipa_pending);
+                    var isMorphSkel = Boolean(wordObj.is_morph_pending);
+                    var enrichLabel2 = (isIpaSkel || isMorphSkel) ? formatProviderSkeletonLabel(wordObj.enrich_pending_provider || 'intellifiller') : '';
+                    var ipaDisplay = isIpaSkel
+                        ? ('<span class="skeleton-loader kw-skeleton-cell" data-pending="true" title="' + escapeHtml(enrichLabel2) + '">' + escapeHtml(enrichLabel2) + '</span>')
+                        : escapeHtml(wordObj.ipa || '');
+                    var morphDisplay = isMorphSkel
+                        ? ('<span class="skeleton-loader kw-skeleton-cell" data-pending="true" title="' + escapeHtml(enrichLabel2) + '">' + escapeHtml(enrichLabel2) + '</span>')
+                        : escapeHtml(wordObj.morphology || '');
+                    var posDisplay = escapeHtml(wordObj.pos || '');
+
+                    var transClean = isSkel ? '' : String(wordObj.translation || '').trim();
                     var transTooltip = (!isSkel && transClean) ? formatTranslationCellTooltip(transClean, effectiveProv) : '';
                     var provData = effectiveProv ? (' data-provenance="' + escapeHtml(effectiveProv) + '"') : '';
                     var provTitle = transTooltip ? (' title="' + escapeHtml(transTooltip) + '"') : '';
@@ -759,8 +785,8 @@
                     var cardSentenceText = (wordObj.sentence_text || (w.AppState ? w.AppState.sourceText : '') || '');
                     var infTooltip = wordObj.inflected_tooltip || (appRow && appRow.inflected_tooltip) || formatInflectedTooltip(cardSentenceText, wordObj.inflected || '', wordObj.token_order || rIdStr, wordObj.lemma || '');
                     var lemTooltip = formatLemmaTooltip(wordObj.lemma || '', wordObj.gender || '', activeLang, wordObj.pos || '');
-                    var ipaTooltip = (wordObj.ipa && wordObj.ipa.indexOf('skeleton-loader') === -1) ? wordObj.ipa : '';
-                    var morphTooltip = (wordObj.morphology && wordObj.morphology.indexOf('skeleton-loader') === -1) ? wordObj.morphology : '';
+                    var ipaTooltip = (!isIpaSkel && wordObj.ipa) ? wordObj.ipa : '';
+                    var morphTooltip = (!isMorphSkel && wordObj.morphology) ? wordObj.morphology : '';
                     var posTooltip = formatPosTooltip(wordObj.pos || '');
                     var genTooltip = formatGenderTooltip(wordObj.gender || '', wordObj.lemma || '', effectiveProv || wordObj.provenance || '');
 
@@ -778,13 +804,13 @@
                         ? (' data-occurrence-targets="' + escapeHtml(JSON.stringify(wordObj.occurrence_targets)) + '"') : '';
 
                     htmlParts.push(
-                        '<tr data-row-id="' + escapeHtml(rIdStr) + '"' + allIdsAttr + ' data-token-order="' + escapeHtml(tOrdStr) + '"' + occAttr + targetsAttr + ' data-sentence-idx="' + escapeHtml(String(wordObj.sentence_idx === undefined ? 1 : wordObj.sentence_idx)) + '" data-selected="' + selAttr + '" data-filter-hidden="' + (isSel ? '0' : '1') + '" class="' + hlClass + '">' +
+                        '<tr data-row-id="' + escapeHtml(rIdStr) + '"' + allIdsAttr + ' data-token-order="' + escapeHtml(tOrdStr) + '"' + occAttr + targetsAttr + ' data-sentence-idx="' + escapeHtml(String(wordObj.sentence_idx === undefined ? 1 : wordObj.sentence_idx)) + '" data-selected="' + selAttr + '" data-filter-hidden="' + (isSel ? '0' : '1') + '" class="' + escapeHtml(hlClass) + '">' +
                         '<td class="editable col-inflected" data-col="WordSourceInflectedForm"' + infTitleAttr + '><div class="scrollable-cell">' + escapeHtml(wordObj.inflected || '') + '</div></td>' +
                         '<td class="editable col-lemma" data-col="WordSource"' + lemTitleAttr + '><div class="scrollable-cell">' + escapeHtml(wordObj.lemma || '') + '</div></td>' +
                         '<td class="editable col-translation" data-col="WordDestination"' + provAttr + '><div class="scrollable-cell"' + provAttr + '>' + transDisplay + '</div></td>' +
-                        '<td class="col-ipa" data-col="WordSourceIPA"' + ipaTitleAttr + '><div class="scrollable-cell">' + (wordObj.ipa || '') + '</div></td>' +
-                        '<td class="col-morphology" data-col="WordSourceMorphologyAI"' + morphTitleAttr + '><div class="scrollable-cell">' + (wordObj.morphology || '') + '</div></td>' +
-                        '<td class="col-pos" data-col="WordSourcePOS"' + posTitleAttr + '><div class="scrollable-cell">' + (wordObj.pos || '') + '</div></td>' +
+                        '<td class="col-ipa" data-col="WordSourceIPA"' + ipaTitleAttr + '><div class="scrollable-cell">' + ipaDisplay + '</div></td>' +
+                        '<td class="col-morphology" data-col="WordSourceMorphologyAI"' + morphTitleAttr + '><div class="scrollable-cell">' + morphDisplay + '</div></td>' +
+                        '<td class="col-pos" data-col="WordSourcePOS"' + posTitleAttr + '><div class="scrollable-cell">' + posDisplay + '</div></td>' +
                         '<td class="col-gender" data-col="WordSourceGender"' + genTitleAttr + '><div class="scrollable-cell">' + formatGenderBadge(wordObj.gender) + '</div></td>' +
                         (wordObj.dynamic_tds || '') +
                         '</tr>'
@@ -905,14 +931,7 @@
 
                             var lines = [];
                             if (rawText.indexOf('<div') !== -1 || rawText.indexOf('</div') !== -1) {
-                                var tmpDiv = document.createElement('div');
-                                tmpDiv.innerHTML = rawText;
-                                var childDivs = tmpDiv.querySelectorAll('div');
-                                if (childDivs.length > 0) {
-                                    for (var cd = 0; cd < childDivs.length; cd++) {
-                                        lines.push((childDivs[cd].textContent ||  (childDivs[cd]).innerText || '').trim());
-                                    }
-                                }
+                                lines = extractInertTextLines(rawText);
                             }
                             if (lines.length === 0) {
                                 lines = rawText.replace(new RegExp(String.fromCharCode(13), 'g'), '').split(String.fromCharCode(10));
@@ -975,7 +994,7 @@
                     }
                     tText = tText || '';
                     cards[c].translated_text = tText;
-                    if (tText && tText.trim() && tText.indexOf('skeleton-loader') === -1) {
+                    if (tText && tText.trim()) {
                         transContainer.classList.remove('skeleton-loader');
                         transContainer.removeAttribute('data-pending');
                     }

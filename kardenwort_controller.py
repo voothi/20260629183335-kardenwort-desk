@@ -4869,6 +4869,18 @@ def _sync_request_language(req_cfg, shared_cfg, lang_res):
     req_cfg.set(SEC_SETTINGS, 'default_language', lang_res['language'])
 
 
+_URL_TOKEN_PARAM_RE = re.compile(
+    r'([?&](?:token|api_token)=)([^&\s"\']+)',
+    re.IGNORECASE,
+)
+
+
+def _redact_url_tokens(text: str) -> str:
+    if not text:
+        return ""
+    return _URL_TOKEN_PARAM_RE.sub(r'\1[REDACTED]', str(text))
+
+
 class ControllerRequestHandler(BaseHTTPRequestHandler):
     """
     Central Controller daemon request handler supporting REST API, process supervision,
@@ -4888,7 +4900,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         path = getattr(self, 'path', '')
         if path and ('/health' in path or '/events' in path):
             return
-        logger.info("%s - - [%s] %s" % (self.address_string(), self.log_date_time_string(), format_str % args))
+        rendered = _redact_url_tokens(format_str % args if args else str(format_str))
+        logger.info("%s - - [%s] %s" % (self.address_string(), self.log_date_time_string(), rendered))
+
+    def log_error(self, format_str, *args):
+        rendered = _redact_url_tokens(format_str % args if args else str(format_str))
+        logger.error("%s - - [%s] %s" % (self.address_string(), self.log_date_time_string(), rendered))
 
     def _send_cors_headers(self):
         origin = self._single_header('Origin')
@@ -5274,8 +5291,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._send_error_json(status_code, se.error_code, se.message, se.details)
         except Exception as e:
             self._drain_small_unread_body()
-            logger.error(f"Unhandled Controller error on {method} {self.path}: {e}\n{traceback.format_exc()}")
-            self._send_error_json(500, ErrorCode.SERVER_ERROR, f"Internal server error: {e}")
+            safe_path = _redact_url_tokens(getattr(self, 'path', ''))
+            safe_err = _redact_url_tokens(str(e))
+            logger.error(f"Unhandled Controller error on {method} {safe_path}: {safe_err}\n{_redact_url_tokens(traceback.format_exc())}")
+            self._send_error_json(500, ErrorCode.SERVER_ERROR, f"Internal server error: {safe_err}")
         finally:
             self._pref_stack = None
             self._pref_entered = False
