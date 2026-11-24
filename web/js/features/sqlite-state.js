@@ -2,22 +2,27 @@
 (function () {
     var preferenceKeys = ['highlight_same_lemma', 'filter_selected_only'];
     var viewReadDeadlineMs = 30000;
+    function hasOccurrenceCoordinates(token) {
+        return token.sentence_idx !== undefined && token.sentence_idx !== null &&
+            token.token_order !== undefined && token.token_order !== null;
+    }
+    function matchesOccurrence(item, token) {
+        if (!hasOccurrenceCoordinates(token)) return false;
+        return Number(token.sentence_idx) === Number(item.sentence_idx) &&
+            Number(token.token_order) === Number(item.token_order) &&
+            Number(token.visual_idx) === Number(item.visual_idx);
+    }
+    function projectRestoredOccurrence(token) {
+        var atomicRows = token.atomic_row_ids !== undefined ? token.atomic_row_ids : token.row_ids;
+        return {visual_idx: token.visual_idx, sentence_idx: token.sentence_idx, token_order: token.token_order,
+            atomic_id: token.atomic_id !== undefined ? token.atomic_id : null, lemma: token.lemma || '',
+            row_ids: token.row_ids.slice(), atomic_row_ids: atomicRows.slice()};
+    }
     function restoreOccurrences(items, manifest) {
         return items.map(function(item) {
-            var matches = manifest.filter(function(token) {
-                if (token.sentence_idx === undefined || token.sentence_idx === null ||
-                    token.token_order === undefined || token.token_order === null) {
-                    return false;
-                }
-                return Number(token.sentence_idx) === Number(item.sentence_idx) && Number(token.token_order) === Number(item.token_order) &&
-                    Number(token.visual_idx) === Number(item.visual_idx);
-            });
+            var matches = manifest.filter(matchesOccurrence.bind(null, item));
             if (matches.length !== 1) return null;
-            var token = matches[0];
-            return {visual_idx: token.visual_idx, sentence_idx: token.sentence_idx, token_order: token.token_order,
-                atomic_id: token.atomic_id !== undefined ? token.atomic_id : null, lemma: token.lemma || '',
-                row_ids: token.row_ids.slice(),
-                atomic_row_ids: (token.atomic_row_ids !== undefined ? token.atomic_row_ids : token.row_ids).slice()};
+            return projectRestoredOccurrence(matches[0]);
         }).filter(function(item) { return item !== null; });
     }
     function restoredClientId() {

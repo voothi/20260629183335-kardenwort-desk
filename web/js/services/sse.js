@@ -23,6 +23,8 @@
 
     var activeServerUrl = null;
 
+    var activeNormalizedServer = null;
+
     var activeToken = '';
 
     var connectionCounter = 0;
@@ -37,56 +39,132 @@
 
     var eventSubscribers = [];
 
+    var MAX_RETRY_DELAY_MS = 16000;
+
+    var MAX_POISON_RETRIES = 1;
+
+    function isTransientHttpStatus(status) {
+        return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+    }
+
+    function parseRetryAfterMs(headers, defaultDelayMs) {
+        if (!headers || typeof headers.get !== 'function') return defaultDelayMs;
+        var raw = headers.get('Retry-After');
+        if (!raw) return defaultDelayMs;
+        var trimmed = String(raw).trim();
+        var seconds = Number(trimmed);
+        if (isFinite(seconds) && seconds >= 0) {
+            return Math.min(Math.max(Math.round(seconds * 1000), 0), MAX_RETRY_DELAY_MS);
+        }
+        var parsedDate = Date.parse(trimmed);
+        if (!isNaN(parsedDate)) {
+            return Math.min(Math.max(parsedDate - Date.now(), 0), MAX_RETRY_DELAY_MS);
+        }
+        return defaultDelayMs;
+    }
+
+    function disposeAttempt(attempt) {
+        if (!attempt || attempt.disposed) return;
+        attempt.disposed = true;
+        if (attempt.reader) {
+            var reader = attempt.reader;
+            attempt.reader = null;
+            try {
+                var cancelResult = reader.cancel();
+                if (cancelResult && typeof cancelResult.catch === 'function') {
+                    cancelResult.catch(noop);
+                }
+            } catch (e) {}
+        }
+        if (attempt.controller) {
+            var ctrl = attempt.controller;
+            attempt.controller = null;
+            try { ctrl.abort(); } catch (e) {}
+        }
+    }
+
     function authenticatedSource(url, token) {
         var source = {readyState: 0, onopen: null, onerror: null, onmessage: null, __isAuthenticatedSource: true};
-        var controller = null, timer = null, closed = false, delay = 1000, attemptId = 0;
+        var activeAttempt = null, timer = null, closed = false, terminalStopped = false;
+        var delay = 1000, attemptId = 0, consecutiveHandlerFailures = 0;
         var listeners = {};
+        function clearAttemptTimer() {
+            if (timer !== null) {
+                clearTimeout(timer);
+                timer = null;
+            }
+        }
         source.addEventListener = function(type, listener) {
             (listeners[type] = listeners[type] || []).push(listener);
         };
         source.hasPendingReconnect = function() {
-            return !closed && timer !== null;
+            return !closed && !terminalStopped && timer !== null;
+        };
+        source.canAccelerateReconnect = function() {
+            return !closed && !terminalStopped && timer !== null;
+        };
+        source.isTerminal = function() {
+            return terminalStopped;
         };
         source.close = function() {
             closed = true;
+            terminalStopped = true;
             attemptId++;
             source.readyState = 2;
-            clearTimeout(timer);
-            timer = null;
-            if (controller) {
-                try { controller.abort(); } catch (e) {}
-                controller = null;
-            }
+            clearAttemptTimer();
+            disposeAttempt(activeAttempt);
+            activeAttempt = null;
         };
-        source.reconnectNow = function() {
+        source.reconnectNow = function(force) {
             if (closed || source.readyState === 1) return;
-            clearTimeout(timer);
-            timer = null;
+            if (!force && (terminalStopped || timer === null)) return;
+            terminalStopped = false;
+            consecutiveHandlerFailures = 0;
+            clearAttemptTimer();
             delay = 1000;
             attemptId++;
-            if (controller) {
-                try { controller.abort(); } catch (e) {}
-                controller = null;
-            }
+            disposeAttempt(activeAttempt);
+            activeAttempt = null;
             start();
         };
-        function failed(myAttempt, error) {
-            if (closed || myAttempt !== attemptId) return;
-            source.readyState = error.terminal ? 2 : 0;
-            if (error.terminal && controller) controller.abort();
-            if (source.onerror) source.onerror(error);
-            if (!error.terminal && !closed && myAttempt === attemptId) {
-                timer = setTimeout(start, delay);
-                delay = Math.min(delay * 2, 16000);
+        function failed(attempt, error) {
+            disposeAttempt(attempt);
+            if (closed || !attempt || attempt.id !== attemptId) return;
+            if (activeAttempt === attempt) activeAttempt = null;
+            var err = error || new Error('Event stream failed');
+            if (err.isHandlerError) {
+                consecutiveHandlerFailures += 1;
+                if (consecutiveHandlerFailures > MAX_POISON_RETRIES) {
+                    err.terminal = true;
+                    err.isPoison = true;
+                }
+            }
+            if (err.terminal) {
+                terminalStopped = true;
+                source.readyState = 2;
+                clearAttemptTimer();
+            } else {
+                source.readyState = 0;
+            }
+            if (source.onerror) source.onerror(err);
+            if (!err.terminal && !closed && !terminalStopped && attempt.id === attemptId) {
+                var nextDelay = typeof err.retryDelayMs === 'number' ? err.retryDelayMs : delay;
+                timer = setTimeout(start, nextDelay);
+                delay = Math.min(Math.max(delay * 2, nextDelay), MAX_RETRY_DELAY_MS);
             }
         }
-        function consume(myAttempt, reader) {
+        function consume(attempt, reader) {
+            attempt.reader = reader;
             var decoder = new TextDecoder('utf-8'), buffer = '', data = [], eventType = 'message';
+            function isStale() {
+                return closed || attempt.disposed || attempt.id !== attemptId;
+            }
             function dispatch() {
-                if (!data.length || closed || myAttempt !== attemptId) return;
+                if (!data.length || isStale()) return;
                 var event = {data: data.join('\n')};
                 if (eventType === 'message' && source.onmessage) source.onmessage(event);
                 (listeners[eventType] || []).forEach(function(listener) { listener(event); });
+                consecutiveHandlerFailures = 0;
             }
             function line(value) {
                 value = value.replace(/\r$/, '');
@@ -101,8 +179,15 @@
                 }
             }
             function read() {
+                if (isStale()) {
+                    disposeAttempt(attempt);
+                    return Promise.resolve();
+                }
                 return reader.read().then(function(chunk) {
-                    if (closed || myAttempt !== attemptId) return;
+                    if (isStale()) {
+                        disposeAttempt(attempt);
+                        return;
+                    }
                     if (chunk.done) throw new Error('Event stream closed');
                     buffer += decoder.decode(chunk.value, {stream: true});
                     var lines = buffer.split('\n');
@@ -114,24 +199,47 @@
             return read();
         }
         function start() {
-            if (closed) return;
+            if (closed || terminalStopped) return;
             timer = null;
-            var myAttempt = ++attemptId;
+            disposeAttempt(activeAttempt);
+            var myAttempt = {id: ++attemptId, controller: null, reader: null, disposed: false};
+            activeAttempt = myAttempt;
             if (typeof AbortController === 'undefined' || typeof TextDecoder === 'undefined' || typeof fetch !== 'function') {
                 var unavailable = new Error('Authenticated event streaming is unavailable in this host');
                 unavailable.terminal = true;
                 failed(myAttempt, unavailable);
                 return;
             }
-            controller = new AbortController();
+            myAttempt.controller = new AbortController();
             var options = {headers: {'Accept': 'text/event-stream', 'X-API-Token': token}, cache: 'no-store'};
-            options.signal = controller.signal;
+            options.signal = myAttempt.controller.signal;
             Promise.resolve().then(function() { return fetch(url, options); }).then(function(response) {
-                if (closed || myAttempt !== attemptId) return;
-                if (!response.ok || !response.body || !response.body.getReader || typeof TextDecoder === 'undefined') {
-                    var error = new Error('Authenticated event stream unavailable' + (response.status ? ' (' + response.status + ')' : ''));
-                    error.terminal = true;
-                    throw error;
+                if (closed || myAttempt.disposed || myAttempt.id !== attemptId) {
+                    if (response && response.body && typeof response.body.getReader === 'function') {
+                        try {
+                            var staleReader = response.body.getReader();
+                            var staleCancel = staleReader.cancel();
+                            if (staleCancel && typeof staleCancel.catch === 'function') staleCancel.catch(noop);
+                        } catch (e) {}
+                    }
+                    disposeAttempt(myAttempt);
+                    return;
+                }
+                if (!response || !response.ok) {
+                    var status = response && typeof response.status === 'number' ? response.status : 0;
+                    var httpErr = new Error('Authenticated event stream unavailable' + (status ? ' (' + status + ')' : ''));
+                    if (isTransientHttpStatus(status)) {
+                        httpErr.terminal = false;
+                        httpErr.retryDelayMs = parseRetryAfterMs(response && response.headers, delay);
+                    } else {
+                        httpErr.terminal = true;
+                    }
+                    throw httpErr;
+                }
+                if (!response.body || !response.body.getReader || typeof TextDecoder === 'undefined') {
+                    var capErr = new Error('Authenticated event stream body reader unavailable');
+                    capErr.terminal = true;
+                    throw capErr;
                 }
                 source.readyState = 1;
                 delay = 1000;
@@ -145,9 +253,15 @@
         return source;
     }
 
+    function resolveEffectiveToken(token) {
+        if (token !== undefined && token !== null) return String(token);
+        var resolved = (window.getApiToken ? window.getApiToken() : window.API_TOKEN) || '';
+        return String(resolved);
+    }
+
     function createSource(url, token) {
-        token = token || (window.getApiToken ? window.getApiToken() : window.API_TOKEN) || '';
-        return token ? authenticatedSource(url, token) : new EventSource(url);
+        var effectiveToken = resolveEffectiveToken(token);
+        return effectiveToken ? authenticatedSource(url, effectiveToken) : new EventSource(url);
     }
 
     function clearReconnectTimer() {
@@ -272,10 +386,14 @@
         if (!sessionZid || typeof window.EventSource === 'undefined') return null;
 
         var w = (window);
-        var bootstrapSession = (w.__BOOTSTRAP__ && (w.__BOOTSTRAP__.session_data || w.__BOOTSTRAP__)) || null;
+        var bootstrapRoot = w.__BOOTSTRAP__ || (w.AppState && w.AppState.bootstrap) || null;
+        var bootstrapSession = (bootstrapRoot && (bootstrapRoot.session_data || bootstrapRoot)) || null;
         if (bootstrapSession && bootstrapSession.server_enabled === false) return null;
         if (!serverUrl && bootstrapSession && bootstrapSession.server_url) {
             serverUrl = bootstrapSession.server_url;
+        }
+        if (!serverUrl && bootstrapRoot && bootstrapRoot.server_url) {
+            serverUrl = bootstrapRoot.server_url;
         }
 
         // Guard against file:/// filesystem URI errors
@@ -283,8 +401,14 @@
 
         persistedResumeState = null;
 
-        // Repeated mounts or startup paths share the existing live session subscription.
-        if (activeEventSource && activeSessionZid === sessionZid && activeEventSource.readyState !== 2) {
+        var normalizedBase = normalizeServerBase(serverUrl, bootstrapSession);
+        var effectiveToken = resolveEffectiveToken(token);
+
+        // Reuse an existing live subscription only when session, normalized server and credential all match.
+        if (activeEventSource && activeEventSource.readyState !== 2 &&
+            activeSessionZid === sessionZid &&
+            activeNormalizedServer === normalizedBase &&
+            activeToken === effectiveToken) {
             return activeEventSource;
         }
         clearReconnectTimer();
@@ -295,22 +419,23 @@
             activeConnectionOpen = false;
             activeSessionZid = null;
             activeServerUrl = null;
+            activeNormalizedServer = null;
             activeToken = '';
             activeConnectionId = 0;
             w.__sseActiveZid = null;
         }
 
         try {
-            var base = normalizeServerBase(serverUrl, bootstrapSession);
-            var sseUrl = (base ? base : '') + '/api/v1/events?session=' + encodeURIComponent(sessionZid);
-            var es = createSource(sseUrl, token);
+            var sseUrl = (normalizedBase ? normalizedBase : '') + '/api/v1/events?session=' + encodeURIComponent(sessionZid);
+            var es = createSource(sseUrl, effectiveToken);
 
             activeConnectionId = ++connectionCounter;
             activeEventSource = es;
             activeConnectionOpen = false;
             activeSessionZid = sessionZid;
             activeServerUrl = serverUrl || null;
-            activeToken = token || '';
+            activeNormalizedServer = normalizedBase;
+            activeToken = effectiveToken;
             w.__sseActiveZid = sessionZid;
 
             es.recoveryMode = recoverCommitted ? 'committed' : 'membership';
@@ -340,21 +465,25 @@
                 notifyConnectionReady();
             };
 
-            es.onerror = function () {
+            es.onerror = function (err) {
                 if (activeEventSource !== es) return;
                 activeConnectionOpen = false;
                 es.recoveryMode = 'committed';
                 invalidateMembership();
                 activeConnectionId = ++connectionCounter;
                 if (es.__isAuthenticatedSource) {
-                    updateConnectionIndicator(es.readyState === 0 ? 'reconnecting' : 'disconnected');
+                    if (err && err.isPoison) {
+                        updateConnectionIndicator('error');
+                    } else {
+                        updateConnectionIndicator(es.readyState === 0 ? 'reconnecting' : 'disconnected');
+                    }
                     return;
                 }
                 if (typeof es.readyState === 'number' && es.readyState !== 0) {
                     releaseSource(es);
                     activeEventSource = null;
                     updateConnectionIndicator('reconnecting');
-                    scheduleNativeReconnect(sessionZid, serverUrl, token);
+                    scheduleNativeReconnect(sessionZid, serverUrl, effectiveToken);
                     return;
                 }
                 if (es.readyState === EventSource.CONNECTING) {
@@ -379,6 +508,7 @@
                 } catch (err) {
                     console.error('[SSE] Event application failed', err);
                     updateConnectionIndicator('error');
+                    if (err && typeof err === 'object') err.isHandlerError = true;
                     throw err;
                 }
             };
@@ -448,8 +578,10 @@
     function reconnect(force) {
         if (!activeSessionZid) return null;
         if (activeEventSource && activeEventSource.__isAuthenticatedSource) {
-            if (force && activeEventSource.readyState !== 1) {
-                activeEventSource.reconnectNow();
+            if (activeEventSource.readyState !== 1) {
+                if (force || (activeEventSource.canAccelerateReconnect && activeEventSource.canAccelerateReconnect())) {
+                    activeEventSource.reconnectNow(Boolean(force));
+                }
             }
             return activeEventSource;
         }
@@ -489,6 +621,7 @@
             activeConnectionOpen = false;
             activeSessionZid = null;
             activeServerUrl = null;
+            activeNormalizedServer = null;
             activeToken = '';
             activeConnectionId = 0;
             var w = (window);
@@ -559,7 +692,7 @@
                 if (w.SSEBridge && w.SSEBridge._onPageShow) w.SSEBridge._onPageShow(event);
             });
             w.addEventListener('online', function () {
-                if (w.SSEBridge && w.SSEBridge.reconnect) w.SSEBridge.reconnect(true);
+                if (w.SSEBridge && w.SSEBridge.reconnect) w.SSEBridge.reconnect(false);
             });
         }
     }

@@ -226,7 +226,7 @@ def test_1_1_sse_connection_identity_upgrade_rotation_server_change_and_normaliz
         assert page.evaluate("window.__sseFetchCalls[1].signal.aborted") is True, (
             "Server URL change failed to abort previous authenticated fetch"
         )
-        assert page.evaluate("window.__sseFetchCalls[2].url.startsWith(alt)", alt_origin) is True
+        assert page.evaluate("alt => window.__sseFetchCalls[2].url.startsWith(alt)", alt_origin) is True
         assert page.evaluate("window.SSEBridge.getActiveConnectionId()") != conn_before_server_change
     finally:
         server.api_key = TOKEN

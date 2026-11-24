@@ -552,8 +552,10 @@
         if (typeof window.getApiToken === 'function') return window.getApiToken();
         if (API_TOKEN && API_TOKEN !== '__API_TOKEN__') return API_TOKEN;
         if (window.API_TOKEN) return window.API_TOKEN;
-        if (window.AppState && window.AppState.bootstrap && window.AppState.bootstrap.session_data && window.AppState.bootstrap.session_data.api_token) {
-            return window.AppState.bootstrap.session_data.api_token;
+        var boot = window.__BOOTSTRAP__ || (window.AppState && window.AppState.bootstrap);
+        if (boot) {
+            if (boot.session_data && boot.session_data.api_token) return boot.session_data.api_token;
+            if (boot.api_token) return boot.api_token;
         }
         return '';
     }
@@ -1339,6 +1341,7 @@
         try {
             // Unpack Unified Bootstrap State into window globals & AppState
             if (bootstrapPayload) {
+                window.__BOOTSTRAP__ = bootstrapPayload;
                 window.__CONFIG__ = bootstrapPayload.ui_config || window.__CONFIG__ || {};
                 window.AppState = window.AppState || {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
                 window.AppState.config = window.__CONFIG__;
@@ -1363,8 +1366,8 @@
             }
             window.POS_DISPLAY_ORDER_MAP = getConfiguredPosDisplayOrder();
 
-            SESSION_ZID = session.session_zid || session.zid || '';
-            API_TOKEN = session.api_token || '';
+            SESSION_ZID = session.session_zid || session.zid || (bootstrapPayload && (bootstrapPayload.session_zid || bootstrapPayload.zid)) || '';
+            API_TOKEN = session.api_token || (bootstrapPayload && bootstrapPayload.api_token) || '';
             LANGUAGE = session.language || (bootstrapPayload && (bootstrapPayload.language || bootstrapPayload.lang)) || '';
             TARGET_LANG = session.target_lang || session.target_language || (bootstrapPayload && (bootstrapPayload.target_language || bootstrapPayload.target_lang)) || '';
             FINGERPRINT = session.fingerprint || '';
@@ -5477,8 +5480,57 @@
         }
         window.settleActiveTokenDrag = settleActiveTokenDrag;
 
+        function isCompoundOnlyRestoredItem(item) {
+            return Array.isArray(item.atomic_row_ids) && item.atomic_row_ids.length === 0;
+        }
+
+        function restoredSelectionRowIds(item) {
+            if (Array.isArray(item.atomic_row_ids)) return item.atomic_row_ids;
+            return Array.isArray(item.row_ids) ? item.row_ids : [];
+        }
+
+        function markRestoredOrphanIndex(item) {
+            if (item.visual_idx !== undefined && item.visual_idx !== null) {
+                selectedOrphanWordIdxsMap[String(item.visual_idx)] = true;
+            }
+        }
+
+        function isDerivedOrphanTokenItem(item, manifestByVidx) {
+            if (!item || item.visual_idx === undefined || item.visual_idx === null) return false;
+            if (Array.isArray(item.atomic_row_ids)) return item.atomic_row_ids.length === 0;
+            var tok = manifestByVidx && manifestByVidx[String(item.visual_idx)];
+            if (tok && Array.isArray(tok.atomic_row_ids)) return tok.atomic_row_ids.length === 0;
+            return (!item.row_ids || item.row_ids.length === 0) && (item.atomic_id === null || item.atomic_id === undefined);
+        }
+
+        function rebuildOrphanWordIdxsMap(manifestByVidx) {
+            var next = {};
+            var list = (window.AppState && Array.isArray(window.AppState.activeTokenSelections))
+                ? window.AppState.activeTokenSelections
+                : [];
+            if (list.length > 0) {
+                var byVidx = manifestByVidx;
+                if (!byVidx) {
+                    byVidx = {};
+                    for (var m = 0; m < tokenMap.length; m++) {
+                        byVidx[String(tokenMap[m].visual_idx)] = tokenMap[m];
+                    }
+                }
+                for (var i = 0; i < list.length; i++) {
+                    if (isDerivedOrphanTokenItem(list[i], byVidx)) {
+                        next[String(list[i].visual_idx)] = true;
+                    }
+                }
+            }
+            selectedOrphanWordIdxsMap = next;
+            return next;
+        }
+
         function restoreActiveTokenFocus() {
-            if (!Array.isArray(window.AppState.restoredActiveTokens)) return;
+            if (!Array.isArray(window.AppState.restoredActiveTokens)) {
+                rebuildOrphanWordIdxsMap();
+                return;
+            }
             window.AppState.activeTokenSelections = window.AppState.restoredActiveTokens;
             delete window.AppState.restoredActiveTokens;
             selectedOrphanWordIdxsMap = {};
@@ -5490,20 +5542,14 @@
         }
 
         function restorePendingTokenSelection(item) {
-            var hasExplicitAtomics = Array.isArray(item.atomic_row_ids);
-            if (hasExplicitAtomics && item.atomic_row_ids.length === 0) {
-                if (item.visual_idx !== undefined && item.visual_idx !== null) {
-                    selectedOrphanWordIdxsMap[String(item.visual_idx)] = true;
-                }
+            if (isCompoundOnlyRestoredItem(item)) {
+                markRestoredOrphanIndex(item);
                 return;
             }
             var lemma = String(item.lemma || '').trim().toLowerCase();
             if (lemma) window.AppState.selectedLemmas[lemma] = true;
             markRestoredSelection(item.atomic_id);
-            (item.atomic_row_ids || []).forEach(markRestoredSelection);
-            if (!hasExplicitAtomics) {
-                (item.row_ids || []).forEach(markRestoredSelection);
-            }
+            restoredSelectionRowIds(item).forEach(markRestoredSelection);
         }
 
         function clearTokenSelections() {
@@ -5531,6 +5577,7 @@
                 }
                 return true;
             });
+            rebuildOrphanWordIdxsMap();
             if (window.AppState.activeTokenSelections.length !== beforeCount && typeof saveActiveTokenFocus === 'function') {
                 saveActiveTokenFocus();
             }
@@ -6528,6 +6575,7 @@
                             }
                         }
 
+                        rebuildOrphanWordIdxsMap();
                         var isOrphanSelected = false;
                         var wIdx = clickedTokenData ? clickedTokenData.visual_idx : null;
                         if (wIdx !== undefined && wIdx !== null && selectedOrphanWordIdxsMap.hasOwnProperty(String(wIdx))) {
@@ -8231,7 +8279,9 @@
 
             var activeVisualIdxs = {};
             var activeLemmas = {};
+            var activeCompoundSurfaces = {};
             var activeTokenRowIds = {};
+            rebuildOrphanWordIdxsMap(tokByVidx);
             var isCompoundRow = /** @param {number|string} rVal @param {Token|null} tokObj */ function(rVal, tokObj) {
                 if (!tokObj) return false;
                 var cRows = tokObj.compound_row_ids;
@@ -8283,6 +8333,13 @@
                         }
                     }
                     var vTok = tokByVidx[String(item.visual_idx)];
+                    var isCompoundOnlyItem = isDerivedOrphanTokenItem(item, tokByVidx);
+                    if (isCompoundOnlyItem) {
+                        var vSpan = spanByVidx[String(item.visual_idx)];
+                        var surf = ((vTok && (vTok.lower_clean || vTok.text)) ||
+                            (vSpan && (vSpan.getAttribute('data-lower-clean') || vSpan.textContent)) || '').trim().toLowerCase();
+                        if (surf) activeCompoundSurfaces[surf] = true;
+                    }
                     if (item.row_ids) {
                         for (var r = 0; r < item.row_ids.length; r++) {
                             var rId = String(item.row_ids[r]);
@@ -8583,30 +8640,34 @@
             }
 
             if (hasActiveTokens && isSameLemmaOn) {
+                var hasCompoundSurfacePeers = Object.keys(activeCompoundSurfaces).length > 0;
                 for (var highlightSpanIndex = 0; highlightSpanIndex < tokenSpans.length; highlightSpanIndex++) {
                     var s = tokenSpans[highlightSpanIndex];
                     var vIdxStr = String(s.getAttribute('data-word-idx'));
                     if (activeVisualIdxs[vIdxStr]) continue;
                     if (s.classList.contains('highlight-orange-active') || s.classList.contains('highlight-purple-active')) continue;
-                    var sLem = (getWordLemma(s) || s.getAttribute('data-lower-clean') || '').trim().toLowerCase();
-                    if (!sLem) {
-                        var td = tokByVidx[vIdxStr] || (typeof findTokenData === 'function' ? findTokenData(s) : null);
-                        if (td && td.lemma) sLem = String(td.lemma).trim().toLowerCase();
+                    var td = tokByVidx[vIdxStr] || (typeof findTokenData === 'function' ? findTokenData(s) : null);
+                    var sClean = (s.getAttribute('data-lower-clean') || (td && (td.lower_clean || td.text)) || s.textContent || '').trim().toLowerCase();
+                    var sLem = (getWordLemma(s) || sClean || '').trim().toLowerCase();
+                    if (!sLem && td && td.lemma) sLem = String(td.lemma).trim().toLowerCase();
+                    var sMatchesLemma = Boolean(sLem && activeLemmas[sLem]);
+                    if (!sMatchesLemma && hasCompoundSurfacePeers && sClean && activeCompoundSurfaces[sClean]) {
+                        var isCompoundCandidate = Boolean(td && Array.isArray(td.atomic_row_ids) && td.atomic_row_ids.length === 0 &&
+                            ((td.compound_row_ids && td.compound_row_ids.length > 0) || (td.row_ids && td.row_ids.length > 0)));
+                        if (isCompoundCandidate) {
+                            sMatchesLemma = true;
+                        }
                     }
-                    var sMatchesLemma = (sLem && activeLemmas[sLem]);
-                    if (!sMatchesLemma) {
-                        var td = tokByVidx[vIdxStr] || (typeof findTokenData === 'function' ? findTokenData(s) : null);
-                        if (td) {
-                            var tdRows = (td.atomic_row_ids && td.atomic_row_ids.length > 0)
-                                ? td.atomic_row_ids
-                                : (td.row_ids || []).filter(function(r) { return !isCompoundRow(r, td); });
-                            for (var highlightRowIndex = 0; highlightRowIndex < tdRows.length; highlightRowIndex++) {
-                                if (typeof getLemmaByRowId === 'function') {
-                                    var tdLem = getLemmaByRowId(tdRows[highlightRowIndex]);
-                                    if (tdLem && activeLemmas[String(tdLem).trim().toLowerCase()]) {
-                                        sMatchesLemma = true;
-                                        break;
-                                    }
+                    if (!sMatchesLemma && td) {
+                        var tdRows = (td.atomic_row_ids && td.atomic_row_ids.length > 0)
+                            ? td.atomic_row_ids
+                            : (td.row_ids || []).filter(function(r) { return !isCompoundRow(r, td); });
+                        for (var highlightRowIndex = 0; highlightRowIndex < tdRows.length; highlightRowIndex++) {
+                            if (typeof getLemmaByRowId === 'function') {
+                                var tdLem = getLemmaByRowId(tdRows[highlightRowIndex]);
+                                if (tdLem && activeLemmas[String(tdLem).trim().toLowerCase()]) {
+                                    sMatchesLemma = true;
+                                    break;
                                 }
                             }
                         }
@@ -9118,6 +9179,7 @@
             var nextTokens = cloneActiveTokens(before.activeTokens);
             var changed = activeTokensSignature(currentTokens) !== activeTokensSignature(nextTokens);
             if (state) state.activeTokenSelections = nextTokens;
+            rebuildOrphanWordIdxsMap();
             if (changed && !deferViewSave) saveActiveTokenFocus();
             focusedRowId = before.focusedRowId;
             lastClickedRowId = before.lastClickedRowId;
@@ -9796,8 +9858,10 @@
             if (typeof window.API_TOKEN !== 'undefined' && window.API_TOKEN) {
                 return window.API_TOKEN;
             }
-            if (window.AppState && window.AppState.bootstrap && window.AppState.bootstrap.session_data && window.AppState.bootstrap.session_data.api_token) {
-                return window.AppState.bootstrap.session_data.api_token;
+            var boot = window.__BOOTSTRAP__ || (window.AppState && window.AppState.bootstrap);
+            if (boot) {
+                if (boot.session_data && boot.session_data.api_token) return boot.session_data.api_token;
+                if (boot.api_token) return boot.api_token;
             }
             return "";
         }
