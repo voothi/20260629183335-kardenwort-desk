@@ -12,7 +12,8 @@
     window.AppState = window.AppState || {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
     window.AppState.rows = window.AppState.rows || {};
 
-    window.escapeHtml = function(str) {
+    /** @param {unknown} str */
+    function escapeHtml(str) {
         if (!str) return '';
         return String(str)
             .replace(/&/g, '&amp;')
@@ -20,7 +21,46 @@
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
-    };
+    }
+    window.escapeHtml = escapeHtml;
+
+    function sanitizeHttpErrorMessage(res, rawText, fallback) {
+        var statusPart = res && res.status ? ('HTTP ' + res.status + (res.statusText ? ' ' + res.statusText : '')) : '';
+        var plain = String(rawText || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (plain && plain.length <= 160 && plain.indexOf('Unexpected token') === -1) {
+            return statusPart ? (statusPart + ': ' + plain) : plain;
+        }
+        return statusPart || fallback || 'Server error';
+    }
+
+    function readJsonResponse(res, fallback) {
+        if (!res) return Promise.resolve({ ok: false, status: 0, data: { ok: false, message: fallback || 'Network error' } });
+        if (typeof res.text === 'function') {
+            return res.text().then(function(text) {
+                var trimmed = String(text || '').trim();
+                if (!trimmed) {
+                    return { ok: Boolean(res.ok), status: res.status || 0, data: { ok: Boolean(res.ok), message: sanitizeHttpErrorMessage(res, '', fallback) } };
+                }
+                try {
+                    return { ok: Boolean(res.ok), status: res.status || 0, data: JSON.parse(trimmed) };
+                } catch (e) {
+                    return { ok: false, status: res.status || 0, nonJson: true, data: { ok: false, message: sanitizeHttpErrorMessage(res, trimmed, fallback) } };
+                }
+            }, function() {
+                return { ok: false, status: res.status || 0, data: { ok: false, message: sanitizeHttpErrorMessage(res, '', fallback) } };
+            });
+        }
+        if (typeof res.json === 'function') {
+            return res.json().then(function(data) {
+                return { ok: Boolean(res.ok), status: res.status || 0, data: data || {} };
+            }, function() {
+                return { ok: false, status: res.status || 0, nonJson: true, data: { ok: false, message: sanitizeHttpErrorMessage(res, '', fallback) } };
+            });
+        }
+        return Promise.resolve({ ok: Boolean(res.ok), status: res.status || 0, data: {} });
+    }
+
+    var lastHydratedSignature = null;
 
     var SERVER_URL = window.location.origin || '';
     var SESSION_ZID = '';
@@ -404,8 +444,9 @@
             body: JSON.stringify(payload)
         })
         .then(function (res) {
-            if (res.status === 409) {
-                return res.json().then(function (data) {
+            return readJsonResponse(res, 'Error updating tag').then(function (parsed) {
+                var data = parsed.data || {};
+                if (parsed.status === 409) {
                     if (data.error_code === 'ROW_STALE') {
                         setStatusMessage('Rows changed, reloading...', true);
                         setTimeout(function () { window.location.reload(); }, 1200);
@@ -420,19 +461,17 @@
                             else rowEl.classList.remove('kw-row-selected');
                         }
                     }
-                });
-            }
-            if (!res.ok) {
-                return res.json().then(function (data) {
+                    return;
+                }
+                if (!parsed.ok) {
                     setStatusMessage(data.message || 'Error updating tag', true);
                     checkboxEl.checked = !newStatus;
                     if (rowEl) {
                         if (!newStatus) rowEl.classList.add('kw-row-selected');
                         else rowEl.classList.remove('kw-row-selected');
                     }
-                });
-            }
-            return res.json().then(function (data) {
+                    return;
+                }
                 if (data.data && data.data.fingerprint) {
                     FINGERPRINT = data.data.fingerprint;
                 }
@@ -530,14 +569,11 @@
         })
         .then(function (res) {
             settleExportButton();
-            if (!res.ok) {
-                return res.json().then(function (data) {
-                    setStatusMessage('Export failed: ' + ((data && data.message) || res.statusText), true);
-                }, function () {
-                    setStatusMessage('Export failed: ' + (res.statusText || String(res.status)), true);
-                });
-            }
-            return res.json().then(function () {
+            return readJsonResponse(res, res.statusText || String(res.status || 'Export failed')).then(function (parsed) {
+                if (!parsed.ok) {
+                    setStatusMessage('Export failed: ' + ((parsed.data && parsed.data.message) || res.statusText || String(res.status)), true);
+                    return;
+                }
                 setStatusMessage('Export started!', false);
                 setTimeout(function () { setStatusMessage('', false); }, 2500);
             });
@@ -585,18 +621,6 @@
         return text.split(rx);
     }
     window.tokenizeText = tokenizeText;
-
-    /** @param {unknown} str */
-    function escapeHtml(str) {
-        if (!str) return '';
-        return String(str)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-    window.escapeHtml = escapeHtml;
 
     function synchronizeOverviewTranslation() {
         if (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards) return;
@@ -1141,6 +1165,33 @@
             : 'WordDestination';
     }
 
+    function findSemanticCell(tr, className, configuredName, aliases) {
+        if (!tr) return null;
+        var tds = tr.getElementsByTagName('td');
+        var expected = [];
+        if (configuredName && String(configuredName).trim()) {
+            expected.push(String(configuredName).trim().toLowerCase());
+        }
+        for (var a = 0; a < aliases.length; a++) {
+            var norm = String(aliases[a]).trim().toLowerCase();
+            if (norm && expected.indexOf(norm) === -1) expected.push(norm);
+        }
+        for (var i = 0; i < tds.length; i++) {
+            var td = tds[i];
+            if (td.classList && td.classList.contains('kw-tag-control')) continue;
+            var col = td.getAttribute('data-col');
+            if (col && expected.indexOf(String(col).trim().toLowerCase()) !== -1) return td;
+        }
+        if (className) {
+            for (var j = 0; j < tds.length; j++) {
+                var td2 = tds[j];
+                if (td2.classList && td2.classList.contains('kw-tag-control')) continue;
+                if (td2.classList && td2.classList.contains(className)) return td2;
+            }
+        }
+        return null;
+    }
+
     function getConfiguredPosDisplayOrder() {
         var cfg = window.__CONFIG__ || {};
         if (cfg.pos_display_order && typeof cfg.pos_display_order === 'object' && !Array.isArray(cfg.pos_display_order)) {
@@ -1305,7 +1356,7 @@
         };
     }
 
-    function hydrateSession() {
+    function hydrateSession(skipTabsInit) {
         var bootstrapEl = document.getElementById('kardenwort-bootstrap');
         var dataEl = document.getElementById('session-data');
 
@@ -1333,8 +1384,14 @@
         }
 
         if (!bootstrapPayload && !sessionPayload) {
-            return;
+            return false;
         }
+
+        var currentSignature = rawBootstrap + '\0' + rawSession;
+        if (lastHydratedSignature === currentSignature) {
+            return false;
+        }
+        lastHydratedSignature = currentSignature;
 
         var session = (bootstrapPayload && (bootstrapPayload.session_data || bootstrapPayload)) || sessionPayload || {};
 
@@ -1557,7 +1614,7 @@
             if (typeof wireActionToolbar === 'function') wireActionToolbar();
             if (typeof window.rebindTokenSpans === 'function') window.rebindTokenSpans();
             if (typeof window.rebindTableRows === 'function') window.rebindTableRows();
-            if (hasMultiSentence && window.WorkspaceTabs && typeof window.WorkspaceTabs.init === 'function') {
+            if (!skipTabsInit && hasMultiSentence && window.WorkspaceTabs && typeof window.WorkspaceTabs.init === 'function') {
                 window.WorkspaceTabs.init();
             }
 
@@ -1600,8 +1657,10 @@
                     }
                 };
             }
+            return true;
         } catch (e) {
             console.error('Error hydrating session data:', e);
+            return false;
         }
     }
     window.hydrateSession = hydrateSession;
@@ -1689,6 +1748,7 @@
         if (map[name]) return map[name];
         return name.charAt(0).toUpperCase() + name.slice(1) + '...';
     }
+    window.formatProviderSkeletonLabel = formatProviderSkeletonLabel;
 
     /** @param {unknown} prov */
     function formatProvenanceTooltip(prov) {
@@ -2933,7 +2993,7 @@
             window.LemmaTable.mount('#lemma-table');
         }
         if (typeof hydrateSession === 'function') {
-            hydrateSession();
+            hydrateSession(true);
         }
 
          var tableRows = [];
@@ -3471,11 +3531,11 @@
                     tr.setAttribute('data-occ', JSON.stringify(rowData.occurrence_data));
                 }
                 var tds = tr.getElementsByTagName('td');
-                var infCell = (tr.querySelector('td.col-inflected, td[data-col="WordSourceInflectedForm"]')) || (tds.length >= 5 ? tds[0] : null);
-                var lemCell = (tr.querySelector('td.col-lemma, td[data-col="WordSource"]')) || (tds.length >= 5 ? tds[1] : (tds.length > 0 ? tds[0] : null));
-                var transTd = (tr.querySelector('td.col-translation, td[data-col="WordDestination"]')) || (tds.length >= 3 ? tds[2] : (tds.length > 1 ? tds[1] : null));
-                var ipaCell = (tr.querySelector('td.col-ipa, td[data-col="WordSourceIpaAI"], td[data-col="WordSourceIpa"]')) || (tds.length > 3 ? tds[3] : null);
-                var morphCell = (tr.querySelector('td.col-morphology, td[data-col="WordSourceMorphologyAI"], td[data-col="WordSourceMorphology"]')) || (tds.length > 4 ? tds[4] : null);
+                var infCell = findSemanticCell(tr, 'col-inflected', getConfiguredInflectedColName(), ['WordSourceInflectedForm', 'inflected']);
+                var lemCell = findSemanticCell(tr, 'col-lemma', getConfiguredLemmaColName(), ['WordSource', 'lemma']);
+                var transTd = findSemanticCell(tr, 'col-translation', getConfiguredTransColName(), ['WordDestination', 'word_translation']);
+                var ipaCell = findSemanticCell(tr, 'col-ipa', '', ['WordSourceIPA', 'WordSourceIpaAI', 'WordSourceIpa', 'ipa']);
+                var morphCell = findSemanticCell(tr, 'col-morphology', '', ['WordSourceMorphologyAI', 'WordSourceMorphology', 'morphology']);
                 if (tds.length >= 1) {
                     if (infCell && !infCell.classList.contains('dirty') && rowData.hasOwnProperty('inflected') && rowData.inflected !== undefined && rowData.inflected !== "") {
                         var div = (infCell.querySelector('.scrollable-cell'));
@@ -3520,8 +3580,8 @@
                         }
                         var activeLang = (typeof getSessionLang === 'function' ? getSessionLang() : '') || (window.AppConfig ? window.AppConfig.language : '');
                         var rawG = rowData.gender !== undefined ? rowData.gender : (rowData.WordSourceGender || "");
-                        var curPosCell = (tr.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]'));
-                        var rawPos = rowData.pos !== undefined ? rowData.pos : (rowData.WordSourcePos !== undefined ? rowData.WordSourcePos : (curPosCell ? (curPosCell.textContent || "").trim() : ""));
+                        var curPosCell = findSemanticCell(tr, 'col-pos', '', ['WordSourcePOS', 'WordSourcePos', 'pos']);
+                        var rawPos = rowData.pos !== undefined ? rowData.pos : (rowData.WordSourcePOS !== undefined ? rowData.WordSourcePOS : (rowData.WordSourcePos !== undefined ? rowData.WordSourcePos : (curPosCell ? (curPosCell.textContent || "").trim() : "")));
                         var lemTip = formatLemmaTooltip(val, rawG, activeLang, rawPos);
                         if (lemTip) {
                             lemCell.setAttribute('title', String(lemTip));
@@ -3530,12 +3590,12 @@
                             lemCell.removeAttribute('title');
                             if (div && div !== lemCell) div.removeAttribute('title');
                         }
-                        var curGenderCell = (tr.querySelector('td.col-gender, td[data-col="WordSourceGender"]'));
+                        var curGenderCell = findSemanticCell(tr, 'col-gender', '', ['WordSourceGender', 'gender']);
                         if (curGenderCell) {
                             var curGenVal = rawG || (curGenderCell.textContent || "").trim();
                             var curProv = rowData.provenance || rowData._provenance || rowData.transProvenance;
                             if (!curProv) {
-                                var curTransCell = (tr.querySelector('td.col-translation, td[data-col="WordDestination"]'));
+                                var curTransCell = findSemanticCell(tr, 'col-translation', getConfiguredTransColName(), ['WordDestination', 'word_translation']);
                                 if (curTransCell) curProv = curTransCell.getAttribute('data-provenance') || undefined;
                             }
                             var updatedGenTip = formatGenderTooltip(curGenVal, val, curProv);
@@ -3617,7 +3677,8 @@
                                 targetVal = oldVal;
                             }
                             if (targetVal === "" && isTerm) {
-                                if (!transTd.classList.contains('editing')) div.innerHTML = "";
+                                if (!transTd.classList.contains('editing')) div.textContent = "";
+                                applyCellProvenance("");
                             } else {
                                 if (!transTd.classList.contains('editing')) setCellText(div, targetVal);
                                 applyCellProvenance(targetVal);
@@ -3628,7 +3689,8 @@
                             var shouldUpdate = (oldVal !== val) || hasSkeleton;
                             if (shouldUpdate) {
                                 if (val === "" && isTerm) {
-                                    if (!transTd.classList.contains('editing')) div.innerHTML = "";
+                                    if (!transTd.classList.contains('editing')) div.textContent = "";
+                                    applyCellProvenance("");
                                     updated = true;
                                 } else if (val !== "") {
                                     if (!transTd.classList.contains('editing')) setCellText(div, val);
@@ -3642,7 +3704,7 @@
                         if (transTd) {
                             var unrolledTrans = ((typeof targetVal !== 'undefined' && targetVal !== undefined) ? targetVal : val) || "";
                             if (unrolledTrans && unrolledTrans.indexOf('skeleton-loader') === -1) {
-                                var unrolledTransHtml = unrolledTrans ? String(unrolledTrans).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
+                                var unrolledTransHtml = escapeHtml(unrolledTrans);
                                 transTd.setAttribute('data-orig-html', String(unrolledTransHtml));
                                 var curTransTip = transTd.getAttribute('title') || (div ? div.getAttribute('title') : '');
                                 if (curTransTip) {
@@ -3651,6 +3713,16 @@
                                 } else {
                                     transTd.removeAttribute('data-orig-title');
                                     if (div && div !== transTd) div.removeAttribute('data-orig-title');
+                                }
+                            } else if (unrolledTrans === "" && isTerm) {
+                                transTd.removeAttribute('data-orig-html');
+                                transTd.removeAttribute('data-orig-title');
+                                transTd.removeAttribute('data-provenance');
+                                transTd.removeAttribute('title');
+                                if (div && div !== transTd) {
+                                    div.removeAttribute('data-orig-title');
+                                    div.removeAttribute('data-provenance');
+                                    div.removeAttribute('title');
                                 }
                             }
                         }
@@ -4741,8 +4813,7 @@
         /** @param {HTMLElement|null|undefined} tr */
         function getRowLemma(tr) {
             if (!tr) return '';
-            var lemCell = (tr.querySelector('.col-lemma'));
-            if (!lemCell) lemCell = (tr.querySelector('[data-col="WordSource"]'));
+            var lemCell = findSemanticCell(tr, 'col-lemma', getConfiguredLemmaColName(), ['WordSource', 'lemma']);
             if (!lemCell) return '';
             var txt = (lemCell.textContent || lemCell.innerText || '').trim();
             return txt.toLowerCase();
@@ -5693,7 +5764,7 @@
                 if (tr) {
                     var tds = tr.getElementsByTagName('td');
                     for (var m = 0; m < tds.length; m++) {
-                        if (tds[m].getAttribute('data-col') === 'WordDestination') {
+                        if (isTranslationColumnCell(tds[m])) {
                             if ( (tds[m].querySelector('.skeleton-loader')) ||  (tds[m].querySelector('[data-pending="true"]')) || tds[m].classList.contains('skeleton-loader')) {
                                 continue;
                             }
@@ -5973,6 +6044,7 @@
             s = s.replace(/(^|\s)[0-9]+(?=\s|$)/g, ' ');
             return s.replace(/\s+/g, ' ').trim();
         }
+        window.sanitizeSpokenText = sanitizeSpokenText;
 
         var browserAudio = null;
         var browserSpeech = null;
@@ -6020,9 +6092,11 @@
             var clean = sanitizeSpokenText(text);
             if (!clean) return;
             if (effectiveAudioPlaybackEngine() === 'browser_tts') {
+                if (browserAudio) browserAudio.cancel();
                 browserSpeechAudio().play(clean, lang);
                 return;
             }
+            if (browserSpeech) browserSpeech.cancel();
             if (isServerDisabled()) {
                 window.showToast('Audio unavailable: server interaction is disabled', 'warning');
                 return;
@@ -7458,15 +7532,57 @@
                 notifyAHKSelection();
             }
         }
+        function settleCancelledDrag() {
+            if (window.__deskInstanceId && myDeskInstanceId !== window.__deskInstanceId) return;
+            var lt = document.getElementById('lemma-table');
+            if (lt) lt.classList.remove('kw-table-dragging');
+            var hadDrag = isDragSelecting || isTokenDragSelecting || isRmbDragFlipping;
+            if (!hadDrag) return;
+            var settledToken = settleActiveTokenDrag(true);
+            isDragSelecting = false;
+            isTokenDragSelecting = false;
+            isRmbDragFlipping = false;
+            initialSelectedLemmas = null;
+            initialActiveTokenSelections = null;
+            initialOrphanWordIdxsMap = null;
+            mousedownTargetSpan = null;
+            mousedownTargetRow = null;
+            dragStartX = 0;
+            dragStartY = 0;
+            dragStartRowId = null;
+            dragLastRowId = null;
+            dragStartVisualIdx = -1;
+            dragLastVisualIdx = -1;
+            isShiftClick = false;
+            isCtrlKey = false;
+            tokenDragStartIdx = -1;
+            tokenDragLastIdx = -1;
+            dragOccurred = false;
+            updateRowStyles();
+            updateBidirectionalHighlights();
+            if (settledToken || hadDrag) {
+                notifyAHKSelection();
+            }
+        }
+
         if (window.__deskHandleMouseUp) {
             if (document.removeEventListener) {
                 document.removeEventListener('mouseup', window.__deskHandleMouseUp);
                 window.removeEventListener('mouseup', window.__deskHandleMouseUp);
             }
         }
+        if (window.__deskSettleCancelledDrag) {
+            if (document.removeEventListener) {
+                window.removeEventListener('blur', window.__deskSettleCancelledDrag);
+                document.removeEventListener('pointercancel', window.__deskSettleCancelledDrag);
+            }
+        }
         window.__deskHandleMouseUp = handleMouseUp;
+        window.__deskSettleCancelledDrag = settleCancelledDrag;
         addEvent(document, 'mouseup', handleMouseUp);
         addEvent(window, 'mouseup', handleMouseUp);
+        addEvent(window, 'blur', settleCancelledDrag);
+        addEvent(document, 'pointercancel', settleCancelledDrag);
 
         addEvent(document, 'contextmenu', /** @param {MouseEvent} e */ function(e) {
             if (window.__selectableTextMode) return;
@@ -7561,6 +7677,8 @@
                 clearAllSelections();
                 lastClickedVisualIdx = -1;
                 lastClickedRowId = null;
+                focusedRowId = null;
+                updateRowFocus(false);
                 updateBidirectionalHighlights();
                 notifyAHKSelection();
                 return;
@@ -7623,8 +7741,8 @@
                 if (focusedRowId !== null) {
                     var fRow = (typeof findTableRowById === 'function') ? findTableRowById(focusedRowId) : ((focusedRowId >= 0 && focusedRowId < tableRows.length) ? tableRows[focusedRowId] : null);
                     var fRowId = (fRow && fRow.getAttribute('data-row-id')) || String(focusedRowId);
-                    var cIds = (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards) ? (fRow ? getRowGroupIds(fRow) : [fRowId]) : [fRowId];
-                    var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(fRowId);
+                    var cIds = fRow ? getRowGroupIds(fRow) : [fRowId];
+                    var isCurrentlySelected = cIds.some(function(id) { return selectedRowIdsMap.hasOwnProperty(id); });
                     for (var c = 0; c < cIds.length; c++) {
                         if (isCurrentlySelected) {
                             delete selectedRowIdsMap[cIds[c]];
@@ -7635,10 +7753,12 @@
                     var fLem = fRow ? getRowLemma(fRow) : '';
                     if (fLem) setLemmaSelected(fLem, !isCurrentlySelected);
                     if (isCurrentlySelected) {
-                        pruneActiveTokensByRowOrLemma(fRowId, fLem);
+                        for (var cp = 0; cp < cIds.length; cp++) {
+                            pruneActiveTokensByRowOrLemma(cIds[cp], fLem);
+                        }
                     }
                     syncSelectionsToCardsAndState();
-                    lastClickedRowId = isCurrentlySelected ? null : parseInt(String(fRowId), 10);
+                    lastClickedRowId = resolveInteractiveRowFocus(fRowId, !isCurrentlySelected);
                     updateRowStyles();
                     updateBidirectionalHighlights();
                     notifyAHKSelection();
@@ -8196,6 +8316,42 @@
             }
         }
 
+        function buildPerPassLemmaIndex(rows) {
+            var index = Object.create(null);
+            for (var i = 0; i < rows.length; i++) {
+                var tr = rows[i];
+                var lem = getRowLemma(tr);
+                if (!lem) continue;
+                var grp = getRowGroupIds(tr);
+                for (var g = 0; g < grp.length; g++) {
+                    if (!index[grp[g]]) index[grp[g]] = lem;
+                }
+            }
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
+                var cardsList = window.WorkspaceTabs.getCards();
+                if (cardsList && cardsList.length > 0) {
+                    for (var c = 0; c < cardsList.length; c++) {
+                        var words = cardsList[c].words;
+                        if (!words) continue;
+                        for (var w = 0; w < words.length; w++) {
+                            var wObj = words[w];
+                            var wLem = (wObj.lemma || '').trim().toLowerCase();
+                            if (!wLem) continue;
+                            var rStr = String(wObj.row_id);
+                            if (!index[rStr]) index[rStr] = wLem;
+                            if (wObj.all_row_ids) {
+                                for (var a = 0; a < wObj.all_row_ids.length; a++) {
+                                    var aStr = String(wObj.all_row_ids[a]);
+                                    if (!index[aStr]) index[aStr] = wLem;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return index;
+        }
+
         function updateBidirectionalHighlights() {
             try { applyOccurrenceView(); } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             var tokByVidx = {},  spanByVidx = {},  sentByRowId = {};
@@ -8243,6 +8399,12 @@
             var curTableRows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
                 ? tableRows
                 :  (document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]'));
+            var passLemmaByRowId = buildPerPassLemmaIndex(curTableRows);
+            function fastRowLemma(rid) {
+                if (rid === undefined || rid === null) return '';
+                var key = String(rid);
+                return passLemmaByRowId[key] || '';
+            }
             for (var i = 0; i < curTableRows.length; i++) {
                 var tr = curTableRows[i];
                 if (tr.getAttribute('data-deleted') === 'true') continue;
@@ -8309,10 +8471,8 @@
                     if (rVal !== undefined && rVal !== null) {
                         var rStr = String(rVal);
                         activeTokenRowIds[rStr] = true;
-                        if (typeof getLemmaByRowId === 'function') {
-                            var rL = getLemmaByRowId(rVal);
-                            if (rL) addLem(rL);
-                        }
+                        var rL = fastRowLemma(rVal);
+                        if (rL) addLem(rL);
                     }
                 };
 
@@ -8345,7 +8505,7 @@
                             var rId = String(item.row_ids[r]);
                             markActiveRow(rId);
                             if (!isCompoundRow(rId, item) && !isCompoundRow(rId, vTok)) {
-                                var rL = (typeof getLemmaByRowId === 'function') ? getLemmaByRowId(rId) : '';
+                                var rL = fastRowLemma(rId);
                                 if (rL) addLem(rL);
                             }
                         }
@@ -8353,7 +8513,7 @@
                     if (item.row_id !== undefined && item.row_id !== null) {
                         markActiveRow(item.row_id);
                         if (!isCompoundRow(item.row_id, item) && !isCompoundRow(item.row_id, vTok)) {
-                            var rL = (typeof getLemmaByRowId === 'function') ? getLemmaByRowId(item.row_id) : '';
+                            var rL = fastRowLemma(item.row_id);
                             if (rL) addLem(rL);
                         }
                     }
@@ -8372,7 +8532,7 @@
                                 var rId = String(vTok.row_ids[r]);
                                 markActiveRow(rId);
                                 if (!isCompoundRow(rId, item) && !isCompoundRow(rId, vTok)) {
-                                    var rL = (typeof getLemmaByRowId === 'function') ? getLemmaByRowId(rId) : '';
+                                    var rL = fastRowLemma(rId);
                                     if (rL) addLem(rL);
                                 }
                             }
@@ -8439,12 +8599,10 @@
                     } else {
                         for (var cr = 0; cr < tokRowIds.length; cr++) {
                             if (isCompoundRow(tokRowIds[cr], token)) continue;
-                            if (typeof getLemmaByRowId === 'function') {
-                                var candLem = getLemmaByRowId(tokRowIds[cr]);
-                                if (candLem && activeLemmas.hasOwnProperty(String(candLem).trim().toLowerCase())) {
-                                    isLemmaActive = true;
-                                    break;
-                                }
+                            var candLem = fastRowLemma(tokRowIds[cr]);
+                            if (candLem && activeLemmas.hasOwnProperty(String(candLem).trim().toLowerCase())) {
+                                isLemmaActive = true;
+                                break;
                             }
                         }
                     }
@@ -8460,12 +8618,10 @@
                             isTokenRowSelected = true;
                             break;
                         }
-                        if (typeof getLemmaByRowId === 'function') {
-                            var rLem = getLemmaByRowId(trid);
-                            if (rLem && selLemmas && selLemmas[String(rLem).trim().toLowerCase()]) {
-                                isTokenRowSelected = true;
-                                break;
-                            }
+                        var rLem = fastRowLemma(trid);
+                        if (rLem && selLemmas && selLemmas[String(rLem).trim().toLowerCase()]) {
+                            isTokenRowSelected = true;
+                            break;
                         }
                     }
                     if (!isTokenRowSelected && tokLem && selLemmas && selLemmas[tokLem]) {
@@ -8508,7 +8664,7 @@
                                             atClean = (aSpan.getAttribute('data-lower-clean') || aSpan.textContent || '').trim().toLowerCase();
                                         }
                                         if (tokClean && atClean && tokClean === atClean) {
-                                            var aTd = (typeof findTokenDataByVisualIdx === 'function') ? findTokenDataByVisualIdx(Number(atItem.visual_idx)) : null;
+                                            var aTd = tokByVidx[String(atItem.visual_idx)] || null;
                                             var tGrp = (tSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(tSpan) : null;
                                             var aGrp = (aSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(aSpan) : null;
                                             var hasCompoundContext = (token.compound_row_ids && token.compound_row_ids.length > 0) ||
@@ -8579,7 +8735,7 @@
                         ? token.atomic_row_ids
                         : (token.row_ids || []);
                     for (var r = 0; r < tokRowIds.length; r++) {
-                        var rLem = getLemmaByRowId(tokRowIds[r]);
+                        var rLem = fastRowLemma(tokRowIds[r]);
                         if (rLem && selLemmas[rLem]) {
                             hasMatchingRow = true;
                             matchedRowId = tokRowIds[r];
@@ -8646,10 +8802,9 @@
                     var vIdxStr = String(s.getAttribute('data-word-idx'));
                     if (activeVisualIdxs[vIdxStr]) continue;
                     if (s.classList.contains('highlight-orange-active') || s.classList.contains('highlight-purple-active')) continue;
-                    var td = tokByVidx[vIdxStr] || (typeof findTokenData === 'function' ? findTokenData(s) : null);
-                    var sClean = (s.getAttribute('data-lower-clean') || (td && (td.lower_clean || td.text)) || s.textContent || '').trim().toLowerCase();
-                    var sLem = (getWordLemma(s) || sClean || '').trim().toLowerCase();
-                    if (!sLem && td && td.lemma) sLem = String(td.lemma).trim().toLowerCase();
+                    var td = tokByVidx[vIdxStr] || null;
+                    var sClean = ((td && (td.lower_clean || td.text)) || s.getAttribute('data-lower-clean') || s.textContent || '').trim().toLowerCase();
+                    var sLem = ((td && td.lemma) || sClean || '').trim().toLowerCase();
                     var sMatchesLemma = Boolean(sLem && activeLemmas[sLem]);
                     if (!sMatchesLemma && hasCompoundSurfacePeers && sClean && activeCompoundSurfaces[sClean]) {
                         var isCompoundCandidate = Boolean(td && Array.isArray(td.atomic_row_ids) && td.atomic_row_ids.length === 0 &&
@@ -8663,12 +8818,10 @@
                             ? td.atomic_row_ids
                             : (td.row_ids || []).filter(function(r) { return !isCompoundRow(r, td); });
                         for (var highlightRowIndex = 0; highlightRowIndex < tdRows.length; highlightRowIndex++) {
-                            if (typeof getLemmaByRowId === 'function') {
-                                var tdLem = getLemmaByRowId(tdRows[highlightRowIndex]);
-                                if (tdLem && activeLemmas[String(tdLem).trim().toLowerCase()]) {
-                                    sMatchesLemma = true;
-                                    break;
-                                }
+                            var tdLem = fastRowLemma(tdRows[highlightRowIndex]);
+                            if (tdLem && activeLemmas[tdLem]) {
+                                sMatchesLemma = true;
+                                break;
                             }
                         }
                     }
@@ -8787,13 +8940,6 @@
             input.type = 'text';
             input.className = 'edit-input cell-editor';
             input.value = originalValue;
-            input.style.width = '100%';
-            input.style.boxSizing = 'border-box';
-            input.style.background = '#161a22';
-            input.style.color = '#e3e6eb';
-            input.style.border = '1px solid rgba(255, 255, 255, 0.1)';
-            input.style.borderRadius = '4px';
-            input.style.padding = '4px';
 
             cell.innerHTML = '';
             if (!cell.classList.contains('editing')) {
@@ -10318,6 +10464,40 @@
             });
         }
 
+        function rollbackRejectedEditDeltas(snapshot) {
+            var reverted = false;
+            for (var i = 0; i < snapshot.length; i++) {
+                var d = snapshot[i];
+                if (!d || d.column === 'DeskSelected' || d.column === '_delete') continue;
+                var key = deltaIdentity(d);
+                var baseline = acknowledgedValues[key];
+                if (!baseline) continue;
+                var restoreVal = baseline.value != null ? String(baseline.value) : '';
+                projectCellValue(d, restoreVal);
+                var cell = currentHistoryCell(d);
+                if (cell) cell.classList.remove('dirty');
+                baseline.current = restoreVal;
+                delete acknowledgedValues[key];
+                reverted = true;
+            }
+            if (reverted) {
+                for (var h = historyStack.length - 1; h >= 0; h--) {
+                    var act = historyStack[h];
+                    if (act && act.type === 'edit') {
+                        var match = snapshot.some(function(sd) {
+                            return sd && sd.column === act.column && Number(sd.row_id) === Number(act.rowId);
+                        });
+                        if (match) {
+                            historyStack.splice(h, 1);
+                            if (historyIndex >= h) historyIndex--;
+                        }
+                    }
+                }
+                rebuildDeltas();
+                updateToolbarState();
+            }
+        }
+
         /** @param {Delta[]} snapshot */
         function saveSnapshot(snapshot, context) {
             assertCurrentSave(context);
@@ -10332,7 +10512,7 @@
                 request = Promise.resolve().then(function() {
                     if (!window.ahkCall) throw new Error('Native bridge is no longer attached');
                     var data = JSON.parse(window.ahkCall('persist_selection', body));
-                    return {ok: data.ok !== false && !data.error, json: function() { return Promise.resolve(data); }};
+                    return {ok: data.ok !== false && !data.error, status: data.ok !== false && !data.error ? 200 : 400, json: function() { return Promise.resolve(data); }};
                 });
             } else {
                 request = fetch(resolveBackendUrl('/session/save'), {
@@ -10342,8 +10522,14 @@
                 });
             }
             return request.then(function(res) {
-                return res.json().then(function(data) {
-                    if (!successfulSaveResponse(res, data)) throw new Error(formatErrorWithTrace(data, 'Save failed'));
+                return readJsonResponse(res, 'Save failed').then(function(parsed) {
+                    var data = parsed.data || {};
+                    if (!successfulSaveResponse(parsed, data)) {
+                        if (parsed.status >= 400 && parsed.status < 500) {
+                            rollbackRejectedEditDeltas(snapshot);
+                        }
+                        throw new Error(formatErrorWithTrace(data, 'Save failed'));
+                    }
                     assertCurrentSave(context);
                     var needsRead = membershipRevision !== context.revision && snapshot.some(function(d) { return d.column === 'DeskSelected'; });
                     if (needsRead) saveState.phase = 'reconciling';
@@ -10548,11 +10734,7 @@
             for (var r = 0; r < allRows.length; r++) {
                 var rowEl = allRows[r];
                 var rId = rowEl.getAttribute('data-row-id') || rowEl.getAttribute('data-token-order');
-                var transTd = (rowEl.querySelector('td[data-col="WordDestination"]')) ||  (rowEl.querySelector('.col-translation'));
-                if (!transTd) {
-                    var tds = rowEl.getElementsByTagName('td');
-                    if (tds.length >= 3) transTd = tds[2];
-                }
+                var transTd = findSemanticCell(rowEl, 'col-translation', getConfiguredTransColName(), ['WordDestination', 'word_translation']);
                 var transCell = transTd ? ( (transTd.querySelector('.scrollable-cell')) || transTd) : null;
                 var transContent = transCell ? (transCell.textContent || transCell.innerText || "").trim() : "";
                 if (!transContent || transContent === 'Loading' || transContent.indexOf('...') !== -1 || (transCell && (transCell.classList.contains('skeleton-loader') ||  (transCell.querySelector('.skeleton-loader'))))) {
@@ -10656,7 +10838,7 @@
                 body: JSON.stringify(bodyPayload)
             })
             .then(function(res) {
-                return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
+                return readJsonResponse(res, 'Retext failed');
             })
             .then(function(resObj) {
                 setButtonLoading(retextBtn, false, "", "Re-text");
@@ -10923,7 +11105,7 @@
                 body: JSON.stringify(bodyPayload)
             })
             .then(function(res) {
-                return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
+                return readJsonResponse(res, 'Retext failed');
             })
             .then(function(resObj) {
                 setButtonLoading(rewordBtn, false, "", "Re-word");
@@ -11199,7 +11381,7 @@
                 body: JSON.stringify(bodyPayload)
             })
             .then(function(res) {
-                return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
+                return readJsonResponse(res, 'Retext failed');
             })
             .then(function(resObj) {
                 setButtonLoading(exportBtn, false, "", "Send to Anki");
@@ -11234,7 +11416,13 @@
                 window.showToast("Please select rows to delete.", "warning");
                 return;
             }
-            window.deleteSelectedRows();
+            try {
+                window.deleteSelectedRows();
+            } catch (err) {
+                if (err instanceof TypeError || err instanceof ReferenceError || err instanceof SyntaxError) throw err;
+                window.showToast("Delete failed: " + (err && err.message ? err.message : String(err)), "error");
+                return;
+            }
             updateToolbarState();
             window.showToast("Deleted " + rows.length + " rows (Ctrl+Z to undo)", "info", 2000);
         };
@@ -11662,19 +11850,21 @@
             if (phase === 'failed') window.showToast('Preference not saved: ' + error.message, 'error');
         }
         var stateClient;
+        function requireStatePayload(result) {
+            var payload = result.data || {};
+            var data = payload.data || payload;
+            if (!result.ok || data.ok !== true) {
+                var error = new Error(data.message || 'SQLite state was not acknowledged');
+                error.current = data.current;
+                throw error;
+            }
+            return data;
+        }
         function stateRequest(path, body, method, signal) {
             return fetch(resolveBackendUrl(path), {method: method || 'POST', signal: signal,
                 headers: {'Content-Type': 'application/json', 'X-API-Token': getApiToken()},
                 body: JSON.stringify(body)}).then(function(response) {
-                return response.json().then(function(payload) {
-                    var data = payload.data || payload;
-                    if (!response.ok || data.ok !== true) {
-                        var error = new Error(data.message || 'SQLite state was not acknowledged');
-                        error.current = data.current;
-                        throw error;
-                    }
-                    return data;
-                });
+                return readJsonResponse(response, 'SQLite state was not acknowledged').then(requireStatePayload);
             });
         }
         function sendPreference(key, value, generation) {
@@ -12032,17 +12222,18 @@
 
     if (document.addEventListener) {
         document.addEventListener('DOMContentLoaded', function() {
-            if (!isInitialized) {
+            var didInit = !isInitialized;
+            if (didInit) {
                 init();
             }
-            if (typeof hydrateSession === 'function') {
-                hydrateSession();
-            }
-            if (typeof window.rebindTableRows === 'function') {
-                window.rebindTableRows();
-            }
-            if (typeof window.rebindTokenSpans === 'function') {
-                window.rebindTokenSpans();
+            var hydrated = typeof hydrateSession === 'function' ? hydrateSession(false) : false;
+            if (hydrated) {
+                if (typeof window.rebindTableRows === 'function') {
+                    window.rebindTableRows();
+                }
+                if (typeof window.rebindTokenSpans === 'function') {
+                    window.rebindTokenSpans();
+                }
             }
         }, false);
     }

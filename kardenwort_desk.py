@@ -15190,7 +15190,9 @@ def render_declarative_web_shell(
         presentation_css = read_required_asset(web_dir / "css/workspace.css")
         presentation_scope = "cards" if len(bootstrap_payload.get("sentence_cards", [])) > 1 else "focus"
         scope_script = f'document.documentElement.setAttribute("data-workspace-scope", "{presentation_scope}");'
+        base_html = base_html.replace('<link rel="stylesheet" href="/css/workspace.css">', '')
         base_html = base_html.replace('<script src="/js/features/sqlite-state.js"></script>', '')
+        base_html = base_html.replace('<script src="/js/features/workspace-presentation.js"></script>', '')
         base_html = base_html.replace('</head>', f'<style>{presentation_css}</style><script>{state_js}\n{scope_script}\n{presentation_js}</script></head>')
     if disable_css:
         base_html = re.sub(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
@@ -15212,6 +15214,7 @@ def render_declarative_web_shell(
         "services/sse.js",
         "features/preferences.js",
         "features/sqlite-state.js",
+        "features/workspace-presentation.js",
         "features/audio.js",
         "app.js",
     ):
@@ -15569,6 +15572,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         "services/sse.js",
         "features/preferences.js",
         "features/sqlite-state.js",
+        "features/workspace-presentation.js",
         "features/audio.js",
         "app.js",
     ):

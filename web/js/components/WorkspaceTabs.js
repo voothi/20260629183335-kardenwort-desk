@@ -377,10 +377,11 @@
             var scriptEl = document.getElementById('sentence-cards');
             var rootEl = tabTabBar || scriptEl || document.body;
 
-            if (w._kwWorkspaceTabsInitialized && w._kwWorkspaceTabsInitializedEl === rootEl && (!curZid || w._kwWorkspaceTabsInitializedZid === curZid) && !explicitCards) {
+            if (w._kwWorkspaceTabsInitialized && w._kwWorkspaceTabsInitializedEl === rootEl && (!curZid || w._kwWorkspaceTabsInitializedZid === curZid) && !explicitCards && cards && cards.length > 0) {
                 updateNavButtons();
                 return;
             }
+            var preservedSeq = (curZid && w._kwWorkspaceTabsInitializedZid === curZid && activeTabSeq !== null) ? activeTabSeq : null;
             if (curZid && w._kwWorkspaceTabsInitializedZid && w._kwWorkspaceTabsInitializedZid !== curZid) {
                 w._cachedSentenceCards = null;
             }
@@ -529,12 +530,14 @@
                 updateNavButtons();
             }
 
-            var initialSeq = 1;
-            var activeChip = document.querySelector('.kw-tab-chip.active');
-            if (activeChip) {
-                var parsedSeq = parseInt(activeChip.getAttribute('data-tab-seq') || '', 10);
-                if (!isNaN(parsedSeq)) {
-                    initialSeq = parsedSeq;
+            var initialSeq = preservedSeq !== null ? preservedSeq : 1;
+            if (preservedSeq === null) {
+                var activeChip = document.querySelector('.kw-tab-chip.active');
+                if (activeChip) {
+                    var parsedSeq = parseInt(activeChip.getAttribute('data-tab-seq') || '', 10);
+                    if (!isNaN(parsedSeq)) {
+                        initialSeq = parsedSeq;
+                    }
                 }
             }
             activeTabSeq = initialSeq;

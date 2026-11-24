@@ -96,9 +96,25 @@
 
         function checkedBlob(response) {
             if (!response.ok) {
-                return response.json().then(function (body) {
-                    throw new Error(body.message || 'Audio synthesis failed (' + response.status + ')');
-                });
+                var fallbackMsg = 'Audio synthesis failed (' + response.status + ')';
+                if (typeof response.text === 'function') {
+                    return response.text().then(function (raw) {
+                        var parsed = null;
+                        try { parsed = raw ? JSON.parse(raw) : null; } catch (e) { parsed = null; }
+                        var msg = (parsed && parsed.message) ? parsed.message : fallbackMsg;
+                        throw new Error(msg);
+                    }, function () {
+                        throw new Error(fallbackMsg);
+                    });
+                }
+                if (typeof response.json === 'function') {
+                    return response.json().then(function (body) {
+                        throw new Error((body && body.message) || fallbackMsg);
+                    }, function () {
+                        throw new Error(fallbackMsg);
+                    });
+                }
+                return Promise.reject(new Error(fallbackMsg));
             }
             return response.blob();
         }

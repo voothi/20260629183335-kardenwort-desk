@@ -49,8 +49,16 @@
         return ['Alt', 'Control', 'Meta', 'Shift', 'Tab'].indexOf(event.key) !== -1 ||
             ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c');
     }
+    function targetElement(event) {
+        var t = event && event.target;
+        if (!t) return null;
+        if (typeof t.closest === 'function') return t;
+        if (t.parentElement && typeof t.parentElement.closest === 'function') return t.parentElement;
+        return null;
+    }
     function independentTarget(event) {
-        return event.target.closest && event.target.closest('dialog, #kw-workspace-status, #kw-btn-hand-tool');
+        var el = targetElement(event);
+        return Boolean(el && el.closest('dialog, #kw-workspace-status, #kw-btn-hand-tool'));
     }
     function blockPendingKey(event) {
         if (isReady() || independentTarget(event) || isSelectionKey(event)) return;
@@ -67,16 +75,20 @@
     }
     function blockPendingAction(event) {
         if (isReady() || independentTarget(event)) return;
-        if (!event.target.closest('[aria-disabled="true"], '+regionSelector)) return;
+        var el = targetElement(event);
+        if (!el || !el.closest('[aria-disabled="true"], '+regionSelector)) return;
         if (allowTextSelection(event)) { event.stopImmediatePropagation(); return; }
         event.preventDefault(); event.stopImmediatePropagation();
     }
     function allowTextSelection(event) {
         if (unknownIdentity()) return false;
-        return !!event.target.closest('#source-container, #translation-container') &&
+        var el = targetElement(event);
+        return Boolean(el && el.closest('#source-container, #translation-container')) &&
             (window.__persistentSelectableMode || event.altKey);
     }
-    function retry() { window.__stateReady = client.start(); }
+    function retry() {
+        if (client && typeof client.start === 'function') window.__stateReady = client.start();
+    }
     function suspend() {
         if (client) client.dispose();
         if (root.getAttribute('data-workspace-scope') === 'cards') {
@@ -95,18 +107,21 @@
     }
     function bind(value) {
         client = value;
-        document.getElementById('kw-workspace-retry').onclick = retry;
+        var retryBtn = document.getElementById('kw-workspace-retry');
+        if (retryBtn) retryBtn.onclick = retry;
         projectRegions();
     }
     function resume(event) {
-        if (event.persisted) retry();
+        if (event && event.persisted) retry();
     }
     document.addEventListener('keydown', blockPendingKey, true);
     actionEvents.forEach(function(name) { document.addEventListener(name, blockPendingAction, true); });
     window.addEventListener('pagehide', suspend);
     window.addEventListener('pageshow', resume);
     root.setAttribute('data-workspace-identity', 'known');
-    if (root.getAttribute('data-workspace-scope') === 'cards' && window.SqliteState.restoredClientId()) {
+    if (root.getAttribute('data-workspace-scope') === 'cards' &&
+        window.SqliteState && typeof window.SqliteState.restoredClientId === 'function' &&
+        window.SqliteState.restoredClientId()) {
         root.setAttribute('data-workspace-identity', 'unknown');
         document.title = 'Kardenwort - Restoring view';
         if (icon) icon.setAttribute('href', '/favicon.ico');

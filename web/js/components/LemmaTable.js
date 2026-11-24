@@ -41,6 +41,9 @@
     }
 
     function sanitizeSpokenText(text) {
+        if (typeof window !== 'undefined' && typeof window.sanitizeSpokenText === 'function') {
+            return window.sanitizeSpokenText(text);
+        }
         if (!text) return '';
         var s = String(text);
         s = s.replace(/(^|[^0-9])[0-9]{14}(?![0-9])/g, '$1 ');
@@ -49,21 +52,43 @@
         return s.replace(/\s+/g, ' ').trim();
     }
 
-    function readCellText(row, selector) {
-        var cell = row.querySelector(selector);
-        return cell ? (cell.textContent || cell.innerText || '').trim() : '';
+    function findRoleCell(row, className, configuredName, aliases) {
+        if (!row) return null;
+        var tds = row.getElementsByTagName('td');
+        var names = [];
+        if (configuredName && String(configuredName).trim()) names.push(String(configuredName).trim().toLowerCase());
+        for (var a = 0; a < aliases.length; a++) {
+            var norm = String(aliases[a]).trim().toLowerCase();
+            if (norm && names.indexOf(norm) === -1) names.push(norm);
+        }
+        for (var i = 0; i < tds.length; i++) {
+            var td = tds[i];
+            if (td.classList && td.classList.contains('kw-tag-control')) continue;
+            var col = td.getAttribute('data-col');
+            if (col && names.indexOf(String(col).trim().toLowerCase()) !== -1) return td;
+        }
+        for (var j = 0; j < tds.length; j++) {
+            var td2 = tds[j];
+            if (td2.classList && td2.classList.contains('kw-tag-control')) continue;
+            if (className && td2.classList && td2.classList.contains(className)) return td2;
+        }
+        return null;
     }
 
     function resolveRowTranslationText(row) {
-        var cell = row.querySelector('td.col-translation, td[data-col="WordDestination"], td[data-col="word_translation"]');
+        var cfg = (typeof window !== 'undefined' && window.__CONFIG__) || {};
+        var cell = findRoleCell(row, 'col-translation', cfg.trans_col_name, ['WordDestination', 'word_translation']);
         if (isPendingCell(cell)) return '';
         var raw = (cell.textContent || cell.innerText || '').trim();
         return isUnfinishedTranslation(cell, raw) ? '' : sanitizeSpokenText(raw);
     }
 
     function resolveRowSourceText(row, mode) {
-        var lemma = readCellText(row, 'td.col-lemma, td[data-col="WordSource"], td[data-col="lemma"]');
-        var inflected = readCellText(row, 'td.col-inflected, td[data-col="WordSourceInflectedForm"], td[data-col="inflected"]');
+        var cfg = (typeof window !== 'undefined' && window.__CONFIG__) || {};
+        var lemmaCell = findRoleCell(row, 'col-lemma', cfg.lemma_col_name, ['WordSource', 'lemma']);
+        var infCell = findRoleCell(row, 'col-inflected', cfg.inflected_col_name, ['WordSourceInflectedForm', 'inflected']);
+        var lemma = lemmaCell ? (lemmaCell.textContent || lemmaCell.innerText || '').trim() : '';
+        var inflected = infCell ? (infCell.textContent || infCell.innerText || '').trim() : '';
         var raw = (mode === 'inflection' && inflected) ? inflected : (lemma || inflected);
         return sanitizeSpokenText(raw);
     }
