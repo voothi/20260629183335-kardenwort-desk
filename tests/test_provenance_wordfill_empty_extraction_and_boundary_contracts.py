@@ -880,3 +880,124 @@ def test_tsv_headless_intellifiller_honors_prompt_target_role_and_unfinished_429
     _, out_headers2, out_rows2 = desk.load_tsv_rows(tsv_path)
     assert out_rows2[1][out_headers2.index("WordDestination")] == "trans_Baum"
     assert out_rows2[0][out_headers2.index("WordDestination")] == "house"
+
+
+# ---------------------------------------------------------------------------
+# 7. Declarative web shell subtraction & native-audio / browser callback parity
+# ---------------------------------------------------------------------------
+
+
+def test_render_declarative_web_shell_skips_redundant_workspace_tabs_read_and_omits_legacy_placeholders(monkeypatch):
+    """render_declarative_web_shell must not call get_workspace_tabs_js redundantly or emit legacy placeholder tokens."""
+    def _forbid_redundant_read(*_args, **_kwargs):
+        raise AssertionError("Redundant get_workspace_tabs_js read must remain removed")
+
+    monkeypatch.setattr(desk, "get_workspace_tabs_js", _forbid_redundant_read)
+    html_out = desk.render_declarative_web_shell(
+        {
+            "ui_config": {"theme": "compact"},
+            "session_data": {
+                "zid": TARGET_ZID,
+                "session_zid": TARGET_ZID,
+                "language": "de",
+                "target_lang": "en",
+                "source_text": "Das Haus.",
+                "sentence_translation": "The house.",
+                "headers": ["WordSource", "WordDestination"],
+                "data_rows": [["Haus", "house"]],
+                "server_enabled": True,
+                "api_token": "tok",
+            },
+        },
+        theme="compact",
+        page_title="Shell Test",
+    )
+    assert "bindCardWordsToTbody" in html_out
+    assert 'audioPythonExe + "\\n"' in html_out
+    assert 'audioAnkiTtsCli + "\\n"' in html_out
+    assert 'lang + "\\n"' in html_out
+    for legacy_token in (
+        "{audio_lmb_play}",
+        "{audio_lmb_source}",
+        "{audio_lmb_chain_mode}",
+        "{audio_source_range_mode}",
+        "{audio_table_range_mode}",
+        "{audio_rmb_play}",
+        "{audio_rmb_chain_mode}",
+        "{audio_rmb_source}",
+        "{audio_anki_tts_cli}",
+        "{audio_python_exe}",
+        "{workspace_tabs_component_js}",
+        "{has_highlight_col}",
+    ):
+        assert legacy_token not in html_out
+
+
+def test_render_declarative_web_shell_native_audio_callback_and_browser_transport(page):
+    """Inline rendered shell preserves exact newline-delimited native ahkCall payloads and browser-only transport."""
+    py_exe = r'C:\Python "311"\python.exe'
+    tts_cli = r'U:\tools\anki-tts-cli.py'
+    html_out = desk.render_declarative_web_shell(
+        {
+            "ui_config": {
+                "theme": "compact",
+                "audio_playback_engine": "anki_tts_cli",
+                "audio_python_exe": py_exe,
+                "audio_anki_tts_cli": tts_cli,
+            },
+            "session_data": {
+                "zid": TARGET_ZID,
+                "session_zid": TARGET_ZID,
+                "language": "de",
+                "target_lang": "en",
+                "source_text": "Das Haus.",
+                "sentence_translation": "The house.",
+                "headers": ["WordSource", "WordDestination"],
+                "data_rows": [["Haus", "house"]],
+                "server_enabled": True,
+                "api_token": "owned-token",
+                "server_port": 18080,
+            },
+        },
+        theme="compact",
+        page_title="Audio Shell Test",
+    )
+
+    page.route("http://shell.invalid/", lambda route: route.fulfill(content_type="text/html; charset=utf-8", body=html_out))
+    page.add_init_script(
+        """
+        window.__ahkCalls = [];
+        window.__fetchCalls = [];
+        window.ahkCall = function(action, payload) { window.__ahkCalls.push({ action: action, payload: payload }); };
+        window.fetch = function(url, options) {
+            window.__fetchCalls.push({ url: String(url), method: options && options.method, headers: options && options.headers, body: options && options.body });
+            return new Promise(function() {});
+        };
+        """
+    )
+    page.goto("http://shell.invalid/")
+    page.wait_for_function("typeof window.playAudio === 'function'")
+
+    cases = [
+        ('Er sagte "Hallo"', "de", 'Er sagte \\"Hallo\\"'),
+        (r"eins\zwei", "de", "eins zwei"),
+        ("Äöüß привет 日本語", "de", "Äöüß привет 日本語"),
+        ("Erste Zeile\nZweite Zeile", "de", "Erste Zeile Zweite Zeile"),
+    ]
+    for spoken, lang, expected_escaped in cases:
+        page.evaluate("([t, l]) => window.playAudio(t, l)", [spoken, lang])
+
+    recorded = page.evaluate("() => window.__ahkCalls")
+    assert len(recorded) == len(cases)
+    for call, (_, lang, expected_escaped) in zip(recorded, cases):
+        assert call["action"] == "play"
+        parts = call["payload"].split("\n")
+        assert parts == [py_exe, tts_cli, lang, expected_escaped], f"Unexpected native audio payload: {parts!r}"
+
+    # Browser-only transport (without window.ahkCall) dispatches to client audio HTTP endpoint
+    page.evaluate("() => { delete window.ahkCall; window.playAudio('Äöüß \"Welt\"', 'de'); }")
+    page.wait_for_function("window.__fetchCalls.some(c => c.url.indexOf('/api/v1/audio/synthesize') !== -1)")
+    audio_reqs = page.evaluate("() => window.__fetchCalls.filter(c => c.url.indexOf('/api/v1/audio/synthesize') !== -1)")
+    assert len(audio_reqs) == 1
+    assert json.loads(audio_reqs[0]["body"]) == {"text": 'Äöüß "Welt"', "language": "de"}
+    assert audio_reqs[0]["headers"]["X-API-Token"] == "owned-token"

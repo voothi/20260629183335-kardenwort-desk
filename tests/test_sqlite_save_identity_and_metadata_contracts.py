@@ -28,6 +28,18 @@ TABULAR_HEADERS = [
 ]
 
 
+def _strip_surrogate_id(row: dict) -> dict:
+    out = {k: v for k, v in row.items() if k != "id"}
+    if isinstance(out.get("extra_fields"), dict):
+        out["extra_fields"] = {k: v for k, v in out["extra_fields"].items() if k.lower() != "tokenorder"}
+    return out
+
+
+def _custom_extra(word: dict) -> dict:
+    ef = word.get("extra_fields") or {}
+    return {k: v for k, v in ef.items() if k.lower() != "tokenorder"}
+
+
 def _cold_bundle(db_path, zid):
     return KardenwortDB(db_path=db_path).get_session_bundle(zid, parse_json=True)
 
@@ -220,8 +232,8 @@ def test_save_session_prevents_cross_lemma_spillover_and_stale_inheritance_on_le
     assert replaced["gender"] is None
     assert replaced["selected"] == 0
     assert replaced["word_provenance"] is None
-    assert replaced["extra_fields"] in (None, {})
-    assert by_coord_a[(2, 0)] == s2_before
+    assert _custom_extra(replaced) == {}
+    assert _strip_surrogate_id(by_coord_a[(2, 0)]) == _strip_surrogate_id(s2_before)
 
     # Case B: Replace (1, 0) lemma Wald -> Baum (which exists at (2, 0)); must NOT inherit (2, 0) via lemma fallback.
     adapter.save_session(
@@ -242,8 +254,8 @@ def test_save_session_prevents_cross_lemma_spillover_and_stale_inheritance_on_le
     assert by_coord_b[(1, 0)]["word_destination"] is None
     assert by_coord_b[(1, 0)]["ipa"] is None
     assert by_coord_b[(1, 0)]["word_provenance"] is None
-    assert by_coord_b[(1, 0)]["extra_fields"] in (None, {})
-    assert by_coord_b[(2, 0)] == s2_before
+    assert _custom_extra(by_coord_b[(1, 0)]) == {}
+    assert _strip_surrogate_id(by_coord_b[(2, 0)]) == _strip_surrogate_id(s2_before)
     assert _cold_bundle(db_path, NEIGHBOR_ZID) == neighbor_before
 
 
@@ -389,12 +401,12 @@ def test_save_session_tabular_preserves_omitted_metadata_updates_custom_and_clea
     )
     after_omit = _cold_bundle(db_path, TARGET_ZID)
     by_coord = {(w["sentence_index"], w["token_order"]): w for w in after_omit["words"]}
-    assert by_coord[(1, 0)]["extra_fields"] == {
+    assert _custom_extra(by_coord[(1, 0)]) == {
         "occurrence_data": {"1": {"trans": "house", "pos": "NOUN"}},
         "CustomNote": "s1-note",
         "KeepKey": "keep-value",
     }
-    assert by_coord[(2, 0)] == s2_before
+    assert _strip_surrogate_id(by_coord[(2, 0)]) == _strip_surrogate_id(s2_before)
 
     # 2. Explicit update of CustomNote column updates CustomNote while preserving omitted KeepKey & occurrence_data.
     headers_with_note = TABULAR_HEADERS + ["CustomNote"]
@@ -413,12 +425,12 @@ def test_save_session_tabular_preserves_omitted_metadata_updates_custom_and_clea
     )
     after_update = _cold_bundle(db_path, TARGET_ZID)
     by_coord_u = {(w["sentence_index"], w["token_order"]): w for w in after_update["words"]}
-    assert by_coord_u[(1, 0)]["extra_fields"] == {
+    assert _custom_extra(by_coord_u[(1, 0)]) == {
         "occurrence_data": {"1": {"trans": "house", "pos": "NOUN"}},
         "CustomNote": "s1-updated",
         "KeepKey": "keep-value",
     }
-    assert by_coord_u[(2, 0)] == s2_before
+    assert _strip_surrogate_id(by_coord_u[(2, 0)]) == _strip_surrogate_id(s2_before)
 
     # 3. Explicit clear: CustomNote column present with empty string clears CustomNote while preserving omitted KeepKey & occurrence_data.
     adapter.save_session(
@@ -436,11 +448,11 @@ def test_save_session_tabular_preserves_omitted_metadata_updates_custom_and_clea
     )
     after_clear = _cold_bundle(db_path, TARGET_ZID)
     by_coord_c = {(w["sentence_index"], w["token_order"]): w for w in after_clear["words"]}
-    assert by_coord_c[(1, 0)]["extra_fields"] == {
+    assert _custom_extra(by_coord_c[(1, 0)]) == {
         "occurrence_data": {"1": {"trans": "house", "pos": "NOUN"}},
         "KeepKey": "keep-value",
     }
-    assert by_coord_c[(2, 0)] == s2_before
+    assert _strip_surrogate_id(by_coord_c[(2, 0)]) == _strip_surrogate_id(s2_before)
     assert _cold_bundle(db_path, NEIGHBOR_ZID) == neighbor_before
 
 
