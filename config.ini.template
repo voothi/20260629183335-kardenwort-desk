@@ -548,6 +548,8 @@ generated_results_dir = ./results
 ;   browser_tts    - Native browser Web Speech API (window.speechSynthesis), bypassing backend and anki-tts-cli completely
 ;   stateless_gtts - Single-engine stateless synthesis (--stateless) via backend without Forvo dictionary, cache, or engine cycling
 playback_engine = anki_tts_cli
+; Backend CLI audio synthesis timeout in seconds (finite positive float in range 0.05..60; default 30)
+synthesis_timeout = 30
 ; Enable audio playback on LMB click on a word/row (when highlighted/selected)
 lmb_play = true
 ; What to play on LMB: 'lemma' (WordSource) or 'inflection' (WordSourceInflectedForm)
@@ -566,6 +568,8 @@ source_range_mode = all
 table_range_mode = none
 ; Enable audio playback on RMB click (translation / reverse side of the word)
 rmb_play = false
+; What to play on table-row RMB click: 'word_translation' (default, WordDestination in target language), 'lemma' (WordSource), or 'inflection' (WordSourceInflectedForm)
+rmb_source = word_translation
 ; Playback mode for multi-token RMB drag selections: 'separate' (default, individual word calls) or 'joined' (single phrase)
 rmb_chain_mode = separate
 
@@ -727,6 +731,9 @@ backend = sqlite
 
 ; Path to the SQLite database file (relative to workspace or absolute)
 sqlite_db_path = data/kardenwort.db
+
+; SQLite session lookup cache TTL in seconds (falls back to [settings].lookup_ttl_seconds if omitted; 0 disables TTL cache)
+cache_ttl_seconds = 86400
 
 ; Fallback to TSV if SQLite operation encounters an unrecoverable failure
 ; [DEPRECATED] Soft fallback from SQLite to TSV is deprecated and frozen in favor of fail-fast SQLite persistence.
