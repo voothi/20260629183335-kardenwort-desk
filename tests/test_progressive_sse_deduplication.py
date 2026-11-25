@@ -7,6 +7,7 @@ Every test runs against the real controller HTTP server, real SQLite storage,
 real EventDispatcher, and real Playwright browser contexts with deterministic
 synchronization barriers (no sleep-based polling).
 """
+import concurrent.futures
 import json
 import re
 import threading
@@ -183,6 +184,15 @@ def _seed_session(server, adapter, zid: str, *, pending: bool = True):
         "worker_status": "running" if pending else "finished",
         "lock": threading.Lock(),
     }
+    eq = getattr(server.arbiter, "enrichment_queue", None)
+    if eq is not None and hasattr(eq, "_active_progressive_sessions"):
+        with eq._lock:
+            if pending:
+                marker = concurrent.futures.Future()
+                marker.set_result(None)
+                eq._active_progressive_sessions[zid] = marker
+            else:
+                eq._active_progressive_sessions.pop(zid, None)
 
 
 def _render_session_html(server, zid: str, *, pending: bool = True) -> str:
@@ -199,9 +209,14 @@ def _render_session_html(server, zid: str, *, pending: bool = True) -> str:
         server_enabled=True,
     )
     if pending:
+        # Monolithic run_render_flow persists completed translations to SQLite; restore the pending state
+        # so watchdog /session/status polls see an active translating session instead of finished DB rows.
+        adapter = getattr(server.arbiter, "storage_adapter", None)
+        if adapter is not None:
+            _seed_session(server, adapter, zid, pending=True)
         html = with_translation_skeleton(html)
         html = re.sub(
-            r'(<td\b[^>]*data-col="WordDestination"[^>]*>\s*<div class="scrollable-cell">)(.*?)(</div>)',
+            r'(<td\b[^>]*data-col="WordDestination"[^>]*>\s*<div class="scrollable-cell"[^>]*>)(.*?)(</div>)',
             r'\1<span class="skeleton-loader" data-pending="true">Translating...</span>\3',
             html,
             count=1,
@@ -482,6 +497,10 @@ def test_1_2_two_clients_remote_selection_and_preferences_after_finished_and_idl
         )
 
         # Complete translation via server event.
+        eq = getattr(server.arbiter, "enrichment_queue", None)
+        if eq is not None and hasattr(eq, "_active_progressive_sessions"):
+            with eq._lock:
+                eq._active_progressive_sessions.pop(ZID_TWO_CLIENTS, None)
         server.arbiter.sessions[ZID_TWO_CLIENTS]["stage"] = "finished"
         server.arbiter.sessions[ZID_TWO_CLIENTS]["is_finished"] = True
         server.arbiter.sessions[ZID_TWO_CLIENTS]["worker_status"] = "finished"

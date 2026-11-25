@@ -138,11 +138,29 @@ def _assert_no_credential_in_url_or_storage(page, secret):
     assert secret not in serialized, "Credential must never be persisted in browser storage"
 
 
+def _materialize_project_session(server_url: str, project_id: int, api_key: str) -> str:
+    """Materialize a project into a persisted editable session via authenticated POST per spec 20261122213459."""
+    req = urllib.request.Request(
+        f"{server_url}/api/v1/admin/projects/synthesize",
+        data=json.dumps({"project_id": project_id, "materialize": True, "language": "de"}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-API-Token": api_key},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        assert resp.status == 200
+        payload = json.loads(resp.read().decode("utf-8"))
+    data = payload.get("data", payload)
+    zid = str(data.get("session_zid") or "")
+    assert zid, f"Expected persisted session_zid from materialize POST, got {payload}"
+    return zid
+
+
 def test_fresh_project_render_bootstraps_authenticated_workspace(browser, tmp_path, running_controller):
-    """F1 reproduction: fresh project navigation must authenticate /api/v1/client-view without injected headers."""
+    """F1 reproduction: materialized project navigation must authenticate /api/v1/client-view without injected headers."""
     server_url, server, adapter = running_controller
     project_id = _seed_owned_project(server, adapter, tmp_path)
     expected_key = server.api_key
+    materialized_zid = _materialize_project_session(server_url, project_id, expected_key)
 
     context = browser.new_context()
     try:
@@ -162,7 +180,7 @@ def test_fresh_project_render_bootstraps_authenticated_workspace(browser, tmp_pa
 
         page.on("response", record_response)
 
-        doc_response = page.goto(f"{server_url}/session/render?project_id={project_id}", wait_until="domcontentloaded")
+        doc_response = page.goto(f"{server_url}/session/render?session_zid={materialized_zid}", wait_until="domcontentloaded")
         assert doc_response is not None and doc_response.status == 200
         doc_headers = {k.lower(): v for k, v in doc_response.headers.items()}
         assert doc_headers.get("cache-control") == "no-store"
@@ -217,6 +235,7 @@ def test_project_render_retry_causal_control_and_explicit_auth_failure(browser, 
     server_url, server, adapter = running_controller
     project_id = _seed_owned_project(server, adapter, tmp_path)
     expected_key = server.api_key
+    materialized_zid = _materialize_project_session(server_url, project_id, expected_key)
 
     context = browser.new_context()
     try:
@@ -234,7 +253,7 @@ def test_project_render_retry_causal_control_and_explicit_auth_failure(browser, 
             lambda resp: exchanges.append(resp.status) if "/api/v1/client-view" in resp.url else None,
         )
 
-        doc_response = page.goto(f"{server_url}/session/render?project_id={project_id}", wait_until="domcontentloaded")
+        doc_response = page.goto(f"{server_url}/session/render?session_zid={materialized_zid}", wait_until="domcontentloaded")
         assert doc_response is not None and doc_response.status == 200
 
         expect(page.locator("html")).to_have_attribute("data-workspace-phase", "failed")

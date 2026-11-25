@@ -445,7 +445,26 @@ def test_select_switch_update_delayed_ack_reload_with_sqlite(page, tmp_path, run
 
     page.route('**/session/status?*', complete_status)
     page.set_extra_http_headers({'X-API-Token': 'test-controller-api-key'})
-    page.add_init_script("window.EventSource = class {constructor(){window.__raceSSE=this} close(){}}")
+    page.add_init_script("""
+        window.EventSource = class {constructor(){window.__raceSSE=this} close(){}};
+        let _realSSE = null;
+        Object.defineProperty(window, 'SSEBridge', {
+            configurable: true,
+            get() { return _realSSE; },
+            set(v) {
+                if (v && typeof v.connect === 'function' && !v.__raceWrapped) {
+                    const orig = v.connect;
+                    v.connect = function() {
+                        const s = orig.apply(this, arguments);
+                        if (s) window.__raceSSE = s;
+                        return s;
+                    };
+                    v.__raceWrapped = true;
+                }
+                _realSSE = v;
+            }
+        });
+    """)
     page.goto(url + '/')
     assert page.locator('#lemma-table tr[data-row-id]').count() == 2, page.locator('body').inner_text()
     with page.expect_request('**/session/save'):

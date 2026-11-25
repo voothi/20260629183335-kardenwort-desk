@@ -35,6 +35,25 @@
 
     function readJsonResponse(res, fallback) {
         if (!res) return Promise.resolve({ ok: false, status: 0, data: { ok: false, message: fallback || 'Network error' } });
+        if (typeof res.json === 'function') {
+            var clone = typeof res.clone === 'function' ? res.clone() : null;
+            return res.json().then(function(data) {
+                return { ok: Boolean(res.ok), status: res.status || 0, data: data || {} };
+            }, function() {
+                if (clone && typeof clone.text === 'function') {
+                    return clone.text().then(function(text) {
+                        var trimmed = String(text || '').trim();
+                        if (!trimmed && res.ok) {
+                            return { ok: true, status: res.status || 0, data: { ok: true, message: sanitizeHttpErrorMessage(res, '', fallback) } };
+                        }
+                        return { ok: false, status: res.status || 0, nonJson: true, data: { ok: false, message: sanitizeHttpErrorMessage(res, trimmed, fallback) } };
+                    }, function() {
+                        return { ok: false, status: res.status || 0, nonJson: true, data: { ok: false, message: sanitizeHttpErrorMessage(res, '', fallback) } };
+                    });
+                }
+                return { ok: false, status: res.status || 0, nonJson: true, data: { ok: false, message: sanitizeHttpErrorMessage(res, '', fallback) } };
+            });
+        }
         if (typeof res.text === 'function') {
             return res.text().then(function(text) {
                 var trimmed = String(text || '').trim();
@@ -50,17 +69,11 @@
                 return { ok: false, status: res.status || 0, data: { ok: false, message: sanitizeHttpErrorMessage(res, '', fallback) } };
             });
         }
-        if (typeof res.json === 'function') {
-            return res.json().then(function(data) {
-                return { ok: Boolean(res.ok), status: res.status || 0, data: data || {} };
-            }, function() {
-                return { ok: false, status: res.status || 0, nonJson: true, data: { ok: false, message: sanitizeHttpErrorMessage(res, '', fallback) } };
-            });
-        }
         return Promise.resolve({ ok: Boolean(res.ok), status: res.status || 0, data: {} });
     }
 
     var lastHydratedSignature = null;
+    var pendingHydrationError = null;
 
     var SERVER_URL = window.location.origin || '';
     var SESSION_ZID = '';
@@ -425,12 +438,21 @@
             return;
         }
 
+        var parsedRowId = parseInt(String(resolvedRowId), 10);
+        var parsedTokenOrder = parseInt(String(tokenOrderVal), 10);
+        var parsedSentenceIdx = parseInt(String(sentenceIdxVal), 10);
+        if (isNaN(parsedRowId) || isNaN(parsedTokenOrder) || isNaN(parsedSentenceIdx)) {
+            console.error('[Kardenwort] Invalid numeric coordinates on row', resolvedRowId);
+            setStatusMessage('Error: Missing row coordinates', true);
+            return;
+        }
+
         var payload = {
             session_zid: getSessionZid() || SESSION_ZID,
             language: getSessionLang() || LANGUAGE,
-            row_id: resolvedRowId,
-            token_order: tokenOrderVal,
-            sentence_idx: sentenceIdxVal,
+            row_id: parsedRowId,
+            token_order: parsedTokenOrder,
+            sentence_idx: parsedSentenceIdx,
             status: newStatus,
             fingerprint: FINGERPRINT
         };
@@ -1506,6 +1528,8 @@
                     setStatusMessage('Error: ' + errMsg, true);
                     if (typeof window.showToast === 'function') {
                         window.showToast('Error: ' + errMsg, 'error');
+                    } else {
+                        pendingHydrationError = errMsg;
                     }
                 }
                 if (hydratedPlan) {
@@ -9887,6 +9911,12 @@
             type = type || 'info';
             durationMs = durationMs || 3000;
             var container = document.getElementById('kw-toast-container');
+            if (!container && document.body) {
+                container = document.createElement('div');
+                container.id = 'kw-toast-container';
+                container.className = 'kw-toast-container';
+                document.body.appendChild(container);
+            }
             if (!container) return;
             var toast = document.createElement('div');
             toast.className = 'kw-toast kw-toast-' + type;
@@ -12202,6 +12232,11 @@
                 var btn = document.getElementById(btnId);
                 if (btn) btn.disabled = true;
             });
+        }
+        if (pendingHydrationError && typeof window.showToast === 'function') {
+            var queuedHydrationError = pendingHydrationError;
+            pendingHydrationError = null;
+            window.showToast('Error: ' + queuedHydrationError, 'error');
         }
         probeInitialWorkspace();
         resumeMountedStream();

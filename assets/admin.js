@@ -116,6 +116,18 @@ function triggerBlobDownload(blob, filename) {
     }
 }
 
+function resolveDownloadFilename(response, fallbackFilename) {
+    const disposition = response && response.headers && typeof response.headers.get === 'function'
+        ? (response.headers.get('content-disposition') || '')
+        : '';
+    const match = disposition.match(/filename="([^"]+)"|filename=([^;\s]+)/i);
+    if (match) {
+        const candidate = (match[1] || match[2] || '').trim().replace(/[\\/:*?"<>|]/g, '_');
+        if (candidate) return candidate;
+    }
+    return fallbackFilename;
+}
+
 async function downloadAuthenticatedBlob(endpoint, filename, maxBytes = MAX_ADMIN_DOWNLOAD_BYTES) {
     const headers = {};
     if (state.token) {
@@ -138,7 +150,7 @@ async function downloadAuthenticatedBlob(endpoint, filename, maxBytes = MAX_ADMI
     if (blob.size > maxBytes) {
         throw new Error(`Download exceeds maximum allowed size (${Math.round(maxBytes / (1024 * 1024))} MB)`);
     }
-    triggerBlobDownload(blob, filename);
+    triggerBlobDownload(blob, resolveDownloadFilename(response, filename));
 }
 
 // Helper: HTTP Request with API Token (header-only; never append URL tokens)
@@ -1676,7 +1688,7 @@ function initMaintenance() {
 
     btnSqlDump.addEventListener('click', async () => {
         try {
-            await downloadAuthenticatedBlob('/api/v1/admin/backup/dump.sql', 'kardenwort_backup.sql');
+            await downloadAuthenticatedBlob('/api/v1/admin/backup/dump.sql', 'kardenwort-dump.sql');
         } catch (err) {
             showToast(`SQL dump failed: ${err.message}`, 'error');
         }

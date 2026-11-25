@@ -94,27 +94,37 @@
             if (playing && playing.catch) playing.catch(function (error) { mediaFailed(owner, audio, error); });
         }
 
+        function parseErrorBody(raw, fallbackMsg) {
+            if (!raw) return fallbackMsg;
+            try {
+                var parsed = JSON.parse(raw);
+                return (parsed && parsed.message) ? parsed.message : fallbackMsg;
+            } catch (e) {
+                return fallbackMsg;
+            }
+        }
+
+        function readErrorMessage(response, fallbackMsg) {
+            if (typeof response.text === 'function') {
+                return response.text().then(function (raw) {
+                    throw new Error(parseErrorBody(raw, fallbackMsg));
+                }, function () {
+                    throw new Error(fallbackMsg);
+                });
+            }
+            if (typeof response.json === 'function') {
+                return response.json().then(function (body) {
+                    throw new Error((body && body.message) || fallbackMsg);
+                }, function () {
+                    throw new Error(fallbackMsg);
+                });
+            }
+            return Promise.reject(new Error(fallbackMsg));
+        }
+
         function checkedBlob(response) {
             if (!response.ok) {
-                var fallbackMsg = 'Audio synthesis failed (' + response.status + ')';
-                if (typeof response.text === 'function') {
-                    return response.text().then(function (raw) {
-                        var parsed = null;
-                        try { parsed = raw ? JSON.parse(raw) : null; } catch (e) { parsed = null; }
-                        var msg = (parsed && parsed.message) ? parsed.message : fallbackMsg;
-                        throw new Error(msg);
-                    }, function () {
-                        throw new Error(fallbackMsg);
-                    });
-                }
-                if (typeof response.json === 'function') {
-                    return response.json().then(function (body) {
-                        throw new Error((body && body.message) || fallbackMsg);
-                    }, function () {
-                        throw new Error(fallbackMsg);
-                    });
-                }
-                return Promise.reject(new Error(fallbackMsg));
+                return readErrorMessage(response, 'Audio synthesis failed (' + response.status + ')');
             }
             return response.blob();
         }

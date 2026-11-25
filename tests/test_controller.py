@@ -1497,8 +1497,9 @@ def test_get_session_zid_incremental_wordfill_hydration(running_controller, monk
         assert resp.status == 200
         content = resp.read().decode('utf-8')
         assert "Katze" in content
-        assert "кошка" in content
-        assert "/ˈkat͡sə/" in content
+        # Spec 20261122213459 Decision 1: passive GET /?session_zid=... is strictly read-only and must not
+        # perform wordfill hydration writes or inject unsaved hydrated cells.
+        assert "кошка" not in content
 
     restored = storage_adapter.restore_session(sess_zid)
     r_headers = restored["headers"]
@@ -1506,9 +1507,9 @@ def test_get_session_zid_incremental_wordfill_hydration(running_controller, monk
     dest_idx = r_headers.index("WordDestination")
     ipa_idx = r_headers.index("WordSourceIPA")
     morph_idx = r_headers.index("WordSourceMorphologyAI")
-    assert r_rows[0][dest_idx] == "кошка"
-    assert r_rows[0][ipa_idx] == "/ˈkat͡sə/"
-    assert r_rows[0][morph_idx] == "Noun|Fem|Sing|Nom"
+    assert r_rows[0][dest_idx] == ""
+    assert r_rows[0][ipa_idx] == ""
+    assert r_rows[0][morph_idx] == ""
 
 
 def test_controller_session_restore_container_mode_initial_active_tab_2(running_controller):

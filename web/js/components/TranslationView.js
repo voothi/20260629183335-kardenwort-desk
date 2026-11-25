@@ -7,9 +7,19 @@
  */
 
 (function () {
+    var SAFE_PREBUILT_WORD_SPAN = /^<span class="word"(?:\s+data-(?:order|sentence-idx)="\d+"){0,2}>[^<>]*<\/span>$/;
+    var SAFE_PREBUILT_STREAM = /^(?:[^<>]*<span class="word"(?:\s+data-(?:order|sentence-idx)="\d+"){0,2}>[^<>]*<\/span>)+[^<>]*$/;
+
     function compatibilityTranslationHtml(text) {
         if (typeof window.escapeHtml !== 'function') throw new Error('Required canonical escapeHtml helper is unavailable');
-        return window.escapeHtml(text);
+        var raw = String(text || '');
+        if (raw.indexOf('<span class="word"') !== -1 && SAFE_PREBUILT_STREAM.test(raw)) {
+            return raw.replace(/<span class="word"((?:\s+data-(?:order|sentence-idx)="\d+"){0,2})>([^<>]*)<\/span>|([^<>]+)/g, function (match, attrs, inner, plain) {
+                if (plain !== undefined) return window.escapeHtml(plain);
+                return '<span class="word"' + (attrs || '') + '>' + window.escapeHtml(inner) + '</span>';
+            });
+        }
+        return window.escapeHtml(raw);
     }
 
     function translationContext(container) {

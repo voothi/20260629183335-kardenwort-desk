@@ -386,13 +386,12 @@
         if (!sessionZid || typeof window.EventSource === 'undefined') return null;
 
         var w = (window);
-        var explicitServerUrl = Boolean(serverUrl);
         var bootstrapRoot = w.__BOOTSTRAP__ || (w.AppState && w.AppState.bootstrap) || null;
         var bootstrapSession = (bootstrapRoot && (bootstrapRoot.session_data || bootstrapRoot)) || null;
         var inLookupMode = typeof w.isLookupMode === 'function'
             ? w.isLookupMode()
             : Boolean(typeof document !== 'undefined' && document.body && document.body.getAttribute('data-view-mode') === 'lookup');
-        if (bootstrapSession && bootstrapSession.server_enabled === false && (inLookupMode || !explicitServerUrl)) {
+        if (bootstrapSession && bootstrapSession.server_enabled === false && inLookupMode) {
             return null;
         }
         if (!serverUrl && bootstrapSession && bootstrapSession.server_url) {

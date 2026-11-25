@@ -63,15 +63,13 @@ def test_rejected_sql_download_opens_error_without_download_or_mutation(admin_co
     page.locator('[data-tab="tab-maintenance"]').click()
     downloads = []
     page.on('download', lambda download: downloads.append(download))
-    with page.context.expect_event('response', predicate=lambda response: '/api/v1/admin/backup/dump.sql' in response.url) as rejected:
-        with page.expect_popup() as popup:
-            page.locator('#btn-sql-dump').click()
+    # Spec 20261122213459 Decision 4: SQL export uses authenticated fetch/Blob (no URL-token popup) and surfaces errors in-page.
+    with page.expect_response(lambda response: '/api/v1/admin/backup/dump.sql' in response.url) as rejected:
+        page.locator('#btn-sql-dump').click()
     assert rejected.value.status == 403
-    popup.value.wait_for_load_state()
-    expect(popup.value.locator('body')).to_contain_text('error')
+    expect(page.locator('#toast-container .toast.error').last).to_contain_text('SQL dump failed')
     assert downloads == []
     assert db.get_session_bundle('20261112080001') == before
-    popup.value.close()
 
 
 @pytest.mark.parametrize('content', ['', 'UnknownColumn\nnot-a-session\n',

@@ -1,13 +1,12 @@
 """Strict JSONL record boundary for the configured word extractor."""
 import json
-import math
 
 
 def _valid_scalar(value):
     if isinstance(value, bool):
         return False
     if isinstance(value, float):
-        return math.isfinite(value)
+        return float('-inf') < value < float('inf')
     return isinstance(value, (str, int))
 
 

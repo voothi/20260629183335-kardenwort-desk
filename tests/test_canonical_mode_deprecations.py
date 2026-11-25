@@ -57,8 +57,10 @@ def test_canonical_defaults_and_template_parity():
     cfg_tmpl = _load_ini(REPO_ROOT / "config.ini.template")
     assert set(cfg_live.sections()) == set(cfg_tmpl.sections())
     for section in cfg_live.sections():
-        assert set(cfg_live[section].keys()) == set(cfg_tmpl[section].keys()), (
-            f"Key mismatch in section [{section}] between config.ini and config.ini.template"
+        # Spec 20261122213502: template documents all supported runtime keys (including optional keys with defaults)
+        # without overwriting personal config.ini to force key-set equality.
+        assert set(cfg_live[section].keys()) <= set(cfg_tmpl[section].keys()), (
+            f"Unsupported key in config.ini section [{section}] missing from config.ini.template"
         )
 
 

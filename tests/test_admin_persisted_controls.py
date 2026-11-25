@@ -447,8 +447,15 @@ def test_admin_reader_buttons_open_owned_rendered_view(admin_contract, controlle
         target.get_by_role('button', name='Desk' if view == 'desk' else 'Dict', exact=True).click()
     popup = opened.value
     try:
-        popup.wait_for_load_state('domcontentloaded')
-        assert f'project_id={project}' in popup.url if scope == 'project' else f'session_zid={zid}' in popup.url
+        if scope == 'project' and view == 'desk':
+            # Spec 20261122213459 Decision 1: Admin Open Project in Desk explicitly materializes and navigates to /?session_zid=...
+            popup.wait_for_url(lambda u: 'session_zid=' in u, timeout=10000)
+            popup.wait_for_load_state('domcontentloaded')
+            assert 'session_zid=' in popup.url
+            assert 'token=' not in popup.url
+        else:
+            popup.wait_for_load_state('domcontentloaded')
+            assert f'project_id={project}' in popup.url if scope == 'project' else f'session_zid={zid}' in popup.url
         assert ('view=goldendict' in popup.url) is (view == 'dict')
         expect(popup.locator('body')).to_contain_text('Haus')
         assert db.get_session_bundle(zid) == before

@@ -49,10 +49,36 @@ window.EventSource = class {
     constructor() { window.__eventSource = this; }
     close() {}
 };
+(function() {
+    let realBridge = null;
+    Object.defineProperty(window, 'SSEBridge', {
+        configurable: true,
+        get() { return realBridge; },
+        set(value) {
+            if (value && typeof value.connect === 'function' && !value.__auditWrapped) {
+                const origConnect = value.connect;
+                value.connect = function() {
+                    const src = origConnect.apply(this, arguments);
+                    if (src) window.__eventSource = src;
+                    return src;
+                };
+                value.__auditWrapped = true;
+            }
+            realBridge = value;
+        }
+    });
+})();
 window.fetch = function(url, options) {
     const body = options && options.body ? JSON.parse(options.body) : null;
     const headers = options && options.headers ? options.headers : {};
     window.__requests.push({url: String(url), body, headers});
+    if (String(url).includes('/api/v1/events')) {
+        return new Promise((resolve, reject) => {
+            if (options && options.signal) {
+                options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+            }
+        });
+    }
     const response = data => ({ok: true, status: 200, json: async () => data});
     if (String(url).includes('/session/save') && window.__holdSaves) {
         return new Promise(resolve => window.__pendingSaves.push(

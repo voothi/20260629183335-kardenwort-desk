@@ -133,6 +133,12 @@ def test_invalid_tsv_records_fail_explicitly_without_fabricated_membership(runni
     path.write_text(texts[malformed], encoding='utf-8')
     before = snapshot(tmp_path)
     status, response = post(url, '/internal/selection', dict(session_zid=ZID))
+    if malformed == 'missing-selection':
+        # Spec 20261122213500 Decision 1: optional TSV selection column absence returns {} without mutation.
+        assert status == 200, response
+        assert data(response)['shared_selection'] == {}
+        assert snapshot(tmp_path) == before
+        return
     assert status == 500, response
     assert response['error_code'] == 'QUERY_FAILED'
     assert 'shared_selection' not in data(response)

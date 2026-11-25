@@ -142,6 +142,16 @@ def test_project_reader_uses_relational_materials_without_mirror_tsv(world):
             connection.close()
     assert world.snapshot() == original
     cold = desk.SqliteStorageAdapter(world.config, world.paths)
+    # Spec 20261122213459 Decision 1: passive GET /?project_id=... is a read-only preview (zero sessions created).
+    assert ({row['zid'] for row in cold.db.list_sessions_with_counts()} - sessions_before) == set()
+    # Explicit authenticated materialization creates the relational session without mirror TSV writes.
+    with token_service() as tokenizer:
+        world.config.set('services', 'spacy_server_url', f'http://127.0.0.1:{tokenizer.server_port}')
+        with control_writes() as writes:
+            status, result = post(world, '/api/v1/admin/projects/synthesize',
+                                  dict(project_id=project, materialize=True, language='de'))
+        assert status == 200, result
+        assert prohibited(writes) == []
     created = {row['zid'] for row in cold.db.list_sessions_with_counts()} - sessions_before
     assert len(created) == 1
     assert {word['lemma'] for word in cold.db.get_words_by_session(created.pop())} >= {'Haus', 'Baum'}

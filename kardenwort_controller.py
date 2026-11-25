@@ -444,14 +444,23 @@ def _ensure_draft_meta_locked(zid: str, draft: dict, now: float) -> dict:
     return meta
 
 
-def _prune_idle_drafts_locked(max_entries: int, ttl_seconds: float, now: float) -> None:
+def _prune_idle_drafts_locked(
+    max_entries: int,
+    ttl_seconds: float,
+    now: float,
+    protected_zid: Optional[str] = None,
+) -> None:
     stale_meta = [z for z in list(_DRAFT_META) if z not in _DRAFT_SESSIONS]
     for z in stale_meta:
         _DRAFT_META.pop(z, None)
     unclaimed = []
+    has_protected_unclaimed = False
     for z, draft in list(_DRAFT_SESSIONS.items()):
         meta = _ensure_draft_meta_locked(z, draft, now)
         if meta["claimed_by"] is not None:
+            continue
+        if protected_zid is not None and z == protected_zid:
+            has_protected_unclaimed = True
             continue
         if (now - meta["created_at"]) > ttl_seconds:
             _DRAFT_SESSIONS.pop(z, None)
@@ -459,7 +468,8 @@ def _prune_idle_drafts_locked(max_entries: int, ttl_seconds: float, now: float) 
         else:
             unclaimed.append((meta["created_at"], meta["draft_id"], z))
     unclaimed.sort()
-    excess = len(unclaimed) - max(1, max_entries)
+    keep_limit = max(1, max_entries) - (1 if has_protected_unclaimed else 0)
+    excess = len(unclaimed) - max(0, keep_limit)
     for _, _, z in unclaimed[:max(0, excess)]:
         _DRAFT_SESSIONS.pop(z, None)
         _DRAFT_META.pop(z, None)
@@ -490,7 +500,7 @@ def _store_draft_session(
             "claimed_by": None,
             "language_committed": None,
         }
-        _prune_idle_drafts_locked(cap, ttl, stamp)
+        _prune_idle_drafts_locked(cap, ttl, stamp, protected_zid=zid)
 
 
 def _claim_draft_session(
@@ -5778,7 +5788,13 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     try:
                         with storage_adapter.db.get_connection(read_only=True) as ro_conn:
                             bundle = storage_adapter.db.get_session_bundle(zid, connection=ro_conn)
-                            warm_db_sents = (bundle or {}).get("sentences") or []
+                            if isinstance(bundle, dict) and isinstance(bundle.get("sentences"), list):
+                                warm_db_sents = bundle["sentences"]
+                            elif hasattr(storage_adapter.db, "get_sentences_by_session"):
+                                sents = storage_adapter.db.get_sentences_by_session(zid)
+                                warm_db_sents = sents if isinstance(sents, list) else []
+                            else:
+                                warm_db_sents = []
                     except Exception:
                         warm_db_sents = None
                 if not safe_sess.get("text_provenance") and not safe_sess.get("textProvenance") and warm_db_sents:
