@@ -1,7 +1,10 @@
 """Owned, bounded CLI audio execution. HTTP and UI depend inward on this slice."""
 from contextlib import contextmanager
+import logging
+import math
 from pathlib import Path
 import os
+import re
 import select
 import signal
 import socket
@@ -13,6 +16,13 @@ import time
 from kardenwort_audio import AudioError, MAX_BYTES, audio_request, media_type, playback_engine
 
 _SLOTS = threading.BoundedSemaphore(2)
+STDERR_TAIL_BYTES = 4096
+logger = logging.getLogger('kardenwort.desk.audio')
+
+_SECRET_PATTERN = re.compile(
+    r'(?i)(bearer\s+)\S+|((?:api[_-]?key|secret[_-]?token|token|secret|password)\s*[=:]\s*)\S+'
+)
+_PATH_PATTERN = re.compile(r"[A-Za-z]:\\[^\s'\"]+|/(?:home|Users|tmp|var)/[^\s'\"]+")
 
 
 def capability(paths):
@@ -22,6 +32,54 @@ def capability(paths):
     if not Path(script).is_file() or not Path(python).is_file():
         raise AudioError('Configured TTS capability is unavailable', 'CONFIGURATION_ERROR')
     return str(Path(python).resolve()), str(Path(script).resolve())
+
+
+def redact_diagnostic(text, user_text=''):
+    cleaned = str(text or '')
+    if user_text:
+        cleaned = cleaned.replace(user_text, '[REDACTED_TEXT]')
+    cleaned = _SECRET_PATTERN.sub(lambda m: (m.group(1) or m.group(2)) + '[REDACTED]', cleaned)
+    cleaned = _PATH_PATTERN.sub('[REDACTED_PATH]', cleaned)
+    return cleaned[-STDERR_TAIL_BYTES:]
+
+
+class _BoundedStderrDrain:
+    """Continuously drains child stderr into a bounded rolling tail buffer to prevent pipe deadlock."""
+
+    def __init__(self, pipe, limit=STDERR_TAIL_BYTES):
+        self._pipe = pipe
+        self._limit = limit
+        self._buf = bytearray()
+        self._thread = threading.Thread(target=self._drain, daemon=True)
+        self._thread.start()
+
+    def _drain(self):
+        try:
+            while True:
+                chunk = self._pipe.read(4096)
+                if not chunk:
+                    break
+                self._append(chunk)
+        except OSError:
+            pass
+        finally:
+            self._close_pipe()
+
+    def _append(self, chunk):
+        self._buf.extend(chunk)
+        excess = len(self._buf) - self._limit
+        if excess > 0:
+            del self._buf[:excess]
+
+    def _close_pipe(self):
+        try:
+            self._pipe.close()
+        except OSError:
+            pass
+
+    def finish(self, timeout=2.0):
+        self._thread.join(timeout=timeout)
+        return bytes(self._buf).decode('utf-8', errors='replace')
 
 
 def _descriptor_detached(connection):
@@ -48,21 +106,46 @@ def disconnected(connection):
         return True
 
 
+def _cleanup_owned_process(process, job, drain, user_text, primary_failed):
+    try:
+        close_process(process, job)
+    except Exception as cleanup_error:
+        logger.warning('Audio cleanup failure: %s', redact_diagnostic(cleanup_error, user_text))
+        if not primary_failed:
+            raise
+    finally:
+        _log_stderr_tail(drain, user_text, primary_failed)
+
+
+def _log_stderr_tail(drain, user_text, primary_failed):
+    if drain is None:
+        return
+    tail = drain.finish().strip()
+    if primary_failed and tail:
+        logger.warning('Audio subprocess stderr tail: %s', redact_diagnostic(tail, user_text))
+
+
 @contextmanager
-def process_owner(python, arguments, directory, job_factory):
+def process_owner(python, arguments, directory, job_factory, user_text=''):
     options = {'creationflags': 0x08000004} if os.name == 'nt' else {'start_new_session': True}
     job = job_factory() if os.name == 'nt' else None
     process = None
+    drain = None
+    primary_failed = False
     try:
         process = subprocess.Popen([python, *arguments], stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=directory, **options)
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=directory, **options)
+        drain = _BoundedStderrDrain(process.stderr)
         if job is not None and not job.assign_process(process):
             raise AudioError('Cannot own synthesis process tree')
         # Windows resumes only after job assignment; POSIX creates its session before exec.
         resume_launcher(process)
         yield process
+    except BaseException:
+        primary_failed = True
+        raise
     finally:
-        close_process(process, job)
+        _cleanup_owned_process(process, job, drain, user_text, primary_failed)
 
 
 def resume_launcher(process):
@@ -86,6 +169,14 @@ def close_process(process, job):
     process.wait(timeout=5)
 
 
+def _collect_job_handles(kernel, query, job_handle):
+    handles = []
+    try:
+        return owned_job_handles(kernel, query, job_handle, handles), None
+    except OSError as error:
+        return handles, error
+
+
 def drain_windows_job(job):
     """A Windows venv launcher can exit before its interpreter descendants."""
     import ctypes
@@ -104,44 +195,45 @@ def drain_windows_job(job):
     try:
         if not job.job_handle:
             return
-        handles = owned_job_handles(kernel, query, job.job_handle)
+        handles, enum_error = _collect_job_handles(kernel, query, job.job_handle)
         if not terminate(job.job_handle, 1):
             raise ctypes.WinError(ctypes.get_last_error())
         wait_process_handles(kernel, handles)
+        if enum_error is not None:
+            raise enum_error
         wait_job_empty(query, job.job_handle, Accounting)
     finally:
         close_process_handles(kernel, handles)
         job.close()
 
 
-def owned_job_handles(kernel, query, job):
+def owned_job_handles(kernel, query, job, handles=None):
     import ctypes
     from ctypes import wintypes
+    collected = [] if handles is None else handles
     data = ctypes.create_string_buffer(65536)
-    if not query(job,3,data,ctypes.sizeof(data),None):
+    if not query(job, 3, data, ctypes.sizeof(data), None):
         raise ctypes.WinError(ctypes.get_last_error())
-    count = ctypes.c_uint32.from_buffer(data,4).value
-    pids = (ctypes.c_size_t * count).from_buffer(data,8)
-    kernel.OpenProcess.argtypes = [wintypes.DWORD,wintypes.BOOL,wintypes.DWORD]
+    count = ctypes.c_uint32.from_buffer(data, 4).value
+    pids = (ctypes.c_size_t * count).from_buffer(data, 8)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     kernel.OpenProcess.restype = wintypes.HANDLE
-    handles = []
     for pid in pids:
-        handle = kernel.OpenProcess(0x100000,False,pid)
+        handle = kernel.OpenProcess(0x100000, False, pid)
         if handle:
-            handles.append(handle)
+            collected.append(handle)
         elif ctypes.get_last_error() != 87:
-            close_process_handles(kernel,handles)
             raise ctypes.WinError(ctypes.get_last_error())
-    return handles
+    return collected
 
 
 def wait_process_handles(kernel, handles):
     from ctypes import wintypes
-    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE,wintypes.DWORD]
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
     deadline = time.monotonic() + 5
     for handle in handles:
-        remaining = max(0,int((deadline-time.monotonic())*1000))
-        if kernel.WaitForSingleObject(handle,remaining) != 0:
+        remaining = max(0, int((deadline - time.monotonic()) * 1000))
+        if kernel.WaitForSingleObject(handle, remaining) != 0:
             raise AudioError('Audio process did not signal completion')
 
 
@@ -198,8 +290,11 @@ def wait_process(process, connection, timeout, output):
 
 
 def execution_timeout(config):
-    value = config.getfloat('audio', 'synthesis_timeout', fallback=30)
-    if not 0.05 <= value <= 60:
+    try:
+        value = config.getfloat('audio', 'synthesis_timeout', fallback=30)
+    except ValueError as error:
+        raise AudioError('Audio timeout must be between 0.05 and 60 seconds', 'CONFIGURATION_ERROR') from error
+    if not math.isfinite(value) or not 0.05 <= value <= 60:
         raise AudioError('Audio timeout must be between 0.05 and 60 seconds', 'CONFIGURATION_ERROR')
     return value
 
@@ -264,7 +359,7 @@ def execute_owned(python, script, text, language, directory, timeout, connection
         raise AudioError('Audio request cancelled', 'INTERRUPTED')
     output = Path(directory) / 'speech.media' if synthesize else None
     arguments = synthesis_arguments(script, text, language, output, stateless)
-    with process_owner(python, arguments, directory, job_factory) as process:
+    with process_owner(python, arguments, directory, job_factory, user_text=text) as process:
         wait_process(process, connection, timeout, output)
     if output is None:
         return {'ok': True, 'status': 'completed', 'playback_confirmed': False,

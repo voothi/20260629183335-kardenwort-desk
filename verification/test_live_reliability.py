@@ -49,6 +49,88 @@ def seed(adapter, zid):
     return sources
 
 
+def donor_state_digest(original_cli_path: Path) -> dict:
+    """Capture tamper-evident digest of live CLI config, donor addon config, and donor user_cache state."""
+    cli_cfg_path = original_cli_path.parent / 'config.json'
+    cli_cfg = json.loads(cli_cfg_path.read_text(encoding='utf-8-sig'))
+    addon_dir = (original_cli_path.parent / cli_cfg['anki_addon_path']).resolve()
+    donor_cfg_path = addon_dir / 'config.json'
+    donor_cache = addon_dir / 'user_cache'
+    cache_entries = []
+    if donor_cache.is_dir():
+        for entry in sorted(donor_cache.iterdir(), key=lambda p: p.name):
+            st = entry.stat()
+            cache_entries.append((entry.name, st.st_size, st.st_mtime_ns))
+    state_hashes = {}
+    for name in ('audio_cycle_state.json', 'tts_cycle_state.json'):
+        p = donor_cache / name
+        state_hashes[name] = hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
+    return {
+        'cli_config_sha256': hashlib.sha256(cli_cfg_path.read_bytes()).hexdigest(),
+        'donor_config_sha256': hashlib.sha256(donor_cfg_path.read_bytes()).hexdigest() if donor_cfg_path.is_file() else None,
+        'cache_entry_count': len(cache_entries),
+        'cache_inventory_sha256': hashlib.sha256(json.dumps(cache_entries).encode('utf-8')).hexdigest(),
+        'cycle_state_hashes': state_hashes,
+    }
+
+
+def build_isolated_cli_profile(original_cli_path: Path, target_dir: Path, *, mode: str, pinned_engine: str | None = None, owned_cache_dir: Path | None = None, owned_forvo_dir: Path | None = None):
+    """Create an owned relocated CLI + profile preserving readonly vendor/model paths while isolating all mutable state."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    cli_cfg = json.loads((original_cli_path.parent / 'config.json').read_text(encoding='utf-8-sig'))
+    addon_dir = (original_cli_path.parent / cli_cfg['anki_addon_path']).resolve()
+    donor_cfg = json.loads((addon_dir / 'config.json').read_text(encoding='utf-8-sig'))
+    merged_overrides = dict(cli_cfg.get('overrides', {}))
+    merged_overrides.pop('comments', None)
+    effective_engine = pinned_engine or merged_overrides.get('tts_engine') or donor_cfg.get('tts_engine', 'gTTS')
+
+    if mode == 'stateless':
+        # Pin the exact single engine and explicitly prohibit fallback or donor cache/dictionary mutation.
+        merged_overrides.update({
+            'tts_engine': effective_engine,
+            'gtts_enabled': effective_engine == 'gTTS',
+            'piper_enabled': effective_engine == 'Piper',
+            'tts_cycle_enabled': False,
+            'audio_dictionary_enabled': False,
+            'audio_dictionary_cycle_enabled': False,
+            'persistent_cache_enabled': False,
+            'persistent_cache_path': '',
+        })
+    elif mode == 'default_pipeline':
+        assert owned_cache_dir is not None
+        owned_cache_dir.mkdir(parents=True, exist_ok=True)
+        merged_overrides.update({
+            'persistent_cache_enabled': True,
+            'persistent_cache_path': str(owned_cache_dir),
+            'audio_dictionary_enabled': owned_forvo_dir is not None,
+            'audio_dictionary_path': str(owned_forvo_dir) if owned_forvo_dir is not None else '',
+        })
+    else:
+        raise ValueError(f'Unknown isolated profile mode: {mode}')
+
+    relocated = target_dir / 'speech-cli.py'
+    relocated.write_bytes(original_cli_path.read_bytes())
+    (target_dir / 'config.json').write_text(
+        json.dumps({'anki_addon_path': str(addon_dir), 'overrides': merged_overrides}, indent=2),
+        encoding='utf-8',
+    )
+    return relocated, effective_engine
+
+
+def _decode_and_verify_nonsilent(media: bytes, content_type: str, artifact_path: Path) -> bytes:
+    from kardenwort_audio import media_type
+    assert content_type == media_type(media)
+    artifact_path.write_bytes(media)
+    decoder = shutil.which('ffmpeg')
+    assert decoder, 'Full decoder unavailable'
+    decoded = subprocess.run([decoder, '-v', 'error', '-i', str(artifact_path), '-f', 's16le',
+                              '-acodec', 'pcm_s16le', '-'], capture_output=True, timeout=15)
+    assert decoded.returncode == 0, 'Real media decoding failed'
+    assert len(decoded.stdout) > 1600
+    assert any(decoded.stdout), 'Decoded media is silent'
+    return decoded.stdout
+
+
 @pytest.mark.parametrize('provider', os.environ.get('KARDENWORT_LIVE_PROVIDERS', 'google').split(','))
 def test_live_retext_persistence_and_cross_session_isolation(tmp_path, provider):
     assert provider in ('google', 'argos', 'deepl')
@@ -107,48 +189,110 @@ def test_live_retext_persistence_and_cross_session_isolation(tmp_path, provider)
 @pytest.mark.parametrize('engine', ['configured', 'Piper'])
 @pytest.mark.parametrize('language', ['en', 'ru'])
 def test_live_configured_synthesis_and_full_decode(tmp_path, engine, language):
+    """Stateless isolated engine check: pins playback_engine=stateless_gtts and exact CLI engine without fallback or donor writes."""
     configured = live_config()
     origin = Path(os.environ['KARDENWORT_LIVE_CONFIG']).parent
-    paths = {key: (origin / configured.get('environment', key)).resolve()
-             for key in ('anki_tts_cli', 'kardenwort_python')}
-    if engine == 'Piper':
-        # Explicit alternate owned profile; the live CLI/configuration is untouched.
-        original = paths['anki_tts_cli']
-        profile = json.loads((original.parent / 'config.json').read_text(encoding='utf-8-sig'))
-        profile['anki_addon_path'] = str((original.parent / profile['anki_addon_path']).resolve())
-        profile.setdefault('overrides', {})['tts_engine'] = 'Piper'
-        relocated = tmp_path / 'speech-cli.py'
-        relocated.write_bytes(original.read_bytes())
-        (tmp_path / 'config.json').write_text(json.dumps(profile))
-        paths['anki_tts_cli'] = relocated
+    original_cli = (origin / configured.get('environment', 'anki_tts_cli')).resolve()
+    donor_before = donor_state_digest(original_cli)
+
+    relocated, effective_engine = build_isolated_cli_profile(
+        original_cli,
+        tmp_path / 'stateless-profile',
+        mode='stateless',
+        pinned_engine='Piper' if engine == 'Piper' else None,
+    )
+    paths = {
+        'anki_tts_cli': relocated,
+        'kardenwort_python': (origin / configured.get('environment', 'kardenwort_python')).resolve(),
+    }
     server = create_browser_test_server(ControllerRequestHandler)
     server.api_key = 'owned-live-audio-token'
     server.config = configparser.ConfigParser()
-    server.config.read_dict({'audio': {'synthesis_timeout': '30'}})
+    server.config.read_dict({'audio': {'synthesis_timeout': '30', 'playback_engine': 'stateless_gtts'}})
     server.resolved_paths = paths
     server.start()
     try:
         with post(f'http://127.0.0.1:{server.server_port}', '/api/v1/audio/synthesize',
                   {'text': {'en': 'A small red fox sleeps.', 'ru': 'Маленькая рыжая лиса спит.'}[language],
                    'language': language}, server.api_key) as response:
-            assert response.status == 200, f'Synthesis HTTP {response.status}'
+            assert response.status == 200, f'Stateless {effective_engine} synthesis failed: HTTP {response.status}'
             content_type = response.headers.get_content_type()
             media = response.read()
     finally:
         server.server_close()
-    from kardenwort_audio import media_type
-    assert content_type == media_type(media)
-    artifact = tmp_path / ('live-client-audio.wav' if content_type == 'audio/wav' else 'live-client-audio.mp3')
-    artifact.write_bytes(media)
-    decoder = shutil.which('ffmpeg')
-    assert decoder, 'Full decoder unavailable'
-    decoded = subprocess.run([decoder, '-v', 'error', '-i', str(artifact), '-f', 's16le',
-                              '-acodec', 'pcm_s16le', '-'], capture_output=True, timeout=15)
-    assert decoded.returncode == 0, 'Real media decoding failed'
-    assert len(decoded.stdout) > 1600
-    assert any(decoded.stdout), 'Decoded media is silent'
+
+    expected_mime = 'audio/wav' if effective_engine == 'Piper' else 'audio/mpeg'
+    assert content_type == expected_mime, f'Engine {effective_engine} expected {expected_mime}, got {content_type}'
+    artifact = tmp_path / ('live-stateless.wav' if content_type == 'audio/wav' else 'live-stateless.mp3')
+    decoded_pcm = _decode_and_verify_nonsilent(media, content_type, artifact)
+
+    donor_after = donor_state_digest(original_cli)
+    assert donor_after == donor_before, 'Live donor config or user_cache was modified during stateless check'
+
     (tmp_path / 'live-audio-proof.json').write_text(json.dumps({
-        'engine_profile': engine, 'language': language,
-        'mime': content_type, 'bytes': len(media), 'sha256': hashlib.sha256(media).hexdigest(),
-        'decoded_pcm_bytes': len(decoded.stdout), 'decoded_nonzero': True,
-        'decoder_exit_code': decoded.returncode, 'physical_listening': 'unexecuted'}, indent=2))
+        'pipeline_scope': 'stateless_pinned_engine',
+        'requested_profile': engine,
+        'pinned_engine': effective_engine,
+        'language': language,
+        'mime': content_type,
+        'bytes': len(media),
+        'sha256': hashlib.sha256(media).hexdigest(),
+        'decoded_pcm_bytes': len(decoded_pcm),
+        'decoded_nonzero': True,
+        'donor_state_unchanged': True,
+        'physical_listening': 'unexecuted'}, indent=2))
+
+
+def test_live_default_anki_tts_cli_pipeline_isolated(tmp_path):
+    """Separate default anki_tts_cli pipeline check using owned profile/cache/Forvo; live donor state remains untouched."""
+    configured = live_config()
+    origin = Path(os.environ['KARDENWORT_LIVE_CONFIG']).parent
+    original_cli = (origin / configured.get('environment', 'anki_tts_cli')).resolve()
+    donor_before = donor_state_digest(original_cli)
+
+    owned_cache = tmp_path / 'owned-cache'
+    owned_forvo = tmp_path / 'owned-forvo'
+    relocated, effective_engine = build_isolated_cli_profile(
+        original_cli,
+        tmp_path / 'default-profile',
+        mode='default_pipeline',
+        owned_cache_dir=owned_cache,
+        owned_forvo_dir=owned_forvo,
+    )
+    paths = {
+        'anki_tts_cli': relocated,
+        'kardenwort_python': (origin / configured.get('environment', 'kardenwort_python')).resolve(),
+    }
+    server = create_browser_test_server(ControllerRequestHandler)
+    server.api_key = 'owned-live-default-token'
+    server.config = configparser.ConfigParser()
+    server.config.read_dict({'audio': {'synthesis_timeout': '30', 'playback_engine': 'anki_tts_cli'}})
+    server.resolved_paths = paths
+    server.start()
+    try:
+        with post(f'http://127.0.0.1:{server.server_port}', '/api/v1/audio/synthesize',
+                  {'text': 'A small red fox sleeps.', 'language': 'en'}, server.api_key) as response:
+            assert response.status == 200, f'Default pipeline synthesis failed: HTTP {response.status}'
+            content_type = response.headers.get_content_type()
+            media = response.read()
+    finally:
+        server.server_close()
+
+    artifact = tmp_path / ('live-default.wav' if content_type == 'audio/wav' else 'live-default.mp3')
+    decoded_pcm = _decode_and_verify_nonsilent(media, content_type, artifact)
+
+    donor_after = donor_state_digest(original_cli)
+    assert donor_after == donor_before, 'Live donor config or user_cache was modified during isolated default pipeline check'
+    assert any(owned_cache.iterdir()), 'Expected owned isolated cache to record default pipeline output/state'
+
+    (tmp_path / 'live-default-pipeline-proof.json').write_text(json.dumps({
+        'pipeline_scope': 'default_anki_tts_cli_isolated',
+        'configured_default_engine': effective_engine,
+        'mime': content_type,
+        'bytes': len(media),
+        'sha256': hashlib.sha256(media).hexdigest(),
+        'decoded_pcm_bytes': len(decoded_pcm),
+        'decoded_nonzero': True,
+        'owned_cache_populated': True,
+        'donor_state_unchanged': True,
+        'physical_listening': 'unexecuted'}, indent=2))

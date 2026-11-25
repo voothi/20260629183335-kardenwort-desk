@@ -10,6 +10,7 @@ import ctypes
 from ctypes import wintypes
 import json
 import logging
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -468,3 +469,109 @@ def test_1_2_real_windows_job_object_terminates_owned_process_and_closes_handle(
             proc.kill()
             proc.wait(timeout=3)
         job.close()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows named OS mutex abandonment recovery contract")
+def test_2_2_abandoned_windows_mutex_recovers_cleanly_without_lock_files(owned_cli, tmp_path):
+    """If a process crashes while owning the cycle-state Windows mutex, the next CLI process recovers via WAIT_ABANDONED."""
+    for idx in range(2):
+        sp_dir = owned_cli.forvo_dir / "de" / f"sp{idx}"
+        sp_dir.mkdir(parents=True, exist_ok=True)
+        (sp_dir / "crash.mp3").write_bytes(_make_tagged_mp3(f"crash-sp{idx}"))
+
+    owned_cli.write_donor_config(
+        {
+            "audio_dictionary_enabled": True,
+            "audio_dictionary_cycle_enabled": True,
+            "audio_dictionary_cycle_limit": 2,
+            "persistent_cache_enabled": True,
+            "gtts_enabled": False,
+            "piper_enabled": False,
+        }
+    )
+
+    # Spawn a process that acquires the exact cycle-state named mutex and crashes via os._exit(99) without releasing it.
+    crash_script = tmp_path / "abandon_mutex.py"
+    crash_script.write_text(
+        "import ctypes, hashlib, os\n"
+        "from ctypes import wintypes\n"
+        f"cache_dir = {str(owned_cli.cache_dir)!r}\n"
+        "scope = 'state:' + os.path.normcase(os.path.abspath(cache_dir)) + ':audio_cycle'\n"
+        "name = 'Local\\\\KardenwortTts_' + hashlib.sha256(scope.encode('utf-8')).hexdigest()[:24]\n"
+        "k = ctypes.WinDLL('kernel32', use_last_error=True)\n"
+        "k.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]\n"
+        "k.CreateMutexW.restype = wintypes.HANDLE\n"
+        "k.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]\n"
+        "k.WaitForSingleObject.restype = wintypes.DWORD\n"
+        "h = k.CreateMutexW(None, False, name)\n"
+        "assert h and k.WaitForSingleObject(h, 5000) in (0, 0x80)\n"
+        "os._exit(99)\n",
+        encoding="utf-8",
+    )
+    # Keep a second handle open in this process so Windows preserves the named mutex object in abandoned state!
+    scope = "state:" + os.path.normcase(os.path.abspath(str(owned_cli.cache_dir))) + ":audio_cycle"
+    import hashlib as _hl
+    mname = "Local\\KardenwortTts_" + _hl.sha256(scope.encode("utf-8")).hexdigest()[:24]
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel.CreateMutexW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    keeper = kernel.CreateMutexW(None, False, mname)
+    assert keeper
+    try:
+        crashed = subprocess.run([sys.executable, str(crash_script)], timeout=5.0)
+        assert crashed.returncode == 99
+
+        out = tmp_path / "recovered.mp3"
+        res = owned_cli.run_cli(["--no-play", "--output", str(out), "--", "crash", "de"], timeout=5.0)
+        assert res.returncode == 0, f"Failed to recover abandoned mutex: {res.stderr}"
+        assert "recovered abandoned" in res.stderr.lower()
+        assert out.read_bytes() == _make_tagged_mp3("crash-sp0")
+        assert not list(owned_cli.cache_dir.glob("*.lock"))
+    finally:
+        kernel.CloseHandle(keeper)
+
+
+def test_2_5_isolated_live_verification_profiles_pin_engines_and_protect_donor_state(owned_cli, tmp_path):
+    """Hermetic contract for verification/test_live_reliability.py profile pinning and donor-state protection."""
+    from verification.test_live_reliability import build_isolated_cli_profile, donor_state_digest
+
+    owned_cli.write_donor_config(
+        {
+            "tts_engine": "gTTS",
+            "gtts_enabled": True,
+            "piper_enabled": True,
+            "tts_cycle_enabled": True,
+            "audio_dictionary_enabled": True,
+            "persistent_cache_enabled": True,
+        }
+    )
+    before = donor_state_digest(owned_cli.cli_script)
+
+    stateless_cli, pinned = build_isolated_cli_profile(
+        owned_cli.cli_script, tmp_path / "iso_stateless", mode="stateless", pinned_engine="Piper"
+    )
+    assert pinned == "Piper"
+    cfg_stateless = json.loads((stateless_cli.parent / "config.json").read_text(encoding="utf-8"))
+    ov = cfg_stateless["overrides"]
+    assert ov["tts_engine"] == "Piper"
+    assert ov["piper_enabled"] is True
+    assert ov["gtts_enabled"] is False
+    assert ov["persistent_cache_enabled"] is False
+    assert ov["audio_dictionary_enabled"] is False
+    assert ov["tts_cycle_enabled"] is False
+
+    owned_cache = tmp_path / "iso_cache"
+    owned_forvo = tmp_path / "iso_forvo"
+    default_cli, eff = build_isolated_cli_profile(
+        owned_cli.cli_script,
+        tmp_path / "iso_default",
+        mode="default_pipeline",
+        owned_cache_dir=owned_cache,
+        owned_forvo_dir=owned_forvo,
+    )
+    assert eff == "gTTS"
+    cfg_default = json.loads((default_cli.parent / "config.json").read_text(encoding="utf-8"))
+    assert cfg_default["overrides"]["persistent_cache_path"] == str(owned_cache)
+    assert cfg_default["overrides"]["audio_dictionary_path"] == str(owned_forvo)
+    assert donor_state_digest(owned_cli.cli_script) == before
