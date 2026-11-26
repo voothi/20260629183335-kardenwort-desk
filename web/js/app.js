@@ -1,6 +1,7 @@
 
 (function() {
     function workspaceCommandsReady() {
+        if (window.__CONFIG__ && window.__CONFIG__.read_only_preview) return false;
         return !window.WorkspacePresentation || window.WorkspacePresentation.isReady();
     }
     window.reserveTextRegions = function() {
@@ -3445,9 +3446,8 @@
                         var rId = rowEl.getAttribute('data-row-id') || rowEl.getAttribute('data-token-order');
                         var tOrd = rowEl.getAttribute('data-token-order');
                         var rowSentIdx = rowEl.getAttribute('data-sentence-idx');
-                        var tdsEl = rowEl.getElementsByTagName('td');
-                        if (tdsEl.length >= 3 && rId !== null && rId !== undefined) {
-                            var transTd = (rowEl.querySelector('td[data-col="WordDestination"]')) || tdsEl[2];
+                        var transTd = findSemanticCell(rowEl, 'col-translation', getConfiguredTransColName(), ['WordDestination', 'word_translation']);
+                        if (transTd && rId !== null && rId !== undefined) {
                             var transDiv = (transTd.querySelector('.scrollable-cell')) || transTd;
                             var transContent = (transDiv.textContent || transDiv.innerText || "").trim();
                             var rState = window.AppState.rows[rId] || (!(Number(rowSentIdx) > 0) && tOrd ? window.AppState.rows[tOrd] : null);
@@ -6105,10 +6105,13 @@
             var raw = cfg.audio_playback_engine || bootstrapUiConfig().audio_playback_engine || audioPlaybackEngine;
             return String(raw || 'anki_tts_cli').trim().toLowerCase();
         }
-        window.addEventListener('pagehide', function () {
-            if (browserAudio) browserAudio.cancel();
-            if (browserSpeech) browserSpeech.cancel();
-        });
+        if (!window.__kwAudioPagehideBound) {
+            window.__kwAudioPagehideBound = true;
+            window.addEventListener('pagehide', function () {
+                if (browserAudio) browserAudio.cancel();
+                if (browserSpeech) browserSpeech.cancel();
+            });
+        }
 
         /** @param {string} text @param {string} lang */
         function playAudio(text, lang) {
@@ -9241,7 +9244,7 @@
             div.className = 'scrollable-cell';
             div.textContent = value;
             cell.appendChild(div);
-            if (target.column === 'WordDestination') {
+            if (target.column === getConfiguredTransColName() || target.column === 'WordDestination') {
                 var title = formatTranslationCellTooltip(value, cell.getAttribute('data-provenance'));
                 cell.setAttribute('title', String(title));
                 div.setAttribute('title', String(title));
@@ -10341,7 +10344,7 @@
         function projectRecoveryRetry(indicator, status, header) {
             indicator.hidden = !header && status !== 'failed';
             if (status === 'failed') {
-                if (!header) indicator.textContent = indicator.parentNode.classList.contains('kw-workspace-tab-bar') ? '!' : 'Sync failed - retry';
+                if (!header) indicator.textContent = (indicator.parentNode && indicator.parentNode.classList && indicator.parentNode.classList.contains('kw-workspace-tab-bar')) ? '!' : 'Sync failed - retry';
                 indicator.setAttribute('role', 'button');
                 indicator.setAttribute('tabindex', '0');
                 indicator.setAttribute('aria-label', 'Retry session synchronization');
@@ -10530,7 +10533,10 @@
                     var act = historyStack[h];
                     if (act && act.type === 'edit') {
                         var match = snapshot.some(function(sd) {
-                            return sd && sd.column === act.column && Number(sd.row_id) === Number(act.rowId);
+                            if (!sd || sd.column !== act.column || Number(sd.row_id) !== Number(act.rowId)) return false;
+                            if (sd.sentence_idx != null && act.sentenceIdx != null && Number(sd.sentence_idx) !== Number(act.sentenceIdx)) return false;
+                            if (sd.token_order != null && act.tokenOrder != null && Number(sd.token_order) !== Number(act.tokenOrder)) return false;
+                            return true;
                         });
                         if (match) {
                             historyStack.splice(h, 1);
@@ -10570,7 +10576,7 @@
                 return readJsonResponse(res, 'Save failed').then(function(parsed) {
                     var data = parsed.data || {};
                     if (!successfulSaveResponse(parsed, data)) {
-                        if (parsed.status >= 400 && parsed.status < 500) {
+                        if (parsed.status === 400 || parsed.status === 422) {
                             rollbackRejectedEditDeltas(snapshot);
                         }
                         throw new Error(formatErrorWithTrace(data, 'Save failed'));
@@ -11150,7 +11156,7 @@
                 body: JSON.stringify(bodyPayload)
             })
             .then(function(res) {
-                return readJsonResponse(res, 'Retext failed');
+                return readJsonResponse(res, 'Re-word failed');
             })
             .then(function(resObj) {
                 setButtonLoading(rewordBtn, false, "", "Re-word");
@@ -11426,7 +11432,7 @@
                 body: JSON.stringify(bodyPayload)
             })
             .then(function(res) {
-                return readJsonResponse(res, 'Retext failed');
+                return readJsonResponse(res, 'Export failed');
             })
             .then(function(resObj) {
                 setButtonLoading(exportBtn, false, "", "Send to Anki");
@@ -11913,14 +11919,11 @@
             });
         }
         function sendPreference(key, value, generation) {
+            if (isServerDisabled()) return Promise.reject(new Error('Backend is unavailable'));
             return stateClient.sendPreference(key, value, generation);
         }
         var preferenceCommands = window.PreferenceCommands.create(sendPreference, projectPreferenceStatus);
         function persistPreference(key, value) {
-            if (isServerDisabled()) {
-                projectPreferenceStatus(key, 'failed', value, new Error('Backend is unavailable'));
-                return;
-            }
             return preferenceCommands.submit(key, value);
         }
 
@@ -11932,13 +11935,14 @@
         }
 
         function setHighlightSameLemma(active, persist) {
-            if (persist !== false && !workspaceCommandsReady()) return;
+            if (persist !== false && !workspaceCommandsReady()) return false;
             projectPreferenceValue('highlight_same_lemma', 'TOGGLE_HIGHLIGHT_SAME_LEMMA', 'highlightSameLemma', active);
             projectPreferenceClass('kw-btn-same-lemma', 'active', active);
             if (typeof updateBidirectionalHighlights === 'function') {
                 updateBidirectionalHighlights();
             }
             if (persist !== false) persistPreference('highlight_same_lemma', !!active);
+            return true;
         }
         window.setHighlightSameLemma = setHighlightSameLemma;
 
@@ -11950,8 +11954,7 @@
         function toggleHighlightSameLemma() {
             var cur = (window.AppState && window.AppState.highlightSameLemma) ? true : false;
             var next = nextPreferenceToggle('highlight_same_lemma', cur);
-            setHighlightSameLemma(next);
-            if (typeof window.showToast === 'function') {
+            if (setHighlightSameLemma(next) && !isServerDisabled() && typeof window.showToast === 'function') {
                 window.showToast(next ? "Lemma highlighting enabled" : "Lemma highlighting disabled", "info");
             }
         }
@@ -11974,7 +11977,7 @@
 
         /** @param {boolean} active */
         function setFilterSelectedOnly(active, persist) {
-            if (persist !== false && !workspaceCommandsReady()) return;
+            if (persist !== false && !workspaceCommandsReady()) return false;
             if (!active) document.documentElement.style.minHeight = '';
             projectPreferenceValue('filter_selected_only', 'TOGGLE_FILTER_SELECTED', 'filterSelectedOnly', active);
             projectPreferenceClass('lemma-table', 'kw-filter-selected-only', active);
@@ -11983,6 +11986,7 @@
                 updateEmptySelectionState();
             }
             if (persist !== false) persistPreference('filter_selected_only', !!active);
+            return true;
         }
         window.setFilterSelectedOnly = setFilterSelectedOnly;
 
@@ -11995,8 +11999,7 @@
         function toggleFilterSelectedOnly() {
             var cur = (window.AppState && window.AppState.filterSelectedOnly) ? true : false;
             var next = nextPreferenceToggle('filter_selected_only', cur);
-            setFilterSelectedOnly(next);
-            if (typeof window.showToast === 'function') {
+            if (setFilterSelectedOnly(next) && !isServerDisabled() && typeof window.showToast === 'function') {
                 window.showToast(next ? "Selected rows filter enabled" : "Selected rows filter disabled", "info");
             }
         }
@@ -12227,7 +12230,11 @@
         }
         window.__stateReady = stateClient.start();
         if (window.__CONFIG__ && window.__CONFIG__.read_only_preview) {
-            document.documentElement.setAttribute('data-workspace-phase', 'ready');
+            if (window.WorkspacePresentation && typeof window.WorkspacePresentation.project === 'function') {
+                window.WorkspacePresentation.project('ready');
+            } else {
+                document.documentElement.setAttribute('data-workspace-phase', 'ready');
+            }
             ['kw-btn-save', 'kw-btn-update', 'kw-btn-retext', 'kw-btn-reword', 'kw-btn-export', 'kw-btn-delete'].forEach(function(btnId) {
                 var btn = document.getElementById(btnId);
                 if (btn) btn.disabled = true;

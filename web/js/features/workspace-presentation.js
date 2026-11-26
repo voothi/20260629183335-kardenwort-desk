@@ -22,7 +22,7 @@
             return;
         }
         document.title = initialTitle;
-        if (icon) icon.setAttribute('href', initialIcon);
+        if (icon && initialIcon !== null) icon.setAttribute('href', initialIcon);
     }
     function projectRegions() {
         document.querySelectorAll(regionSelector).forEach(function(element) {
@@ -34,17 +34,27 @@
             else element.setAttribute('aria-disabled', 'true');
         });
     }
+    function failureText(error) {
+        return 'Workspace unavailable: ' + ((error && error.message) ? error.message : 'Unknown error');
+    }
+    function projectStatusVisibility(phase) {
+        var statusEl = document.getElementById('kw-workspace-status');
+        if (statusEl) statusEl.hidden = (phase !== 'failed');
+    }
     function project(phase, error) {
         root.setAttribute('data-workspace-phase', phase);
         if (phase === 'ready') root.setAttribute('data-workspace-identity', 'known');
         projectRegions();
+        projectStatusVisibility(phase);
         var message = document.getElementById('kw-workspace-message');
-        if (message) message.textContent = phase === 'failed' ? 'Workspace unavailable: '+error.message : '';
+        if (message) message.textContent = phase === 'failed' ? failureText(error) : '';
         projectPlaceholders(phase);
         if (phase === 'ready') readyMetadata();
     }
     function projectPlaceholders(phase) {
+        var visible = unknownIdentity();
         document.querySelectorAll('.kw-view-placeholder').forEach(function(element) {
+            element.hidden = !visible;
             element.textContent = phase === 'failed' ? 'View unavailable' : 'Restoring...';
         });
     }
@@ -70,7 +80,11 @@
         if (/^(Arrow|Page|Home$|End$|Escape$)/.test(event.key)) return;
         event.preventDefault();
     }
+    function isHandToolShortcut(event) {
+        return Boolean((event.ctrlKey || event.metaKey) && event.shiftKey && String(event.key || '').toLowerCase() === 'a');
+    }
     function isMutationKey(event) {
+        if (isHandToolShortcut(event)) return false;
         if (['Delete', 'F2', 'F5', ' ', 'Escape', '[', ']', 'ArrowUp', 'ArrowDown'].indexOf(event.key) !== -1) return true;
         if (event.ctrlKey || event.metaKey) return /^(?:[1-9aszy]|PageUp|PageDown)$/i.test(event.key);
         if (event.altKey) return /^[1-9]$/.test(event.key);

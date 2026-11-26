@@ -7,7 +7,6 @@
  */
 
 (function () {
-    var SAFE_PREBUILT_WORD_SPAN = /^<span class="word"(?:\s+data-(?:order|sentence-idx)="\d+"){0,2}>[^<>]*<\/span>$/;
     var SAFE_PREBUILT_STREAM = /^(?:[^<>]*<span class="word"(?:\s+data-(?:order|sentence-idx)="\d+"){0,2}>[^<>]*<\/span>)+[^<>]*$/;
 
     function compatibilityTranslationHtml(text) {

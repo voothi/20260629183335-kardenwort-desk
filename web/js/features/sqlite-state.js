@@ -14,9 +14,11 @@
     }
     function projectRestoredOccurrence(token) {
         var atomicRows = token.atomic_row_ids !== undefined ? token.atomic_row_ids : token.row_ids;
+        var rowIds = Array.isArray(token.row_ids) ? token.row_ids.slice() : [];
+        var atomicIds = Array.isArray(atomicRows) ? atomicRows.slice() : [];
         return {visual_idx: token.visual_idx, sentence_idx: token.sentence_idx, token_order: token.token_order,
             atomic_id: token.atomic_id !== undefined ? token.atomic_id : null, lemma: token.lemma || '',
-            row_ids: token.row_ids.slice(), atomic_row_ids: atomicRows.slice()};
+            row_ids: rowIds, atomic_row_ids: atomicIds};
     }
     function restoreOccurrences(items, manifest) {
         return items.map(function(item) {
@@ -31,9 +33,15 @@
         if (!match || !navigation) return null;
         return navigation.type === 'reload' || navigation.type === 'back_forward' ? match[1] : null;
     }
+    function replaceClientHash(id) {
+        var raw = location.hash ? location.hash.slice(1) : '';
+        var kept = raw ? raw.split('&').filter(function(part) { return part && !/^kw-client=/.test(part); }) : [];
+        kept.push('kw-client=' + id);
+        return '#' + kept.join('&');
+    }
     function clientSlot() {
         var id = restoredClientId() || randomClientId();
-        history.replaceState(null, '', '#kw-client='+id);
+        history.replaceState(null, '', replaceClientHash(id));
         return id;
     }
     function randomClientId() {
@@ -154,6 +162,12 @@
         if (ui.accept) ui.accept.disabled = disabled;
         ui.keep.disabled = disabled;
     }
+    function syncImportConflict(body, current) {
+        body.revisions = current.revisions;
+        if (body.view && current.view && Number.isInteger(current.view.revision)) {
+            body.view.expected_revision = current.view.revision;
+        }
+    }
     function importDialog(send, body, current, signal) {
         return new Promise(function(resolve, reject) {
             var dialog = document.createElement('dialog');
@@ -170,7 +184,7 @@
                     if (signal.aborted) return;
                     ui.message.textContent = 'Import not saved: '+error.message+'. Review and choose again.';
                     if (error.current) {
-                        body.revisions = error.current.revisions;
+                        syncImportConflict(body, error.current);
                         ui.preview.textContent = importPreview(body, error.current);
                     }
                     setImportDisabled(ui, false);
@@ -180,7 +194,7 @@
             ui.keep.onclick = function() { finish({session_zid: body.session_zid, client_id: body.client_id, preferences: {}, revisions: {}}); };
             dialog.addEventListener('cancel', function(event) { event.preventDefault(); });
             [ui.message, ui.preview, ui.accept, ui.keep].filter(Boolean).forEach(function(element) { dialog.appendChild(element); });
-            function cancel() { dialog.remove(); reject(new Error('Workspace restoration cancelled')); }
+            function cancel() { if (dialog.open) dialog.close(); dialog.remove(); reject(new Error('Workspace restoration cancelled')); }
             signal.addEventListener('abort', cancel, {once:true});
             document.body.appendChild(dialog); dialog.showModal();
         });
@@ -335,7 +349,7 @@
         state.phase = 'pending';
         state.inFlightSignature = next.signature;
         return state.options.send('/api/v1/client-view', Object.assign(viewBody(state), next.intent,
-            {expected_revision: state.viewRevision})).then(requireView).then(function(view) {
+            {expected_revision: state.viewRevision}), undefined, run.signal).then(requireView).then(function(view) {
             if (state.run !== run) return;
             state.viewRevision = view.revision;
             state.committedSignature = next.signature;
@@ -361,16 +375,28 @@
         });
         return state.tail;
     }
+    function viewInactive(state) {
+        if (!state.viewEnabled || state.phase === 'draft' || state.phase === 'disposed') return true;
+        return state.phase === 'failed' && state.committedSignature === null;
+    }
     function save(state) {
-        if (!state.viewEnabled || state.phase === 'draft' || state.phase === 'disposed') return Promise.resolve();
+        if (viewInactive(state)) return Promise.resolve();
         if (state.phase === 'initializing') return state.ready;
         var intent = state.options.capture();
         var signature = viewSignature(intent);
         if (isRedundantView(state, signature)) return state.tail;
         return enqueueView(state, intent, signature);
     }
+    function retryFailedView(state) {
+        if (state.phase !== 'failed' || !state.viewEnabled || state.committedSignature === null) return;
+        return save(state);
+    }
     function flush(state) {
-        return Promise.resolve(state.ready).then(function() { return state.tail; }).then(function() {
+        return Promise.resolve(state.ready).then(function() {
+            return state.tail;
+        }).then(function() {
+            return retryFailedView(state);
+        }).then(function() {
             if (state.phase === 'failed') throw state.failure;
         });
     }

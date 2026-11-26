@@ -556,15 +556,18 @@ input.edit-input.cell-editor {
     box-sizing: border-box;
     background-color: var(--input-bg, #161a22);
     color: var(--text-color, var(--text-main, #e3e6eb));
-    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+    border: 0;
+    outline: 1px solid var(--border-color, rgba(255, 255, 255, 0.25));
+    outline-offset: 2px;
     border-radius: var(--radius-md, 4px);
-    padding: 2px 4px;
+    padding: 0;
+    margin: 0;
     font: inherit;
     line-height: inherit;
 }
 
 td.dirty {
-    border-left: 3px solid #ff7b72 !important;
+    box-shadow: inset 3px 0 0 #ff7b72 !important;
 }
 
 /* Background Enrichment Skeleton Loader (R2, R12) */

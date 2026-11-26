@@ -1066,6 +1066,16 @@ body {
     display: none;
 }
 
+@media (max-width: 760px) {
+    .batch-toolbar {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .selection-banner {
+        bottom: 104px;
+    }
+}
+
 .btn-banner-action {
     background: transparent;
     border: none;

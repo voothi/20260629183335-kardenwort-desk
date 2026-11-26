@@ -74,12 +74,16 @@
                 if (cancelResult && typeof cancelResult.catch === 'function') {
                     cancelResult.catch(noop);
                 }
-            } catch (e) {}
+            } catch (e) {
+                console.debug('[SSE] Reader cancel error ignored during dispose:', e);
+            }
         }
         if (attempt.controller) {
             var ctrl = attempt.controller;
             attempt.controller = null;
-            try { ctrl.abort(); } catch (e) {}
+            try { ctrl.abort(); } catch (e) {
+                console.debug('[SSE] AbortController abort error ignored during dispose:', e);
+            }
         }
     }
 
@@ -100,9 +104,7 @@
         source.hasPendingReconnect = function() {
             return !closed && !terminalStopped && timer !== null;
         };
-        source.canAccelerateReconnect = function() {
-            return !closed && !terminalStopped && timer !== null;
-        };
+        source.canAccelerateReconnect = source.hasPendingReconnect;
         source.isTerminal = function() {
             return terminalStopped;
         };
@@ -163,6 +165,7 @@
                 if (!data.length || isStale()) return;
                 var event = {data: data.join('\n')};
                 if (eventType === 'message' && source.onmessage) source.onmessage(event);
+                if (isStale()) return;
                 (listeners[eventType] || []).forEach(function(listener) { listener(event); });
                 consecutiveHandlerFailures = 0;
             }
@@ -220,7 +223,9 @@
                             var staleReader = response.body.getReader();
                             var staleCancel = staleReader.cancel();
                             if (staleCancel && typeof staleCancel.catch === 'function') staleCancel.catch(noop);
-                        } catch (e) {}
+                        } catch (e) {
+                            console.debug('[SSE] Stale response reader cancel ignored:', e);
+                        }
                     }
                     disposeAttempt(myAttempt);
                     return;
@@ -383,7 +388,9 @@
      * @param {string} [serverUrl]
      */
     function connect(sessionZid, serverUrl, token, recoverCommitted) {
-        if (!sessionZid || typeof window.EventSource === 'undefined') return null;
+        if (!sessionZid) return null;
+        var initialToken = resolveEffectiveToken(token);
+        if (!initialToken && typeof window.EventSource === 'undefined') return null;
 
         var w = (window);
         var bootstrapRoot = w.__BOOTSTRAP__ || (w.AppState && w.AppState.bootstrap) || null;
@@ -546,7 +553,28 @@
                 }
 
                 if (data.type === 'tag_updated') {
-                    var cb = (document.querySelector('.kw-tag-checkbox[data-token-order="' + data.row_id + '"]'));
+                    var checkboxes = document.querySelectorAll('.kw-tag-checkbox');
+                    var cb = null;
+                    var hasSent = data.sentence_idx !== undefined && data.sentence_idx !== null && String(data.sentence_idx) !== '';
+                    var hasTok = data.token_order !== undefined && data.token_order !== null && String(data.token_order) !== '';
+                    var targetRowId = data.row_id !== undefined && data.row_id !== null ? String(data.row_id) : '';
+                    for (var cIdx = 0; cIdx < checkboxes.length; cIdx++) {
+                        var cand = checkboxes[cIdx];
+                        if (hasTok && hasSent) {
+                            if (cand.getAttribute('data-token-order') === String(data.token_order) &&
+                                cand.getAttribute('data-sentence-idx') === String(data.sentence_idx)) {
+                                cb = cand;
+                                break;
+                            }
+                        } else if (targetRowId) {
+                            var rowMatch = cand.getAttribute('data-row-id') === targetRowId ||
+                                (!cand.hasAttribute('data-row-id') && cand.getAttribute('data-token-order') === targetRowId);
+                            if (rowMatch && (!hasSent || cand.getAttribute('data-sentence-idx') === String(data.sentence_idx))) {
+                                cb = cand;
+                                break;
+                            }
+                        }
+                    }
                     if (cb && cb.checked !== data.status) {
                         cb.checked = data.status;
                         var r = cb.closest ? cb.closest('tr') : cb.parentElement ? cb.parentElement.parentElement : null;

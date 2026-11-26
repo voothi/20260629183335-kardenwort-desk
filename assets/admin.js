@@ -14,12 +14,16 @@ try {
             }
         }
     }
-} catch (e) {}
+} catch (e) {
+    console.debug('[Admin] Bootstrap token parse skipped:', e);
+}
 try {
     if (!initialToken && typeof localStorage !== 'undefined') {
         initialToken = localStorage.getItem('kardenwort_api_token') || '';
     }
-} catch (e) {}
+} catch (e) {
+    console.debug('[Admin] localStorage token read skipped:', e);
+}
 
 // State Management
 const state = {
@@ -111,7 +115,7 @@ function triggerBlobDownload(blob, filename) {
         link.remove();
     } finally {
         if (typeof URL.revokeObjectURL === 'function') {
-            setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+            setTimeout(() => URL.revokeObjectURL(objectUrl), 10000);
         }
     }
 }
@@ -1445,10 +1449,12 @@ function openSessionInDict(zid) {
     window.open(url, '_blank');
 }
 
+let _lastMaterializeZid = 0;
+
 function _generateMaterializeZid() {
     const d = new Date();
     const pad = (n) => String(n).padStart(2, '0');
-    return (
+    const raw = Number(
         String(d.getUTCFullYear()) +
         pad(d.getUTCMonth() + 1) +
         pad(d.getUTCDate()) +
@@ -1456,6 +1462,9 @@ function _generateMaterializeZid() {
         pad(d.getUTCMinutes()) +
         pad(d.getUTCSeconds())
     );
+    const next = raw <= _lastMaterializeZid ? _lastMaterializeZid + 1 : raw;
+    _lastMaterializeZid = next;
+    return String(next);
 }
 
 async function openProjectInDesk(projectId) {
@@ -1485,6 +1494,8 @@ async function openProjectInDesk(projectId) {
         if (popup && typeof popup.close === 'function') {
             popup.close();
         }
+        console.error('[Admin] openProjectInDesk failed:', e);
+        showToast(`Failed to open project in Desk: ${e && e.message ? e.message : 'Unknown error'}`, 'error');
     }
 }
 
@@ -1704,6 +1715,7 @@ function initMaintenance() {
             showToast('Vacuum completed', 'success');
         } catch (e) {
             vacStatus.textContent = 'Failed';
+            showToast(`Vacuum failed: ${e && e.message ? e.message : 'Unknown error'}`, 'error');
         } finally {
             btnVacuum.disabled = false;
         }

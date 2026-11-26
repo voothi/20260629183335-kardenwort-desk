@@ -206,12 +206,14 @@
 
         function speakNext(owner) {
             if (owner.index === owner.segments.length) {
+                owner.utterance = null;
                 current = null;
                 emit('finished');
                 return;
             }
             emit('loading');
             var utterance = new global.SpeechSynthesisUtterance(owner.segments[owner.index++]);
+            owner.utterance = utterance;
             utterance.lang = owner.language;
             bindUtterance(owner, utterance);
             global.speechSynthesis.speak(utterance);
