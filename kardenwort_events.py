@@ -13,7 +13,7 @@ class SubscriberQueue(queue.Queue):
         with self.not_empty:
             if self.queue and self.queue[0].get('type') == 'resync_required':
                 return
-            if self._qsize() >= self.maxsize:
+            if self.maxsize > 0 and self._qsize() >= self.maxsize:
                 self.unfinished_tasks -= self._qsize()
                 self.queue.clear()
                 self.not_full.notify_all()

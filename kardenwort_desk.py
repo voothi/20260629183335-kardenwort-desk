@@ -925,7 +925,8 @@ def tokenize_text_with_fallback(
         cmd.extend(["--spacy-server-url", spacy_url])
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
-    env["PYTHONPATH"] = str(Path(kardenwort_ws) / "src")
+    _kw_src = str(Path(kardenwort_ws) / "src")
+    env["PYTHONPATH"] = f"{_kw_src}{os.pathsep}{env['PYTHONPATH']}" if env.get("PYTHONPATH") else _kw_src
     try:
         proc = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8', timeout=15, env=env, input=text)
         tokens = []
@@ -4272,6 +4273,10 @@ class SqliteStorageAdapter(StorageAdapter):
             for w_idx, s_coord, t_coord, w_dict in parsed_direct_words:
                 w_dict["sentence_index"] = s_coord
                 w_dict["token_order"] = t_coord
+                if is_stored_translation_failure(w_dict.get("word_destination")):
+                    w_dict["word_destination"] = None
+                if is_stored_translation_failure(w_dict.get("word_destination_inflected")):
+                    w_dict["word_destination_inflected"] = None
                 existing_w = self._matching_existing_word(
                     existing_words_by_coord, s_coord, t_coord, w_dict.get("lemma")
                 )
@@ -4415,11 +4420,31 @@ class SqliteStorageAdapter(StorageAdapter):
                 )
             )
 
+            col_t_ord = headers_lower.get("tokenorder")
+            if col_t_ord is None:
+                col_t_ord = headers_lower.get("token_order")
+            tabular_row_coords: List[Tuple[int, int]] = []
             for row_idx, row in enumerate(data_rows):
-                if is_multi_sentence_existing:
-                    s_idx = _resolve_multi_sentence_idx(row, row_idx)
+                row_s_idx = _resolve_multi_sentence_idx(row, row_idx) if is_multi_sentence_existing else resolved_row_sent_indices[row_idx]
+                if col_t_ord is not None:
+                    raw_t_ord = row[col_t_ord] if col_t_ord < len(row) else ""
+                    if raw_t_ord is not None and str(raw_t_ord).strip() != "":
+                        row_t_ord = self._parse_strict_coord_int(
+                            raw_t_ord, minimum=0, label="TokenOrder", session_zid=session_zid
+                        )
+                    else:
+                        row_t_ord = row_idx
                 else:
-                    s_idx = resolved_row_sent_indices[row_idx]
+                    row_t_ord = row_idx
+                tabular_row_coords.append((row_s_idx, row_t_ord))
+            unique_tabular_tokens = (
+                not is_multi_sentence_existing
+                and len({s for s, _ in tabular_row_coords}) <= 1
+                and len({t for _, t in tabular_row_coords}) == len(tabular_row_coords)
+            )
+
+            for row_idx, row in enumerate(data_rows):
+                s_idx, token_order = tabular_row_coords[row_idx]
 
                 existing_sent = existing_sents_by_idx.get(s_idx, {})
                 raw_src_cell = (
@@ -4522,20 +4547,6 @@ class SqliteStorageAdapter(StorageAdapter):
                 pos_val = get_col_val(row, "wordsourcepos") or get_col_val(row, "pos") or None
                 gender_val = get_col_val(row, "wordsourcegender") or get_col_val(row, "gender") or None
 
-                col_t_ord = headers_lower.get("tokenorder")
-                if col_t_ord is None:
-                    col_t_ord = headers_lower.get("token_order")
-                if col_t_ord is not None:
-                    raw_t_ord = row[col_t_ord] if col_t_ord < len(row) else ""
-                    if raw_t_ord is not None and str(raw_t_ord).strip() != "":
-                        token_order = self._parse_strict_coord_int(
-                            raw_t_ord, minimum=0, label="TokenOrder", session_zid=session_zid
-                        )
-                    else:
-                        token_order = row_idx
-                else:
-                    token_order = row_idx
-
                 existing_w = self._matching_existing_word(
                     existing_words_by_coord, s_idx, token_order, lemma
                 )
@@ -4547,7 +4558,7 @@ class SqliteStorageAdapter(StorageAdapter):
                     s_idx,
                     token_order,
                     row_idx,
-                    unique_tokens=(not is_multi_sentence_existing and len(data_rows) == len(set(range(len(data_rows))))),
+                    unique_tokens=unique_tabular_tokens,
                 )
                 effective_w_dest = (
                     None
@@ -5408,12 +5419,14 @@ class SqliteStorageAdapter(StorageAdapter):
         """
         Pinpoint atomic SQL update for a sentence translation in the sentences table.
         """
-        if not isinstance(sentence_index, int) or sentence_index <= 0:
+        if isinstance(sentence_index, bool) or not isinstance(sentence_index, int) or sentence_index <= 0:
             return False
         allowed_cols = {
             "sentence_destination", "sentence_destination2", "sentence_source_ipa", "sentence_source_audio", "sentence_source"
         }
-        col = target_field if target_field in allowed_cols else "sentence_destination"
+        if target_field not in allowed_cols:
+            raise ValueError(f"Unsupported sentence target_field: {target_field!r}")
+        col = target_field
         with self.db.get_connection(zid=zid) as conn:
             cursor = conn.cursor()
             if provenance:
@@ -7856,22 +7869,22 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
         is_last = (idx == len(providers_to_try) - 1)
         if is_provider_cooled_down(current_provider, config=config, resolved_paths=resolved_paths, task_type=eff_task):
             logger.warning(f"Provider '{current_provider}' is currently cooled down. Bypassing...")
-            if not is_last:
+            can_bypass_cooldown = (strategy == 'chain' and not is_last)
+            if can_bypass_cooldown:
                 next_cand = providers_to_try[idx + 1]
                 notify_provider_failover(eff_task, current_provider, next_cand, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
-            if is_last:
-                if last_exception:
-                    raise last_exception
-                cooldown_msg = f"Provider '{current_provider}' is cooled down and no fallback providers remain"
-                raise TranslationException(cooldown_msg, envelope={
-                    "status": "error",
-                    "code": "ERR_PROVIDER_COOLDOWN",
-                    "message": cooldown_msg,
-                    "provider": current_provider,
-                    "details": {"cooled_down": True}
-                })
-            idx += 1
-            continue
+                idx += 1
+                continue
+            if last_exception:
+                raise last_exception
+            cooldown_msg = f"Provider '{current_provider}' is cooled down and no fallback providers remain"
+            raise TranslationException(cooldown_msg, envelope={
+                "status": "error",
+                "code": "ERR_PROVIDER_COOLDOWN",
+                "message": cooldown_msg,
+                "provider": current_provider,
+                "details": {"cooled_down": True}
+            })
 
         try:
             try:
@@ -9881,7 +9894,7 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
         results_dir.mkdir(parents=True, exist_ok=True)
         if working_tsv_path.exists():
             if ttl_seconds <= 0 or (time.time() - working_tsv_path.stat().st_mtime) <= ttl_seconds:
-                return str(zid) if is_sqlite else working_tsv_path
+                return working_tsv_path
 
         if ttl_seconds > 0:
             m = re.match(r'^\d{14}-(.+)', cache_key)
@@ -10084,7 +10097,8 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
             env = os.environ.copy()
             env["PYTHONIOENCODING"] = "utf-8"
             if is_sqlite:
-                env['PYTHONPATH'] = str(kardenwort_workspace / 'src')
+                _kw_src = str(kardenwort_workspace / 'src')
+                env['PYTHONPATH'] = f"{_kw_src}{os.pathsep}{env['PYTHONPATH']}" if env.get('PYTHONPATH') else _kw_src
 
 
             logger.info(f"Running kardenwort.py: {' '.join(cmd)}")
@@ -12255,7 +12269,7 @@ html, body {{
 
                 for row_id, row in enumerate(data_rows):
                     if col_lemma != -1 and len(row) > col_lemma:
-                        lemma_val = row[col_lemma]
+                        lemma_val = row[col_lemma].strip()
                         if col_word_dest != -1:
                             while len(row) <= col_word_dest:
                                 row.append("")
@@ -13471,7 +13485,7 @@ html, body {{
                 for mid in sorted_matched_ids:
                     if 0 <= mid < len(overview_data_rows) and len(overview_data_rows[mid]) > col_word_dest:
                         tr_cand = str(overview_data_rows[mid][col_word_dest] or "").strip()
-                        if tr_cand and tr_cand != "[FAILED]" and tr_cand not in ("-", "--"):
+                        if tr_cand and not is_stored_translation_failure(tr_cand) and tr_cand not in ("-", "--"):
                             trans_items.append((mid, tr_cand))
                 if trans_items:
                     ov_trans = aggregate_sequential_distinct(trans_items, delimiter=", ")
@@ -13486,7 +13500,7 @@ html, body {{
                 for mid in sorted_matched_ids:
                     if 0 <= mid < len(overview_data_rows) and len(overview_data_rows[mid]) > col_morph:
                         m_cand = str(overview_data_rows[mid][col_morph] or "").strip()
-                        if m_cand and m_cand != "[FAILED]" and m_cand not in ("-", "--"):
+                        if m_cand and not is_stored_translation_failure(m_cand) and m_cand not in ("-", "--"):
                             morph_items.append((mid, m_cand))
                 if morph_items:
                     ov_morph = aggregate_sequential_distinct(morph_items, delimiter="; ")
@@ -13612,7 +13626,7 @@ html, body {{
                             r_mid = overview_data_rows[mid]
                             m_inf = resolve_row_inflected_form(r_mid, col_inflected, col_inflected2, col_quotation, col_lemma).strip()
                             m_tr = r_mid[col_word_dest].strip() if col_word_dest != -1 and len(r_mid) > col_word_dest else ""
-                            if m_inf and m_tr and m_tr != "[FAILED]" and m_tr not in ("-", "--"):
+                            if m_inf and m_tr and not is_stored_translation_failure(m_tr) and m_tr not in ("-", "--"):
                                 if (m_inf, m_tr) not in seen_pair_keys:
                                     seen_pair_keys.add((m_inf, m_tr))
                                     mapping_pairs.append(f"{m_inf}: {m_tr}")
@@ -13661,7 +13675,7 @@ html, body {{
                                     m_inf = resolve_row_inflected_form(r_mid, col_inflected, col_inflected2, col_quotation, col_lemma).strip().lower()
                                     if raw_w in [f.strip() for f in m_inf.split(',')]:
                                         cand_tr = r_mid[col_word_dest].strip() if len(r_mid) > col_word_dest else ""
-                                        if cand_tr and cand_tr != "[FAILED]" and cand_tr not in ("-", "--"):
+                                        if cand_tr and not is_stored_translation_failure(cand_tr) and cand_tr not in ("-", "--"):
                                             trans_inferred = cand_tr
                                             break
 
@@ -15218,13 +15232,15 @@ def render_declarative_web_shell(
         "features/audio.js",
         "app.js",
     ):
+        tag_to_replace = f'<script src="/js/{script_rel}"></script>'
+        if tag_to_replace not in base_html and script_rel != "app.js":
+            continue
         p_script = web_dir / "js" / script_rel
         s_code = read_required_asset(p_script)
         if script_rel == "app.js":
             s_code = s_code.replace('audioPythonExe + "\\\\n"', 'audioPythonExe + "\\n"')
             s_code = s_code.replace('audioAnkiTtsCli + "\\\\n"', 'audioAnkiTtsCli + "\\n"')
             s_code = s_code.replace('lang + "\\\\n"', 'lang + "\\n"')
-        tag_to_replace = f'<script src="/js/{script_rel}"></script>'
         if tag_to_replace in base_html:
             base_html = base_html.replace(tag_to_replace, f'<script>\n{s_code}\n</script>')
         elif script_rel == "app.js":
@@ -17276,13 +17292,14 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
         }
         occurrence = (row_occurrences or {}).get((str(sent_idx_val), str(token_order_val)))
         if occurrence:
-            projected = reword.project_occurrences(sanitize_occurrence_translations(occurrence))
+            clean_occurrence = sanitize_occurrence_translations(occurrence)
+            projected = reword.project_occurrences(clean_occurrence)
             row_obj.update({name: value for name, value in projected.items() if value})
             row_obj['trans'] = sanitize_translation_value(row_obj['trans'])
             row_obj['morphology'] = row_obj['morph']
             row_obj['pos'] = format_pos_cell(row_obj['pos'])
             row_obj['WordSourcePOS'] = row_obj['pos']
-            row_obj['occurrence_data'] = occurrence
+            row_obj['occurrence_data'] = clean_occurrence
         if occurrence_provenances is not None:
             occ_prov = (
                 occurrence_provenances.get((str(sent_idx_val), str(token_order_val)))
@@ -17934,7 +17951,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         for s_idx_raw, trans in sentence_translations_raw.items():
                             if s_idx_raw in ('FULL_TEXT', 'PADDED') or not (isinstance(s_idx_raw, int) or (str(s_idx_raw).isascii() and str(s_idx_raw).isdigit())):
                                 continue
-                            if trans and isinstance(trans, str):
+                            if trans and isinstance(trans, str) and not is_stored_translation_failure(trans):
                                 s_idx = int(s_idx_raw) + 1
                                 ok_sent = storage_adapter.update_sentence_translation(
                                     zid, s_idx, trans, target_field="sentence_destination", zid=zid, provenance=active_text_prov
@@ -17943,7 +17960,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                     raise RuntimeError(f"Sentence {s_idx} (sentence_destination) was not updated in SQLite")
                                 if padded_dict:
                                     padded_trans = padded_dict.get(s_idx_raw) or padded_dict.get(int(s_idx_raw) if str(s_idx_raw).isascii() and str(s_idx_raw).isdigit() else s_idx_raw)
-                                    if padded_trans and isinstance(padded_trans, str):
+                                    if padded_trans and isinstance(padded_trans, str) and not is_stored_translation_failure(padded_trans):
                                         ok_pad = storage_adapter.update_sentence_translation(
                                             zid, s_idx, padded_trans, target_field="sentence_destination2", zid=zid, provenance=active_text_prov
                                         )

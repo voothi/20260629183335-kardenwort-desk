@@ -170,16 +170,29 @@ def eligible_wordfill(row, lemma_column, translation_column, is_unfinished=None)
     return is_unfinished(translation) if is_unfinished is not None else not translation
 
 
+def _is_unfinished_cell(value):
+    text = str(value or '').strip()
+    return not text or 'skeleton-loader' in text or _default_failure(text)
+
+
+def _token_aliases_safe(keys):
+    tokens = [str(key[1]) for key in keys]
+    if len(set(tokens)) != len(tokens):
+        return False
+    index_keys = {str(index) for index in range(len(keys))}
+    return all(tok == str(index) or tok not in index_keys for index, tok in enumerate(tokens))
+
+
 def indexed_provenances(keys, provenances):
     result = {}
-    unique_tokens = len({str(key[1]) for key in keys}) == len(keys)
+    alias_tokens = _token_aliases_safe(keys)
     for index, key in enumerate(keys):
         value = provenances.get(tuple(map(str, key)))
         if not value:
             continue
         result[index] = value
         result[str(index)] = value
-        if unique_tokens:
+        if alias_tokens:
             result.setdefault(key[1], value)
             result.setdefault(str(key[1]), value)
     return result
@@ -261,13 +274,22 @@ def sentences_complete(db_sentences):
     return bool(sources) and all(_has_valid_sentence_dest(row) for row in sources)
 
 
+def _valid_sentence_entry(row):
+    index = row.get('sentence_index')
+    if isinstance(index, bool) or not isinstance(index, int) or index <= 0:
+        return None
+    dest = str(row.get('sentence_destination') or '').strip()
+    if not dest or _default_failure(dest):
+        return None
+    return index - 1, dest
+
+
 def committed_translation_map(sentences):
     result = {}
     for row in sorted(sentences, key=lambda item: item.get('sentence_index', 1)):
-        index = row.get('sentence_index')
-        dest = str(row.get('sentence_destination') or '').strip()
-        if isinstance(index, int) and index > 0 and dest:
-            result[index - 1] = dest
+        entry = _valid_sentence_entry(row)
+        if entry is not None:
+            result[entry[0]] = entry[1]
     return result
 
 
@@ -377,7 +399,7 @@ def is_untranslated_lemma(row, col_lemma, col_word_dest):
     val = row[col_lemma].strip()
     if not val:
         return None
-    if col_word_dest != -1 and len(row) > col_word_dest and row[col_word_dest].strip():
+    if col_word_dest != -1 and len(row) > col_word_dest and not _is_unfinished_cell(row[col_word_dest]):
         return None
     return val
 
@@ -422,9 +444,11 @@ def _sqlite_word_update(key, trans_val, chunk_prov):
     )
 
 
-def _matched_chunk_rows(data_rows, col_lemma, chunk_trans):
+def _matched_chunk_rows(data_rows, col_lemma, col_word_dest, chunk_trans):
     matched = []
     for row_idx, row in enumerate(data_rows):
+        if not _is_unfinished_cell(current_value(row, col_word_dest)):
+            continue
         trans = chunk_trans.get(current_value(row, col_lemma))
         if trans and str(trans).strip():
             matched.append((row_idx, trans))
@@ -436,7 +460,7 @@ def plan_chunk_word_updates(data_rows, col_lemma, col_word_dest, occurrence_keys
         return [], []
     patches = []
     sqlite_updates = []
-    for row_idx, trans in _matched_chunk_rows(data_rows, col_lemma, chunk_trans):
+    for row_idx, trans in _matched_chunk_rows(data_rows, col_lemma, col_word_dest, chunk_trans):
         key = _chunk_occurrence_key(row_idx, occurrence_keys)
         patches.append((row_idx, trans, key))
         if is_sqlite and key is not None:

@@ -1353,12 +1353,11 @@ class KardenwortDB:
         if older_than_days is not None:
             where_clause += " AND (julianday('now') - julianday(deleted_at)) > ?"
             params.append(older_than_days)
-        sql = f"DELETE FROM sessions {where_clause};"
+        sql = f"DELETE FROM sessions {where_clause} RETURNING zid;"
 
         with self.get_connection(zid=zid) as conn:
             cursor = conn.cursor()
-            targets = [row[0] for row in conn.execute(f"SELECT zid FROM sessions {where_clause};", params).fetchall()]
-            cursor.execute(sql, params)
+            targets = [row[0] for row in cursor.execute(sql, params).fetchall()]
             self._cleanup_session_runtime_state(conn, targets)
             self._purge_orphan_runtime_state_in_conn(conn)
             return targets
@@ -1387,14 +1386,13 @@ class KardenwortDB:
         Deletes sessions older than specified number of days (cascades to sentences and words).
         """
         where_clause = "WHERE (julianday('now') - julianday(created_at)) > ?"
-        sql = f"DELETE FROM sessions {where_clause};"
+        sql = f"DELETE FROM sessions {where_clause} RETURNING zid;"
         with self.get_connection(zid=zid) as conn:
             cursor = conn.cursor()
-            targets = [row[0] for row in conn.execute(f"SELECT zid FROM sessions {where_clause};", (older_than_days,)).fetchall()]
-            cursor.execute(sql, (older_than_days,))
+            targets = [row[0] for row in cursor.execute(sql, (older_than_days,)).fetchall()]
             self._cleanup_session_runtime_state(conn, targets)
             self._purge_orphan_runtime_state_in_conn(conn)
-            return cursor.rowcount
+            return len(targets)
 
     def vacuum(self, zid: Optional[str] = None) -> bool:
         """

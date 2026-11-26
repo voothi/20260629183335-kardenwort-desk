@@ -2,8 +2,8 @@
 import re
 
 
-_EXACT_HTTP_429_RE = re.compile(r'^HTTP\s+429\s+Too\s+Many\s+Requests$', re.IGNORECASE)
-_PROVIDER_HTTP_429_RE = re.compile(r'^Error\s+calling\s+[^\r\n]*\bHTTP\s+429\b', re.IGNORECASE)
+_EXACT_HTTP_429_RE = re.compile(r'^HTTP\s+429\s+Too\s+Many\s+Requests\Z', re.IGNORECASE)
+_PROVIDER_HTTP_429_RE = re.compile(r'^Error\s+calling\s+[^\r\n]*\bHTTP\s+429\b[^\r\n]*\Z', re.IGNORECASE)
 
 
 def is_stored_rate_limit_failure(value) -> bool:

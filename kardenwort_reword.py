@@ -449,27 +449,46 @@ def export_manifest_indices(keys, selected_rows, rendered_manifest, sentence_fie
     return indices
 
 
+def export_token_indices(keys, token_orders):
+    """Resolve explicit token_orders for export; empty list resolves to () rather than None."""
+    orders = coordinate_list(token_orders, 'Token orders')
+    if not orders:
+        return ()
+    return token_indices(keys, orders, None)
+
+
+def _export_secondary_agreement(keys, requested, selected_rows, token_orders, rendered_manifest, sentence_field):
+    if token_orders is not None:
+        requested = agree(requested, export_token_indices(keys, token_orders))
+    if selected_rows is not None and rendered_manifest is not None:
+        manifest_sel = export_manifest_indices(keys, selected_rows, rendered_manifest, sentence_field, False)
+        requested = agree(requested, manifest_sel)
+    return requested
+
+
 def resolve_export_selection(rows, headers, targets=None, selected_rows=None, token_orders=None,
                              visual_indices=None, visual_manifest=None, rendered_manifest=None,
                              sentence_field='SentenceSourceIndex', allow_unmapped_indices=False):
     """Resolve explicit export selectors to immutable DB row indices, or None for implicit mode.
 
-    An explicit empty list (e.g. ``selected_rows=[]``) resolves to ``()`` rather than ``None``
-    so callers never silently fall back to persisted ``DeskSelected`` rows when explicitly
-    passing zero selections. Pass ``selected_rows=None`` for implicit persisted selection mode.
+    An explicit empty list (e.g. ``selected_rows=[]`` or ``token_orders=[]``) resolves to ``()``
+    rather than ``None`` so callers never silently fall back to persisted ``DeskSelected`` rows
+    when explicitly passing zero selections. Pass ``None`` for implicit persisted selection mode.
     """
     keys = row_keys(rows, headers, sentence_field)
     requested = export_explicit_targets(keys, targets, visual_indices, visual_manifest)
     if requested is not None:
-        return requested
-    if selected_rows is not None:
-        return export_manifest_indices(
-            keys, selected_rows, rendered_manifest, sentence_field, allow_unmapped_indices)
-    if token_orders is not None:
-        return token_indices(keys, token_orders, None)
+        return _export_secondary_agreement(
+            keys, requested, selected_rows, token_orders, rendered_manifest, sentence_field)
     if targets is not None or visual_indices is not None:
-        return ()
-    return None
+        requested = ()
+    if selected_rows is not None:
+        manifest_sel = export_manifest_indices(
+            keys, selected_rows, rendered_manifest, sentence_field, allow_unmapped_indices)
+        requested = agree(requested, manifest_sel)
+    if token_orders is not None:
+        requested = agree(requested, export_token_indices(keys, token_orders))
+    return requested
 
 
 def _is_word_char(ch):
