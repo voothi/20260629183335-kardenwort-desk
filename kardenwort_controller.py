@@ -1,6 +1,5 @@
 from kardenwort_state_runtime import (OperationConfiguration, operation_preferences,
-                                      operation_configuration, preference_operation,
-                                      request_preferences)
+                                      operation_configuration, preference_operation)
 import kardenwort_progressive_completion as progressive
 import math
 import sys
@@ -1580,8 +1579,11 @@ class EnrichmentQueue:
         key = (norm_lemma, norm_src, norm_tgt)
         fut = None
         with self._lock:
-            if key in self._lemma_trans_cache:
-                return self._lemma_trans_cache[key]
+            cached = self._get_memo_locked(
+                self._lemma_trans_cache, self._lemma_trans_times, key, self._translation_cache_ttl
+            )
+            if cached is not None:
+                return cached
             if key in self._inflight_trans:
                 fut = self._inflight_trans[key]
             else:
@@ -1671,8 +1673,11 @@ class EnrichmentQueue:
         for l in missing_lemmas:
             key = (l, source_lang, target_lang)
             with self._lock:
-                if key in self._lemma_trans_cache:
-                    results[l] = self._lemma_trans_cache[key]
+                cached = self._get_memo_locked(
+                    self._lemma_trans_cache, self._lemma_trans_times, key, self._translation_cache_ttl
+                )
+                if cached is not None:
+                    results[l] = cached
                     continue
                 if key in self._inflight_trans:
                     futures[l] = self._inflight_trans[key]
@@ -1721,8 +1726,11 @@ class EnrichmentQueue:
         key = (norm_lemma, norm_lang)
         fut = None
         with self._lock:
-            if key in self._cache:
-                return dict(self._cache[key])
+            cached = self._get_memo_locked(
+                self._cache, self._cache_times, key, self._enrichment_cache_ttl
+            )
+            if cached is not None:
+                return dict(cached)
             if key in self._inflight_lemmas:
                 fut = self._inflight_lemmas[key]
             else:
@@ -1832,7 +1840,10 @@ class EnrichmentQueue:
                             if k in item and item[k]:
                                 res[k] = str(item[k]).strip()
                         with self._lock:
-                            self._cache[(norm_lemma, lang)] = res
+                            self._put_memo_locked(
+                                self._cache, self._cache_times, (norm_lemma, lang), dict(res),
+                                self._enrichment_cache_max, self._enrichment_cache_ttl,
+                            )
                         return res
             except Exception as e:
                 logger.warning(f"IntelliFiller HTTP query in EnrichmentQueue failed: {e}")
@@ -1867,7 +1878,10 @@ class EnrichmentQueue:
                             if c_idx < len(urow) and urow[c_idx].strip():
                                 res[field] = urow[c_idx].strip()
                     with self._lock:
-                        self._cache[(norm_lemma, lang)] = res
+                        self._put_memo_locked(
+                            self._cache, self._cache_times, (norm_lemma, lang), dict(res),
+                            self._enrichment_cache_max, self._enrichment_cache_ttl,
+                        )
                     return res
 
         return {}
@@ -3136,11 +3150,16 @@ class SessionArbiter:
             else:
                 idle_entries.append((last_used, zid))
         excess = len(self.sessions) - self._session_cache_max
-        if excess <= 0 or not idle_entries:
-            return
-        idle_entries.sort()
-        for _, zid in idle_entries[:excess]:
-            self._evict_session_locked(zid)
+        if excess > 0 and idle_entries:
+            idle_entries.sort()
+            for _, zid in idle_entries[:excess]:
+                self._evict_session_locked(zid)
+        rev_limit = max(self._session_cache_max * 4, 256)
+        if len(self._session_revisions) > rev_limit:
+            pinned = set(self.sessions) | active_progressive | set(self._active_session_ops) | set(self._session_io_gates)
+            stale_revs = [z for z in list(self._session_revisions) if z not in pinned]
+            for z in stale_revs[:len(self._session_revisions) - rev_limit]:
+                self._session_revisions.pop(z, None)
 
     @contextmanager
     def _session_io_gate(self, session_zid: str):
@@ -3341,6 +3360,7 @@ class SessionArbiter:
                 "comments": res["comments"],
                 "headers": res["headers"],
                 "data_rows": res["data_rows"],
+                "role_fields": dict(role_fields),
                 "sentence_translation": res["sentence_translation"],
                 "active_text_provider": active_text_p,
                 "active_lemma_provider": active_lemma_p,
@@ -3712,13 +3732,16 @@ class SessionArbiter:
             if not data_rows or not headers:
                 continue
 
-            col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+            col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else (headers.index('WordSource') if 'WordSource' in headers else -1)
             if col_lemma == -1:
                 continue
 
             col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
 
-            stored_session = storage_adapter.db.get_session(sib_zid) if is_sqlite else None
+            stored_session = storage_adapter.db.get_session(sib_zid, include_deleted=True) if is_sqlite else None
+            if is_sqlite and stored_session is not None and stored_session.get("deleted_at") is not None:
+                self.evict_session_cache(sib_zid)
+                continue
             keys = reword.row_keys(data_rows, headers, role_fields.get('sentence_index', 'SentenceSourceIndex')) if stored_session else None
             updates = []
             modified = False
@@ -3760,7 +3783,8 @@ class SessionArbiter:
 
             if modified:
                 if is_sqlite:
-                    storage_adapter.batch_update_words(session_zid=sib_zid, updates_list=updates, zid=sib_zid)
+                    if updates:
+                        storage_adapter.batch_update_words(session_zid=sib_zid, updates_list=updates, zid=sib_zid)
                 else:
                     sib_tsv = find_working_tsv(results_dir, sib_zid, sess_lang, storage_adapter=storage_adapter)
                     if sib_tsv:
@@ -4292,7 +4316,10 @@ class SessionArbiter:
             if col_lemma == -1 or col_word_dest == -1:
                 continue
 
-            stored_session = storage_adapter.db.get_session(sib_zid) if is_sqlite else None
+            stored_session = storage_adapter.db.get_session(sib_zid, include_deleted=True) if is_sqlite else None
+            if is_sqlite and stored_session is not None and stored_session.get("deleted_at") is not None:
+                self.evict_session_cache(sib_zid)
+                continue
             keys = reword.row_keys(data_rows, headers, role_fields.get('sentence_index', 'SentenceSourceIndex')) if stored_session else None
             modified = False
             updates = []
@@ -4319,7 +4346,8 @@ class SessionArbiter:
 
             if modified:
                 if is_sqlite:
-                    storage_adapter.batch_update_words(session_zid=sib_zid, updates_list=updates, zid=sib_zid)
+                    if updates:
+                        storage_adapter.batch_update_words(session_zid=sib_zid, updates_list=updates, zid=sib_zid)
                 else:
                     sib_tsv = find_working_tsv(results_dir, sib_zid, sess_lang, storage_adapter=storage_adapter)
                     if sib_tsv:
@@ -4406,7 +4434,7 @@ class SessionArbiter:
                     target_l = sess["target_lang"]
                 if not is_sqlite and sess.get("tsv_path"):
                     cand = Path(sess["tsv_path"])
-                    if cand.exists() or is_sqlite:
+                    if cand.exists():
                         tsv_path = cand
 
         results_dir = resolve_results_dir(self.resolved_paths, self.config)
@@ -4811,6 +4839,16 @@ _SESSION_TSV_RE = re.compile(r"^/(?:api/v1/admin/sessions|api/v1/sessions|sessio
 _STRICT_ASCII_INT_RE = re.compile(r"^-?[0-9]+$")
 
 
+def _content_disposition_attachment(filename: str) -> str:
+    cleaned = re.sub(r'[\r\n"\\]+', '_', str(filename or 'download')).strip() or 'download'
+    ascii_safe = cleaned.encode('ascii', 'ignore').decode('ascii').strip()
+    ascii_safe = re.sub(r'[^A-Za-z0-9._\- ]+', '_', ascii_safe).strip(' .') or 'download'
+    if ascii_safe == cleaned:
+        return f'attachment; filename="{ascii_safe}"'
+    encoded = urllib.parse.quote(cleaned, safe='')
+    return f'attachment; filename="{ascii_safe}"; filename*=UTF-8\'\'{encoded}'
+
+
 def _allowed_methods_for_path(path: str) -> Optional[Tuple[str, ...]]:
     direct = _ROUTE_ALLOWED_METHODS.get(path)
     if direct is not None:
@@ -5067,8 +5105,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             logger.debug('Peer disconnected or timed out during HTML response to %s', self.path)
 
     def _audio_request(self, path):
-        self._authenticate_token(require_configured=True)
+        if not str(getattr(self.server, 'api_key', '') or '').strip():
+            self._authenticate_token(require_configured=True)
         body = self._read_json_body()
+        self._authenticate_token(body, require_configured=True)
         try:
             result = execute_audio(body, self.server.resolved_paths, self.server.config,
                 self.connection, WindowsJobObject, synthesize=path == '/api/v1/audio/synthesize')
@@ -5714,11 +5754,18 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if path in ('/api/v1/queue/status', '/session/queue/status', '/queue/status'):
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            is_authed = True
+            try:
+                self._authenticate_token(query_params=qs)
+            except StructuredError:
+                is_authed = False
             res = self.server.arbiter.get_queue_status()
+            if not is_authed and isinstance(res, dict):
+                res = {k: v for k, v in res.items() if k != 'active_progressive_sessions'}
             self._send_json(200, res)
             return
 
-        worker_status_match = re.match(r"^/(?:api/v1/)?session(?:s)?/([0-9a-zA-Z_\-]+)/worker_status$", path)
+        worker_status_match = _WORKER_STATUS_RE.match(path)
         if worker_status_match:
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
@@ -6218,8 +6265,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     else:
                         html_result = render_out
                         child_args = getattr(render_out, 'children', [])
-                except Exception:
-                    if text and language:
+                except StructuredError as restore_err:
+                    if restore_err.error_code == ErrorCode.NOT_FOUND and text and language:
                         if not bypass_lang_check:
                             lang_res = verify_language(text, language, operation_configuration(self.server.config), bypass=False)
                             if not lang_res.is_match:
@@ -6270,8 +6317,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                             zoom_level=str(zoom),
                             theme=theme,
                             tsv_path=Path(tsv_path) if tsv_path else None,
-                            split_gap_limit=int(split_gap) if split_gap else None,
-                            seq_num=int(seq_num) if seq_num else None,
+                            split_gap_limit=parsed_split_gap,
+                            seq_num=parsed_seq_num,
                             trace_id=f"{active_zid}:render:init",
                             spawn_children=False,
                             return_children=True,
@@ -6592,7 +6639,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
                     goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'translation', 'ipa', 'morphology', 'pos', 'gender'])
                     goldendict['theme'] = req_theme or 'dark'
-                    goldendict.setdefault('theme', 'compact')
                     goldendict.setdefault('heading_source', '__default__')
                     goldendict.setdefault('heading_translation', '__default__')
                     goldendict.setdefault('heading_lemmas', '__default__')
@@ -7070,7 +7116,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             port = getattr(self.server, 'server_port', None) or (self.server.server_address[1] if hasattr(self.server, 'server_address') else 18335)
             host = self.server.server_address[0] if hasattr(self.server, 'server_address') and self.server.server_address[0] not in ('0.0.0.0', '') else '127.0.0.1'
             formatted_host = _format_http_host(host)
-            api_token = getattr(self.server, 'api_key', '')
             theme = draft.get("theme", "dark")
 
             def build_browser_url(s_zid, s_num):
@@ -7270,11 +7315,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 target_path.relative_to(web_dir)
                 allowed = True
             except ValueError:
-                try:
-                    target_path.relative_to((desk_dir / "assets").resolve())
-                    allowed = True
-                except ValueError:
-                    pass
+                if path == '/favicon.ico':
+                    try:
+                        target_path.relative_to((desk_dir / "assets").resolve())
+                        allowed = True
+                    except ValueError:
+                        pass
 
             if not allowed:
                 raise StructuredError(ErrorCode.UNAUTHORIZED, "Path traversal forbidden")
@@ -7517,12 +7563,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             adapter = get_storage_adapter(cfg, self.server.resolved_paths)
             project_marker = f"(ID: {pid_int})"
-            existing = None
-            try:
-                if getattr(adapter, 'backend_name', '') == 'sqlite':
-                    existing = adapter.db.get_session(target_zid)
-            except Exception:
-                existing = None
+            existing = adapter.db.get_session(target_zid) if getattr(adapter, 'backend_name', '') == 'sqlite' else None
 
             if existing is not None:
                 existing_comments = str(existing.get("comments") or "")
@@ -7673,7 +7714,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             return
 
         # 6.1 TSV Virtualization: Dynamic Export
-        session_tsv_match = re.match(r"^/(?:api/v1/admin/sessions|api/v1/sessions|sessions)/([0-9a-zA-Z_\-]+)/tsv$", path)
+        session_tsv_match = _SESSION_TSV_RE.match(path)
         if session_tsv_match:
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
@@ -7708,13 +7749,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             slug_part = f"-{slug}" if slug else ""
             lang_part = f".{lang}" if lang else ""
             filename = f"{target_zid}{slug_part}{lang_part}.tsv"
-            self.send_response(200)
-            self._send_cors_headers()
-            self.send_header('Content-Type', 'text/tab-separated-values; charset=utf-8')
-            self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
-            self.send_header('Content-Length', str(len(tsv_data)))
-            self.end_headers()
-            self.wfile.write(tsv_data)
+            self._send_bytes(
+                200,
+                tsv_data,
+                'text/tab-separated-values; charset=utf-8',
+                extra_headers={'Content-Disposition': _content_disposition_attachment(filename)},
+            )
             return
 
         # 6.2 TSV Virtualization: Drag-and-Drop / Ingestion
@@ -7871,13 +7911,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             db = KardenwortDB(config=operation_configuration(self.server.config), resolved_paths=self.server.resolved_paths)
             sql_dump = db.get_sql_dump(zid=req_zid).encode('utf-8')
 
-            self.send_response(200)
-            self._send_cors_headers()
-            self.send_header('Content-Type', 'text/plain; charset=utf-8')
-            self.send_header('Content-Disposition', 'attachment; filename="kardenwort-dump.sql"')
-            self.send_header('Content-Length', str(len(sql_dump)))
-            self.end_headers()
-            self.wfile.write(sql_dump)
+            self._send_bytes(
+                200,
+                sql_dump,
+                'text/plain; charset=utf-8',
+                extra_headers={'Content-Disposition': _content_disposition_attachment('kardenwort-dump.sql')},
+            )
             return
 
         if path == '/api/v1/admin/db/vacuum':
@@ -8027,7 +8066,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Kardenwort Desk Central Controller Daemon")
     parser.add_argument("--host", default=None, help="Host to bind to (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=None, help="Port to bind to (default: 8080)")
+    parser.add_argument("--port", type=int, default=None, help="Port to bind to (default: 18335)")
     parser.add_argument("--config", default=None, help="Path to config.ini")
     parser.add_argument("--no-sidecars", action="store_true", help="Do not spawn or supervise sidecar microservices")
     cli_args = parser.parse_args()

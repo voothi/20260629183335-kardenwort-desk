@@ -102,10 +102,16 @@ class ControllerHTTPServer(ThreadingHTTPServer):
         self.closed_event = threading.Event()
         self.shutdown_worker = None
         self.shutdown_error = None
+        self._last_cache_prune = time.monotonic()
         super().__init__(*args, **kwargs)
 
     def service_actions(self):
         EventDispatcher.get_instance().prune_polling_clients()
+        arbiter = getattr(self, 'arbiter', None)
+        now = time.monotonic()
+        if arbiter is not None and (now - self._last_cache_prune) >= 30.0:
+            self._last_cache_prune = now
+            arbiter.prune_idle_caches(now=now)
 
     def get_request(self):
         connection, address = super().get_request()
@@ -203,6 +209,7 @@ class ControllerHTTPServer(ThreadingHTTPServer):
                 self.closed_event.set()
             with self.lock:
                 errors = list(self.errors)
+                self.errors.clear()
             if errors:
                 raise BaseExceptionGroup('Controller HTTP disposal failed', errors)
 

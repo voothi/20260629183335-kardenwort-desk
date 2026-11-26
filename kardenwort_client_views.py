@@ -75,13 +75,6 @@ def session_occurrences(connection, zid):
     return {(row['sentence_index'], row['token_order']) for row in rows}
 
 
-def occurrence_exists(connection, zid, item):
-    sentence, token = occurrence_identity(item)
-    count = connection.execute('SELECT COUNT(*) FROM words WHERE session_zid=? AND sentence_index=? AND token_order=?',
-                               (zid, sentence, token)).fetchone()[0]
-    return count == 1
-
-
 def validate_view_inputs(active_card, tokens):
     if type(active_card) is not int or active_card < 1:
         raise ValueError('Invalid active card')
@@ -155,11 +148,6 @@ def inspect_view(connection, zid, client, now, touch_interval, include_import=Fa
     result = with_import_flag(dict(active_card=row['active_card'], active_tokens=kept,
                                    revision=row['revision'] + int(cleared), cleared=cleared), imported)
     return dict(state=_observed_state(row, now, touch_interval, cleared), row=row, result=result, valid=kept)
-
-
-def read_view(connection, zid, client):
-    now = int(time.time())
-    return _maintain_view(connection, zid, client, now, TOUCH_RENEWAL_SECONDS, False)
 
 
 def _maintain_view(connection, zid, client, now, touch_interval, include_import):

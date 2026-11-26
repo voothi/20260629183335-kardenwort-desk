@@ -22,7 +22,7 @@ logger = logging.getLogger('kardenwort.desk.audio')
 _SECRET_PATTERN = re.compile(
     r'(?i)(bearer\s+)\S+|((?:api[_-]?key|secret[_-]?token|token|secret|password)\s*[=:]\s*)\S+'
 )
-_PATH_PATTERN = re.compile(r"[A-Za-z]:\\[^\s'\"]+|/(?:home|Users|tmp|var)/[^\s'\"]+")
+_PATH_PATTERN = re.compile(r"[A-Za-z]:[/\\][^\s'\"]+|/(?:home|Users|tmp|var)/[^\s'\"]+")
 
 
 def capability(paths):
@@ -154,9 +154,7 @@ def resume_launcher(process):
         resume_owned_process(process.pid)
 
 
-def close_process(process, job):
-    if job is not None:
-        drain_windows_job(job)
+def _reap_process(process):
     if process is None:
         return
     if os.name != 'nt':
@@ -167,6 +165,14 @@ def close_process(process, job):
     if process.poll() is None:
         process.kill()
     process.wait(timeout=5)
+
+
+def close_process(process, job):
+    try:
+        if job is not None:
+            drain_windows_job(job)
+    finally:
+        _reap_process(process)
 
 
 def _collect_job_handles(kernel, query, job_handle):
@@ -291,7 +297,7 @@ def wait_process(process, connection, timeout, output):
 
 def execution_timeout(config):
     try:
-        value = config.getfloat('audio', 'synthesis_timeout', fallback=30)
+        value = config.getfloat('audio', 'synthesis_timeout', fallback=30) if config else 30.0
     except ValueError as error:
         raise AudioError('Audio timeout must be between 0.05 and 60 seconds', 'CONFIGURATION_ERROR') from error
     if not math.isfinite(value) or not 0.05 <= value <= 60:
@@ -337,11 +343,18 @@ def synthesis_arguments(script, text, language, output, stateless):
     return arguments
 
 
+def _resolve_synthesis_mode(config, synthesize):
+    engine = configured_playback_engine(config)
+    if synthesize and engine == 'browser_tts':
+        raise AudioError('Backend audio synthesis is disabled when playback_engine is browser_tts', 'CONFIGURATION_ERROR')
+    return engine == 'stateless_gtts' if synthesize else False
+
+
 def execute_audio(body, paths, config, connection, job_factory, synthesize=True):
     text, language = audio_request(body)
     if synthesize and '|||' in text:
         raise AudioError('Separate audio must be requested in sequence by the client', 'INVALID_PAYLOAD')
-    stateless = configured_playback_engine(config) == 'stateless_gtts' if synthesize else False
+    stateless = _resolve_synthesis_mode(config, synthesize)
     python, script = capability(paths)
     timeout = execution_timeout(config)
     if not _SLOTS.acquire(blocking=False):

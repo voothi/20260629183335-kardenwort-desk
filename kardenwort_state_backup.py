@@ -1,5 +1,6 @@
 """An owned, verified pre-migration SQLite snapshot, never a fallback owner."""
 from contextlib import closing
+import errno
 import os
 import sqlite3
 import threading
@@ -41,9 +42,31 @@ def _database_identity(connection):
     )
 
 
-def _table_rows(connection, table_name):
+def _table_query(connection, table_name):
     escaped = table_name.replace('"', '""')
-    return [tuple(row) for row in connection.execute(f'SELECT * FROM "{escaped}"').fetchall()]
+    try:
+        connection.execute(f'SELECT _rowid_ FROM "{escaped}" LIMIT 0')
+        return f'SELECT * FROM "{escaped}" ORDER BY _rowid_ ASC'
+    except sqlite3.OperationalError:
+        columns = [row[1].replace('"', '""') for row in connection.execute(f'PRAGMA table_info("{escaped}")').fetchall()]
+        order = ', '.join(f'"{col}" ASC' for col in columns)
+        return f'SELECT * FROM "{escaped}"' + (f' ORDER BY {order}' if order else '')
+
+
+def _fetch_chunk(cursor, size=512):
+    return [tuple(row) for row in cursor.fetchmany(size)]
+
+
+def _compare_table_streams(source_cursor, backup_cursor, table_name):
+    while True:
+        source_chunk = _fetch_chunk(source_cursor)
+        backup_chunk = _fetch_chunk(backup_cursor)
+        if source_chunk != backup_chunk:
+            raise sqlite3.DatabaseError(
+                f"Existing pre-migration backup content mismatch in table '{table_name}'"
+            )
+        if not source_chunk:
+            return
 
 
 def _has_pre_ddl_state(connection):
@@ -89,10 +112,9 @@ def _verify_backup_metadata(source, backup_conn):
 
 def _verify_backup_rows(source, backup_conn, table_names):
     for table_name in table_names:
-        if _table_rows(backup_conn, table_name) != _table_rows(source, table_name):
-            raise sqlite3.DatabaseError(
-                f"Existing pre-migration backup content mismatch in table '{table_name}'"
-            )
+        query = _table_query(source, table_name)
+        with closing(source.execute(query)) as src_cur, closing(backup_conn.execute(query)) as bak_cur:
+            _compare_table_streams(src_cur, bak_cur, table_name)
 
 
 def _verify_backup_contents(source, backup_conn):
@@ -125,6 +147,27 @@ def _remove_staging_artifacts(staging):
         staging.with_name(staging.name + suffix).unlink(missing_ok=True)
 
 
+def _hardlink_unsupported(error):
+    if getattr(error, 'winerror', None) in (1, 17, 50):
+        return True
+    unsupported = {errno.EXDEV, errno.EPERM, errno.EACCES, getattr(errno, 'ENOTSUP', -1), getattr(errno, 'EOPNOTSUPP', -1)}
+    return error.errno in unsupported
+
+
+def _commit_staged_backup(staging, target, source):
+    try:
+        os.link(staging, target)
+    except FileExistsError:
+        _verify_existing_backup(source, target)
+    except OSError as error:
+        if not _hardlink_unsupported(error):
+            raise
+        if target.exists():
+            _verify_existing_backup(source, target)
+            return
+        os.replace(staging, target)
+
+
 def backup_preference_migration(db, migration):
     if migration != MIGRATION:
         return None
@@ -139,10 +182,7 @@ def backup_preference_migration(db, migration):
             f'{target.name}.{os.getpid()}.{threading.get_ident()}.{uuid4().hex}.tmp'
         )
         checked_backup(source, staging)
-        try:
-            os.link(staging, target)
-        except FileExistsError:
-            _verify_existing_backup(source, target)
+        _commit_staged_backup(staging, target, source)
         return target
     finally:
         if staging is not None:

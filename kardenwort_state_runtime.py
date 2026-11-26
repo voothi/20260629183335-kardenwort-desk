@@ -227,16 +227,3 @@ def operation_preferences(command):
         with preference_operation(owner.config, owner.resolved_paths):
             return command(owner, *args, **kwargs)
     return captured
-
-
-def request_preferences(uses_preferences):
-    def decorate_request(command):
-        @wraps(command)
-        def captured_request(handler, *args, **kwargs):
-            path = urlparse(handler.path).path
-            if not uses_preferences(path):
-                return command(handler, *args, **kwargs)
-            with preference_operation(handler.server.config, handler.server.resolved_paths):
-                return command(handler, *args, **kwargs)
-        return captured_request
-    return decorate_request
