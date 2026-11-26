@@ -280,9 +280,6 @@ def test_1_1_passive_session_get_aliases_wordfill_no_write_and_preserve_occurren
     tmp_path, running_controller, monkeypatch, blank_key, alias_name, path_template, auth_mode
 ):
     """Task 1.1: Passive session GETs must not write/migrate/hydrate-save or discard occurrence_data."""
-    if blank_key and auth_mode == "header":
-        pytest.skip("Header-authenticated API lookup rejects blank configured key by design")
-
     server_url, server, adapter = running_controller
     rich_extra = _seed_wordfill_session_with_occurrence_metadata(server, adapter, tmp_path)
     if blank_key:
@@ -306,7 +303,12 @@ def test_1_1_passive_session_get_aliases_wordfill_no_write_and_preserve_occurren
         f"{server_url}{path_template.format(zid=SESSION_ZID)}",
         headers=headers,
     )
-    assert status == 200, f"[{alias_name}/blank={blank_key}] expected 200, got {status}: {body[:200]}"
+    expect_blank_key_reject = blank_key and alias_name == "api_lookup"
+    if expect_blank_key_reject:
+        assert status == 403, f"[{alias_name}/blank={blank_key}] expected 403 TOKEN_NOT_CONFIGURED, got {status}: {body[:200]}"
+        assert json.loads(body).get("error_code") == "TOKEN_NOT_CONFIGURED"
+    else:
+        assert status == 200, f"[{alias_name}/blank={blank_key}] expected 200, got {status}: {body[:200]}"
 
     # Zero persistence / DDL / adapter init / provider / worker / spawn / file effects
     assert events["write_connections"] == [], f"[{alias_name}] opened write DB connections: {events['write_connections']}"
@@ -325,14 +327,15 @@ def test_1_1_passive_session_get_aliases_wordfill_no_write_and_preserve_occurren
     word_row = next(w for w in db_after["words"] if w["session_zid"] == SESSION_ZID and w["lemma"] == "Haus")
     assert json.loads(word_row["extra_fields"]) == rich_extra
 
-    # Rendered bundle/fingerprint coherence: never pair unsaved hydrated cells with stored fingerprint
-    html_doc = json.loads(body)["data"]["html"] if auth_mode == "header" else body
-    session_island = _extract_json_island(html_doc, "session-data")
-    if "fingerprint" in session_island and session_island["fingerprint"]:
-        assert session_island["fingerprint"] == expected_fp
-    assert "/haʊ̯s/" not in html_doc, (
-        f"[{alias_name}] passive GET projected unsaved wordfill IPA that does not match stored session"
-    )
+    if not expect_blank_key_reject:
+        # Rendered bundle/fingerprint coherence: never pair unsaved hydrated cells with stored fingerprint
+        html_doc = json.loads(body)["data"]["html"] if auth_mode == "header" else body
+        session_island = _extract_json_island(html_doc, "session-data")
+        if "fingerprint" in session_island and session_island["fingerprint"]:
+            assert session_island["fingerprint"] == expected_fp
+        assert "/haʊ̯s/" not in html_doc, (
+            f"[{alias_name}] passive GET projected unsaved wordfill IPA that does not match stored session"
+        )
 
 
 @pytest.mark.parametrize("blank_key", [False, True])
@@ -352,9 +355,6 @@ def test_1_1_passive_project_get_aliases_no_write_no_provider_no_tokenizer(
     tmp_path, running_controller, monkeypatch, blank_key, alias_name, path_template, auth_mode
 ):
     """Task 1.1: Passive project GETs must not persist sessions, migrate, translate, or tokenize headings."""
-    if blank_key and auth_mode == "header":
-        pytest.skip("Header-authenticated API route rejects blank key")
-
     server_url, server, adapter = running_controller
     server.config.set("rendering", "display_mode", "monolithic")
     server.config.set("sentences_mode", "enabled", "true")
@@ -405,7 +405,11 @@ def test_1_1_passive_project_get_aliases_no_write_no_provider_no_tokenizer(
         f"{server_url}{path_template.format(pid=pid)}",
         headers=headers,
     )
-    assert status == 200, f"[{alias_name}/blank={blank_key}] expected 200, got {status}: {body[:200]}"
+    if blank_key and alias_name == "api_lookup_project":
+        assert status == 403, f"[{alias_name}/blank={blank_key}] expected 403 TOKEN_NOT_CONFIGURED, got {status}: {body[:200]}"
+        assert json.loads(body).get("error_code") == "TOKEN_NOT_CONFIGURED"
+    else:
+        assert status == 200, f"[{alias_name}/blank={blank_key}] expected 200, got {status}: {body[:200]}"
     assert events["write_connections"] == [], f"[{alias_name}] opened write DB connection: {events['write_connections']}"
     assert events["migrations"] == [], f"[{alias_name}] ran migrations during project GET"
     assert events["save_session"] == [], f"[{alias_name}] persisted session during project GET"
