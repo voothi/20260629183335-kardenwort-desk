@@ -25,10 +25,20 @@ def file_effects(owner, event, args):
 
 
 def argument(args, name):
-    position = len(args)-args[::-1].index(name)
-    if position >= len(args):
-        raise ValueError('Missing worker argument')
-    return args[position]
+    prefix = name + '='
+    for idx in range(len(args) - 1, -1, -1):
+        if args[idx] == name:
+            if idx + 1 >= len(args):
+                raise ValueError('Missing worker argument')
+            return args[idx + 1]
+        if args[idx].startswith(prefix):
+            return args[idx][len(prefix):]
+    raise ValueError('Missing worker argument')
+
+
+def has_argument(args, name):
+    prefix = name + '='
+    return any(item == name or item.startswith(prefix) for item in args)
 
 
 def database_log_directory(config, paths, source):
@@ -47,7 +57,7 @@ def validate_runtime(desk, config, paths, args, owner, source):
     require_path(str(target)+'.worker.lock', owner)
     results = desk.resolve_results_dir(paths, config)
     require_path(results, owner)
-    zid = argument(args, '--zid') if '--zid' in args else target.name[:14]
+    zid = argument(args, '--zid') if has_argument(args, '--zid') else target.name[:14]
     require_path(results/(zid+'.log'), owner)
     validate_database(desk, config, paths, owner, source)
 
@@ -114,15 +124,18 @@ def main(argv):
     owner, source = Path(argv[0]).resolve(), Path(argv[1]).resolve()
     try:
         desk, raw = prepare(owner, source, argv[3:])
-    except Exception:
-        record(owner, source, 'rejected')
-        print('Audit rejected worker runtime before dispatch', file=sys.stderr)
+    except Exception as exc:
+        record(owner, source, 'rejected', error=f'{type(exc).__name__}: {exc}')
+        print(f'Audit rejected worker runtime before dispatch: {type(exc).__name__}: {exc}', file=sys.stderr)
         return 2
     try:
         dispatch(desk, raw, owner, source, argv[2], argv[3:])
     except SystemExit as error:
         record(owner, source, 'finished', exit_code=error.code)
         return error.code
+    except Exception as exc:
+        record(owner, source, 'failed', error=f'{type(exc).__name__}: {exc}')
+        raise
     record(owner, source, 'finished', exit_code=0)
     return 0
 

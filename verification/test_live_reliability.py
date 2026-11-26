@@ -23,8 +23,11 @@ from tests.controller_test_support import controller_lifetime, translation_servi
 
 
 def live_config():
+    cfg_path = Path(os.environ['KARDENWORT_LIVE_CONFIG'])
+    if not cfg_path.is_file():
+        raise FileNotFoundError(f'Live verification config not found: {cfg_path}')
     config = configparser.ConfigParser(interpolation=None)
-    config.read(os.environ['KARDENWORT_LIVE_CONFIG'], encoding='utf-8-sig')
+    config.read(cfg_path, encoding='utf-8-sig')
     return config
 
 
@@ -131,7 +134,7 @@ def _decode_and_verify_nonsilent(media: bytes, content_type: str, artifact_path:
     return decoded.stdout
 
 
-@pytest.mark.parametrize('provider', os.environ.get('KARDENWORT_LIVE_PROVIDERS', 'google').split(','))
+@pytest.mark.parametrize('provider', [p.strip() for p in os.environ.get('KARDENWORT_LIVE_PROVIDERS', 'google').split(',') if p.strip()])
 def test_live_retext_persistence_and_cross_session_isolation(tmp_path, provider):
     assert provider in ('google', 'argos', 'deepl')
     configured = live_config()
