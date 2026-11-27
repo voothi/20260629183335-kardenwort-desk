@@ -272,14 +272,19 @@
     }
     function dispose(state) {
         if (state.run) { clearTimeout(state.run.deadline); state.run.abort(); }
-        state.run = null; state.phase = 'disposed';
+        state.run = null; state.phase = 'disposed'; state.viewInitialized = false;
         state.pendingIntent = null; state.inFlight = false; state.inFlightSignature = null;
     }
     function applyRestoredView(state, run, view) {
         checkRun(state, run);
         state.viewRevision = view.revision;
         var reconcile = state.options.restore(view);
-        if (reconcile) return commitView(state, state.options.capture(), run);
+        if (reconcile) {
+            return commitView(state, state.options.capture(), run).then(function() {
+                state.viewInitialized = true;
+            });
+        }
+        state.viewInitialized = true;
         state.committedSignature = view.revision > 0 ? viewSignature(state.options.capture()) : null;
     }
     function start(state) {
@@ -290,6 +295,7 @@
         }
         var run = new AbortController(); state.run = run;
         state.phase = 'initializing'; state.failure = null; state.tail = Promise.resolve();
+        state.viewInitialized = false;
         state.committedSignature = null; state.pendingIntent = null; state.inFlight = false; state.inFlightSignature = null;
         present(state, 'initializing');
         state.ready = readView(state, run).then(migrate.bind(null, state, run))
@@ -377,7 +383,7 @@
     }
     function viewInactive(state) {
         if (!state.viewEnabled || state.phase === 'draft' || state.phase === 'disposed') return true;
-        return state.phase === 'failed' && state.committedSignature === null;
+        return state.phase === 'failed' && !state.viewInitialized;
     }
     function save(state) {
         if (viewInactive(state)) return Promise.resolve();
@@ -388,14 +394,15 @@
         return enqueueView(state, intent, signature);
     }
     function retryFailedView(state) {
-        if (state.phase !== 'failed' || !state.viewEnabled || state.committedSignature === null) return;
+        if (state.phase !== 'failed' || !state.viewEnabled || !state.viewInitialized) return;
         return save(state);
     }
     function flush(state) {
+        var retryPreviousFailure = state.phase === 'failed' && !state.inFlight;
         return Promise.resolve(state.ready).then(function() {
             return state.tail;
         }).then(function() {
-            return retryFailedView(state);
+            if (retryPreviousFailure) return retryFailedView(state);
         }).then(function() {
             if (state.phase === 'failed') throw state.failure;
         });
@@ -440,7 +447,7 @@
     function create(options) {
         var enabled = options.ui.state_authority === 'sqlite' && options.connected !== false;
         var viewEnabled = enabled && options.ui.client_view_enabled !== false;
-        var state = {options: options, enabled: enabled, viewEnabled: viewEnabled, client: viewEnabled && !options.draft ? clientSlot() : null,
+        var state = {options: options, enabled: enabled, viewEnabled: viewEnabled, viewInitialized: false, client: viewEnabled && !options.draft ? clientSlot() : null,
             revisions: Object.assign({}, options.ui.preference_revisions || {}), values: Object.assign({}, options.ui), viewRevision: 0,
             committedSignature: null, inFlight: false, inFlightSignature: null, pendingIntent: null,
             phase: options.draft ? 'draft' : 'initializing', failure: null, tail: Promise.resolve(), ready: null};

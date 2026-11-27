@@ -449,6 +449,7 @@
                 }
                 if (!track.querySelector('.kw-tab-chip')) {
                     var chipsHtml = [];
+                    var defaultActiveIdx = resolveDefaultActiveCardIndex(cards);
                     for (var cIdx = 0; cIdx < cards.length; cIdx++) {
                         var cardItem = cards[cIdx];
                         var sSeq = cardItem.seq_num !== undefined ? cardItem.seq_num : (cIdx + 1);
@@ -458,7 +459,7 @@
                             sLabel = (sIdx === 0) ? (cards.length > 1 && cards[0].sentence_idx === 0 ? '[1]' : '1') : String(sIdx);
                         }
                         var sTitle = 'Ctrl+' + Math.min(sSeq, 9) + ': Sentence ' + (sIdx > 0 ? sIdx : 'All');
-                        var activeCls = (cIdx === 0) ? ' active' : '';
+                        var activeCls = (cIdx === defaultActiveIdx) ? ' active' : '';
                         chipsHtml.push(
                             '<button type="button" class="kw-tab-chip' + activeCls + '" data-tab-seq="' + sSeq + '" data-sentence-idx="' + sIdx + '" title="' + escapeHtml(sTitle) + '">' +
                             escapeHtml(sLabel) +
@@ -600,10 +601,79 @@
          * @param {Array<VocabularyRow>} words
          * @param {Object<string, boolean>} [selectedMap]
          */
+        function resolveDefaultActiveCardIndex(cardsList) {
+            if (cardsList.length > 1 && cardsList[0].sentence_idx === 0) {
+                for (var idx = 0; idx < cardsList.length; idx++) {
+                    if (cardsList[idx].sentence_idx === 1 || cardsList[idx].seq_num === 2) return idx;
+                }
+                return 1;
+            }
+            return 0;
+        }
+
         function rowIsSelected(rowId, active, selectedMap, selectedIds) {
             var ids = selectedIds || (active && active.selected_ids);
             if (ids) return ids.map(String).indexOf(rowId) !== -1;
             return !!(selectedMap && Object.prototype.hasOwnProperty.call(selectedMap, rowId));
+        }
+
+        function projectCachedRowHtml(rowHtml, isSel) {
+            var holder = document.createElement('tbody');
+            holder.innerHTML = rowHtml;
+            var tr = holder.firstElementChild;
+            if (!tr) return rowHtml;
+            tr.setAttribute('data-selected', isSel ? '1' : '0');
+            tr.setAttribute('data-filter-hidden', isSel ? '0' : '1');
+            tr.classList.toggle('selected', Boolean(isSel));
+            tr.classList.toggle('kw-row-selected', Boolean(isSel));
+            return tr.outerHTML;
+        }
+
+        function syncElementAttribute(target, source, attrName) {
+            var nextVal = source.getAttribute(attrName);
+            if (nextVal !== null) {
+                if (target.getAttribute(attrName) !== nextVal) target.setAttribute(attrName, nextVal);
+            } else if (target.hasAttribute(attrName)) {
+                target.removeAttribute(attrName);
+            }
+        }
+
+        function syncRowAttributes(oldTr, newTr) {
+            var attrs = ['class', 'data-selected', 'data-filter-hidden', 'data-occ', 'data-occurrence-targets', 'data-all-row-ids'];
+            for (var i = 0; i < attrs.length; i++) {
+                syncElementAttribute(oldTr, newTr, attrs[i]);
+            }
+        }
+
+        function reconcileRowCell(oTd, nTd) {
+            if (oTd.classList.contains('editing') || oTd.classList.contains('dirty')) return;
+            var oldSkel = oTd.querySelector('.skeleton-loader, [data-pending="true"]');
+            var newSkel = nTd.querySelector('.skeleton-loader, [data-pending="true"]');
+            if (oldSkel && newSkel) {
+                if (oldSkel.textContent !== newSkel.textContent) {
+                    oldSkel.textContent = newSkel.textContent;
+                    syncElementAttribute(oldSkel, newSkel, 'title');
+                }
+                return;
+            }
+            if (oTd.innerHTML !== nTd.innerHTML) {
+                oTd.innerHTML = nTd.innerHTML;
+                syncElementAttribute(oTd, nTd, 'data-orig-html');
+                syncElementAttribute(oTd, nTd, 'data-orig-title');
+            }
+            syncElementAttribute(oTd, nTd, 'title');
+            syncElementAttribute(oTd, nTd, 'data-provenance');
+        }
+
+        function reconcileRowInPlace(tbody, oldTr, newTr) {
+            if (oldTr.children.length !== newTr.children.length) {
+                if (oldTr.outerHTML !== newTr.outerHTML) tbody.replaceChild(newTr.cloneNode(true), oldTr);
+                return;
+            }
+            syncRowAttributes(oldTr, newTr);
+            for (var tdIdx = 0; tdIdx < oldTr.children.length; tdIdx++) {
+                reconcileRowCell(oldTr.children[tdIdx], newTr.children[tdIdx]);
+            }
         }
 
         function bindCardWordsToTbody(tbody, words, selectedMap, selectedIds) {
@@ -720,20 +790,7 @@
                     }
                 }
                 if (wordObj.row_html) {
-                    var rowHtml = wordObj.row_html;
-                    if (isSel) {
-                        rowHtml = rowHtml.replace('data-selected="0"', 'data-selected="1"');
-                        if (rowHtml.indexOf('kw-row-selected') === -1) {
-                            rowHtml = rowHtml.replace('class="', 'class="selected kw-row-selected ');
-                        }
-                    } else {
-                        rowHtml = rowHtml.replace('data-selected="1"', 'data-selected="0"');
-                        rowHtml = rowHtml.replace('selected kw-row-selected ', '');
-                        rowHtml = rowHtml.replace('selected kw-row-selected', '');
-                        rowHtml = rowHtml.replace('kw-row-selected ', '');
-                        rowHtml = rowHtml.replace('kw-row-selected', '');
-                    }
-                    htmlParts.push(rowHtml);
+                    htmlParts.push(projectCachedRowHtml(wordObj.row_html, isSel));
                 } else {
                     var selAttr = isSel ? '1' : '0';
                     var hlClass = wordObj.highlight_class || 'highlight-orange';
@@ -779,12 +836,7 @@
                     var provTitle = transTooltip ? (' title="' + escapeHtml(transTooltip) + '"') : '';
                     var provAttr = provData + provTitle;
                     var allIdsAttr = (wordObj.all_row_ids && wordObj.all_row_ids.length > 0) ? (' data-all-row-ids="' + escapeHtml(wordObj.all_row_ids.join(',')) + '"') : '';
-                    var activeLang = '';
-                    try {
-                        activeLang = getSessionLang();
-                    } catch (e) {
-                        activeLang = '';
-                    }
+                    var activeLang = getSessionLang();
                     var cardSentenceText = (wordObj.sentence_text || (w.AppState ? w.AppState.sourceText : '') || '');
                     var infTooltip = wordObj.inflected_tooltip || (appRow && appRow.inflected_tooltip) || formatInflectedTooltip(cardSentenceText, wordObj.inflected || '', wordObj.token_order || rIdStr, wordObj.lemma || '');
                     var lemTooltip = formatLemmaTooltip(wordObj.lemma || '', wordObj.gender || '', activeLang, wordObj.pos || '');
@@ -839,47 +891,7 @@
                 tempTbody.innerHTML = htmlParts.join('');
                 if (tempTbody.children.length === existingTrs.length) {
                     for (var rIdx = 0; rIdx < existingTrs.length; rIdx++) {
-                        var oldTr = existingTrs[rIdx];
-                        var newTr = tempTbody.children[rIdx];
-                        var oldSkel = oldTr.querySelector('td.col-translation .skeleton-loader, td[data-col="WordDestination"] .skeleton-loader, .skeleton-loader');
-                        var newSkel = newTr.querySelector('td.col-translation .skeleton-loader, td[data-col="WordDestination"] .skeleton-loader, .skeleton-loader');
-                        if (oldSkel && newSkel) {
-                            if (oldSkel.textContent !== newSkel.textContent) {
-                                oldSkel.textContent = newSkel.textContent;
-                                var nTitle = newSkel.getAttribute('title');
-                                if (nTitle) oldSkel.setAttribute('title', nTitle);
-                            }
-                            var syncAttrs = ['class', 'data-selected', 'data-filter-hidden', 'data-occ', 'data-occurrence-targets', 'data-all-row-ids'];
-                            for (var sa = 0; sa < syncAttrs.length; sa++) {
-                                var attrName = syncAttrs[sa];
-                                var nVal = newTr.getAttribute(attrName);
-                                if (nVal !== null) {
-                                    if (oldTr.getAttribute(attrName) !== nVal) oldTr.setAttribute(attrName, nVal);
-                                } else if (oldTr.hasAttribute(attrName)) {
-                                    oldTr.removeAttribute(attrName);
-                                }
-                            }
-                            var oldTds = oldTr.children;
-                            var newTds = newTr.children;
-                            if (oldTds.length === newTds.length) {
-                                for (var tdIdx = 0; tdIdx < oldTds.length; tdIdx++) {
-                                    var oTd = oldTds[tdIdx];
-                                    var nTd = newTds[tdIdx];
-                                    if (oTd.classList.contains('col-translation') || oTd.getAttribute('data-col') === 'WordDestination') continue;
-                                    if (oTd.classList.contains('editing') || oTd.classList.contains('dirty')) continue;
-                                    if (oTd.querySelector('.skeleton-loader')) continue;
-                                    if (oTd.innerHTML !== nTd.innerHTML) oTd.innerHTML = nTd.innerHTML;
-                                    var nTdTitle = nTd.getAttribute('title');
-                                    if (nTdTitle !== null) {
-                                        if (oTd.getAttribute('title') !== nTdTitle) oTd.setAttribute('title', nTdTitle);
-                                    } else if (oTd.hasAttribute('title')) {
-                                        oTd.removeAttribute('title');
-                                    }
-                                }
-                            }
-                        } else if (oldTr.outerHTML !== newTr.outerHTML) {
-                            tbody.replaceChild(newTr.cloneNode(true), oldTr);
-                        }
+                        reconcileRowInPlace(tbody, existingTrs[rIdx], tempTbody.children[rIdx]);
                     }
                 } else {
                     tbody.innerHTML = htmlParts.join('');
@@ -1151,7 +1163,7 @@
             if (tbody && targetCard.words && targetCard.words.length > 0) {
                 bindCardWordsToTbody(tbody, targetCard.words, selectedRowIdsMap);
             } else if (tbody && targetCard.words && targetCard.words.length === 0) {
-                tbody.innerHTML = '<tr class="kw-empty-table-row"><td colspan="10" class="kw-empty-cell" style="text-align: center; padding: 24px; color: var(--color-fg-muted, #8b949e); font-style: italic;">No vocabulary words in this section</td></tr>';
+                tbody.innerHTML = '<tr class="kw-empty-table-row"><td colspan="8" class="kw-empty-cell">No vocabulary words in this section</td></tr>';
                 if (typeof w.rebindTableRows === 'function') {
                     w.rebindTableRows();
                 }
@@ -1238,12 +1250,7 @@
         function updateTitle(targetCard) {
             if (!metadataReady()) return;
             var w = (window);
-            var lang = '';
-            try {
-                lang = getSessionLang();
-            } catch (e) {
-                lang = 'unknown';
-            }
+            var lang = getSessionLang();
             var tMode = getTextMode();
             var cardTsv = (targetCard && targetCard.tsv_filename) ? targetCard.tsv_filename : '';
             if (!cardTsv) {

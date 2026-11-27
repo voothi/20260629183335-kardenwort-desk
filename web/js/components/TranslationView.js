@@ -106,7 +106,6 @@
          */
         render: function (state) {
             if (!this.container) return;
-            if (translationIsPending(this.container)) return;
             var text = state.translated_text || state.sentence_translation || '';
             if (!text) return;
             var changed = this.project(compatibilityTranslationHtml(text), translationContext(this.container));
@@ -124,8 +123,7 @@
                 var span = target && target.closest ? target.closest('#translation-container span.word') : null;
                 if (span) {
                     var w = (window);
-                    if (w.__deskHandleMouseUp) {
-                        e.preventDefault();
+                    if (w.__selectableTextMode || w.__deskJustFinishedDrag) {
                         return;
                     }
                     var uiCfg = (w.AppState && w.AppState.bootstrap && w.AppState.bootstrap.ui_config) || w.__CONFIG__ || {};

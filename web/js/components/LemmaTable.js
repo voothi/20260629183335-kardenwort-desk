@@ -150,8 +150,17 @@
         return (state && (state.selectedRowIds || state.selected_ids)) || undefined;
     }
 
-    function legacySelectionMap(state) {
-        return (state && state.selectedLemmas) || (window.AppState && window.AppState.selectedLemmas) || {};
+    function legacySelectionRowMap(state, selectedIds) {
+        var map = {};
+        if (state && state.selectedRowIdsMap && typeof state.selectedRowIdsMap === 'object') {
+            Object.keys(state.selectedRowIdsMap).forEach(function(id) {
+                if (state.selectedRowIdsMap[id]) map[String(id)] = true;
+            });
+        }
+        if (Array.isArray(selectedIds)) {
+            selectedIds.forEach(function(id) { map[String(id)] = true; });
+        }
+        return map;
     }
 
     /**
@@ -204,7 +213,8 @@
             if (!this.tbody) return;
             var rows = words || legacyMatrixWords(state);
             if (!rows) return;
-            window.WorkspaceTabs.bindCardWordsToTbody(this.tbody, rows, legacySelectionMap(state), legacySelectionIds(state));
+            var selectedIds = legacySelectionIds(state);
+            window.WorkspaceTabs.bindCardWordsToTbody(this.tbody, rows, legacySelectionRowMap(state, selectedIds), selectedIds);
         },
 
         /**

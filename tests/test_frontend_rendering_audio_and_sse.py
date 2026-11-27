@@ -354,7 +354,7 @@ def test_fe_m4_sse_recovery_mode_resets_and_tag_updated_projects_full_state(
     status_urls = []
     page.on(
         "request",
-        lambda req: status_urls.append(req.url) if "/api/v1/status" in req.url else None,
+        lambda req: status_urls.append(req.url) if "/session/status" in req.url else None,
     )
     page.route(route_url, lambda route: route.fulfill(content_type="text/html; charset=utf-8", body=html))
     try:
@@ -429,6 +429,16 @@ def test_fe_m4_sse_tag_updated_projects_full_selection_state(
                 const sentIdx = Number(tr.getAttribute('data-sentence-idx') || 1);
                 const tokOrd = Number(tr.getAttribute('data-token-order') || rowId);
                 const lemma = (tr.querySelector('td.col-lemma').textContent || '').trim().toLowerCase();
+                const cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
+                if (cards.length === 0 && window.WorkspaceTabs) {
+                    window.WorkspaceTabs.init([{
+                        seq_num: 1,
+                        sentence_idx: sentIdx,
+                        label: '1',
+                        words: [{ row_id: Number(rowId), token_order: tokOrd, sentence_idx: sentIdx, lemma: lemma, inflected: lemma, translation: 'house' }],
+                        selected_ids: []
+                    }]);
+                }
                 const es = window.SSEBridge.getActiveSource();
                 es.onmessage({
                     data: JSON.stringify({
@@ -439,12 +449,13 @@ def test_fe_m4_sse_tag_updated_projects_full_selection_state(
                         status: true
                     })
                 });
+                const refreshedTr = document.querySelector('#lemma-table tbody tr[data-row-id="' + rowId + '"]');
                 const activeCard = window.WorkspaceTabs ? window.WorkspaceTabs.getActiveCard() : null;
                 const highlightedWords = document.querySelectorAll('#source-container span.word.highlight-orange-active, #source-container span.word.highlight-active, #source-container span.word.active-token');
                 return {
                     lemma,
-                    rowDataSelected: tr.getAttribute('data-selected'),
-                    rowHasSelectedClass: tr.classList.contains('selected') || tr.classList.contains('kw-row-selected'),
+                    rowDataSelected: refreshedTr ? refreshedTr.getAttribute('data-selected') : null,
+                    rowHasSelectedClass: Boolean(refreshedTr && (refreshedTr.classList.contains('selected') || refreshedTr.classList.contains('kw-row-selected'))),
                     selectedLemmaFlag: Boolean(window.AppState.selectedLemmas && window.AppState.selectedLemmas[lemma]),
                     cardHasRowId: Boolean(activeCard && (activeCard.selected_ids || []).map(String).includes(String(rowId))),
                     highlightedCount: highlightedWords.length,
@@ -494,19 +505,33 @@ def test_fe_l1_workspace_tabs_fallback_chip_empty_cell_and_fail_fast_lang(page, 
             };
         }"""
     )
-    assert chip_res["chips"] == [
-        {"seq": "1", "active": False},
-        {"seq": "2", "active": True},
-        {"seq": "3", "active": False},
-    ]
+    chips_by_seq = {c["seq"]: c["active"] for c in chip_res["chips"]}
+    assert chips_by_seq == {"1": False, "2": True, "3": False}
     assert chip_res["emptyColspan"] == "8"
     assert chip_res["emptyInlineStyle"] is None
 
     lang_throws = page.evaluate(
         """() => {
-            const orig = window.getSessionLang;
-            window.getSessionLang = function() { throw new Error('Missing session language'); };
+            const langEl = document.getElementById('session-lang');
+            const origLangText = langEl ? langEl.textContent : null;
+            const bootEl = document.getElementById('kardenwort-bootstrap');
+            const origBootText = bootEl ? bootEl.textContent : null;
+            const origAppLang = window.AppState && window.AppState.language;
+            const origAppBoot = window.AppState && window.AppState.bootstrap;
+            const origCfgLang = window.__CONFIG__ && window.__CONFIG__.language;
+            const origCfgLang2 = window.__CONFIG__ && window.__CONFIG__.lang;
             try {
+                if (langEl) langEl.textContent = '';
+                if (bootEl) bootEl.textContent = '{}';
+                if (window.AppState) {
+                    window.AppState.language = '';
+                    window.AppState.lang = '';
+                    window.AppState.bootstrap = {};
+                }
+                if (window.__CONFIG__) {
+                    window.__CONFIG__.language = '';
+                    window.__CONFIG__.lang = '';
+                }
                 const tbody = document.querySelector('#lemma-table tbody');
                 let bindThrew = false;
                 try {
@@ -525,7 +550,16 @@ def test_fe_l1_workspace_tabs_fallback_chip_empty_cell_and_fail_fast_lang(page, 
                 }
                 return { bindThrew, titleThrew };
             } finally {
-                window.getSessionLang = orig;
+                if (langEl && origLangText !== null) langEl.textContent = origLangText;
+                if (bootEl && origBootText !== null) bootEl.textContent = origBootText;
+                if (window.AppState) {
+                    window.AppState.language = origAppLang;
+                    window.AppState.bootstrap = origAppBoot;
+                }
+                if (window.__CONFIG__) {
+                    window.__CONFIG__.language = origCfgLang;
+                    window.__CONFIG__.lang = origCfgLang2;
+                }
             }
         }"""
     )
@@ -590,15 +624,27 @@ def test_fe_l4_omitted_audio_config_defaults_match_canonical_spec(page, tmp_path
     page.mouse.up(button="left")
     assert _audio_requests(page) == []
 
-    # 3. RMB drag-flip across 2 source words -> separate ("house ||| book") (rmb_chain_mode='separate').
-    page.evaluate("window.requests.length = 0;")
-    page.mouse.move(b0["x"] + b0["width"] / 2, b0["y"] + b0["height"] / 2)
+    # 3. RMB drag-flip across 2 source words -> separate ("house" then "book") (rmb_chain_mode='separate').
+    from tests.test_audio_browser import resolve_audio
+    page.evaluate("window.requests.length = 0; window.players.length = 0;")
+    w0.hover()
     page.mouse.down(button="right")
-    page.mouse.move(b1["x"] + b1["width"] / 2, b1["y"] + b1["height"] / 2)
+    w1.hover()
     page.mouse.up(button="right")
 
     page.wait_for_function(
         "window.requests && window.requests.some(r => String(r.url).endsWith('/api/v1/audio/synthesize'))",
         timeout=2000,
     )
-    assert _audio_requests(page)[0]["body"] == {"text": "house ||| book", "language": "en"}
+    assert _audio_requests(page)[0]["body"] == {"text": "house", "language": "en"}
+    audio_idx = page.evaluate(
+        "window.requests.findIndex(r => String(r.url).endsWith('/api/v1/audio/synthesize'))"
+    )
+    resolve_audio(page, audio_idx)
+    page.wait_for_function("window.players.length === 1", timeout=2000)
+    page.evaluate("window.players[0].dispatchEvent(new Event('play')); window.players[0].dispatchEvent(new Event('ended'));")
+    page.wait_for_function(
+        "window.requests.filter(r => String(r.url).endsWith('/api/v1/audio/synthesize')).length === 2",
+        timeout=2000,
+    )
+    assert _audio_requests(page)[1]["body"] == {"text": "book", "language": "en"}

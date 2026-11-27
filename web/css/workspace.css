@@ -22,3 +22,9 @@ html[data-workspace-identity="unknown"] .kw-view-placeholder {
     min-height: 21px;
     line-height: 21px;
 }
+.kw-empty-cell {
+    text-align: center;
+    padding: 24px;
+    color: var(--text-muted);
+    font-style: italic;
+}

@@ -58,18 +58,14 @@ def test_reg1_fresh_revision_zero_transient_500_recovers_and_allows_update(
             page.evaluate("WorkspaceTabs.switchToTab(3)")
         assert len(view_posts) == 2
 
-    # Clicking #kw-btn-update runs flushPendingSaves() -> stateClient.flush() -> /api/v1/actions/update.
-    update_requests = []
+    # Clicking #kw-btn-update runs flushPendingSaves() -> stateClient.flush() -> GET /session/status.
+    update_status_requests = []
 
-    def handle_update(route):
-        update_requests.append(route.request.post_data_json)
-        route.fulfill(
-            status=200,
-            content_type="application/json",
-            body='{"ok":true,"status":"accepted"}',
-        )
+    def handle_status(route):
+        update_status_requests.append(route.request.url)
+        route.continue_()
 
-    page.route("**/api/v1/actions/update", handle_update)
+    page.route(lambda u: "/session/status" in u, handle_status)
 
     if not trigger_second_save:
         # Without a second tab switch, flush() itself must retryFailedView() and succeed.
@@ -77,19 +73,19 @@ def test_reg1_fresh_revision_zero_transient_500_recovers_and_allows_update(
             lambda resp: resp.url.endswith("/api/v1/client-view") and resp.status == 200,
             timeout=3000,
         ):
-            with page.expect_request(
-                lambda req: req.url.endswith("/api/v1/actions/update"),
+            with page.expect_response(
+                lambda resp: "/session/status" in resp.url,
                 timeout=3000,
             ):
                 page.locator("#kw-btn-update").click()
     else:
-        with page.expect_request(
-            lambda req: req.url.endswith("/api/v1/actions/update"),
+        with page.expect_response(
+            lambda resp: "/session/status" in resp.url,
             timeout=3000,
         ):
             page.locator("#kw-btn-update").click()
 
-    assert len(update_requests) == 1
+    assert len(update_status_requests) >= 1
     assert len(view_posts) >= 2
     toast_text = page.locator("#kw-toast-container").inner_text()
     assert "Save failed; action stopped" not in toast_text

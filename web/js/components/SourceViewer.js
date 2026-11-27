@@ -21,8 +21,12 @@
         return !!(container.querySelector('[data-pending="true"], .skeleton-loader') || container.classList.contains('skeleton-loader'));
     }
 
+    function normalizeSourceText(text) {
+        return String(text || '').trim().replace(/\s+/g, ' ');
+    }
+
     function cleanSourceText(node) {
-        return (node.textContent || '').trim().replace(/\s+/g, ' ');
+        return normalizeSourceText(node.textContent || '');
     }
 
     /**
@@ -69,13 +73,12 @@
             var text = state.sourceText;
             if (text === null || text === undefined || !this.container) return;
             if (!sourceProjectionRequested(this.container, sourcePayload(action))) return;
-            var probe = document.createElement('div');
-            probe.innerHTML = text;
+            var rawText = String(text);
             var pending = sourceIsPending(this.container);
-            if (!pending && cleanSourceText(this.container) === cleanSourceText(probe)) return;
+            if (!pending && cleanSourceText(this.container) === normalizeSourceText(rawText)) return;
             this.container.classList.remove('skeleton-loader');
             this.container.removeAttribute('data-pending');
-            this.container.innerHTML = text;
+            this.container.textContent = rawText;
             window.tokenizeSource();
             window.rebindTokenSpans();
             window.buildLcIndex();
@@ -98,8 +101,7 @@
             if (!this.container) return;
             var text = state.source_text || '';
             if (!text && this.container.children.length) return;
-            if (typeof window.escapeHtml !== 'function') throw new Error('Required canonical escapeHtml helper is unavailable');
-            return this.project({sourceText: window.escapeHtml(text)}, {payload: {sourceText: text}});
+            return this.project({sourceText: String(text)}, {payload: {sourceText: String(text)}});
         },
 
         /**

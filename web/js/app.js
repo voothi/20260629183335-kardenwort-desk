@@ -4988,6 +4988,78 @@
             return !lem || !!membershipProjection[lem];
         }
 
+        function matchesTagEventRow(row, data) {
+            var hasSent = data.sentence_idx !== undefined && data.sentence_idx !== null && String(data.sentence_idx) !== '';
+            var hasTok = data.token_order !== undefined && data.token_order !== null && String(data.token_order) !== '';
+            var rowSent = row.getAttribute('data-sentence-idx');
+            if (hasTok && hasSent) {
+                return row.getAttribute('data-token-order') === String(data.token_order) && rowSent === String(data.sentence_idx);
+            }
+            var targetRowId = data.row_id !== undefined && data.row_id !== null ? String(data.row_id) : '';
+            if (!targetRowId) return false;
+            var groupIds = getRowGroupIds(row);
+            var idMatch = String(row.getAttribute('data-row-id')) === targetRowId || groupIds.indexOf(targetRowId) !== -1;
+            return idMatch && (!hasSent || !rowSent || rowSent === String(data.sentence_idx));
+        }
+
+        function matchesTagEventWord(word, card, data) {
+            var hasSent = data.sentence_idx !== undefined && data.sentence_idx !== null && String(data.sentence_idx) !== '';
+            var hasTok = data.token_order !== undefined && data.token_order !== null && String(data.token_order) !== '';
+            var wordSent = word.sentence_idx !== undefined ? word.sentence_idx : card.sentence_idx;
+            if (hasTok && hasSent) {
+                return String(word.token_order) === String(data.token_order) && String(wordSent) === String(data.sentence_idx);
+            }
+            var targetRowId = data.row_id !== undefined && data.row_id !== null ? String(data.row_id) : '';
+            if (!targetRowId) return false;
+            var allIds = (word.all_row_ids || []).map(String);
+            return String(word.row_id) === targetRowId || allIds.indexOf(targetRowId) !== -1;
+        }
+
+        function applyTagUpdatedEvent(data) {
+            if (!data) return;
+            if (!window.AppState) window.AppState = {rows: {}, selectedLemmas: {}, activeTokenSelections: []};
+            if (!window.AppState.selectedLemmas) window.AppState.selectedLemmas = {};
+            var isSelected = Boolean(data.status);
+            var affectedLemmas = {};
+            var rows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
+                ? tableRows
+                : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
+            for (var i = 0; i < rows.length; i++) {
+                var row = rows[i];
+                if (!matchesTagEventRow(row, data)) continue;
+                var lem = getRowLemma(row);
+                if (lem) affectedLemmas[lem] = true;
+                var groupIds = getRowGroupIds(row);
+                for (var g = 0; g < groupIds.length; g++) {
+                    if (isSelected) selectedRowIdsMap[groupIds[g]] = true;
+                    else delete selectedRowIdsMap[groupIds[g]];
+                    initialHighlights[groupIds[g]] = isSelected;
+                }
+                var cb = row.querySelector('.kw-tag-checkbox');
+                if (cb && cb.checked !== isSelected) cb.checked = isSelected;
+            }
+            var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
+            cards.forEach(function(card) {
+                (card.words || []).forEach(function(word) {
+                    if (!matchesTagEventWord(word, card, data)) return;
+                    word.selected = isSelected ? '1' : '0';
+                    var wLem = String(word.lemma || '').trim().toLowerCase();
+                    if (wLem) affectedLemmas[wLem] = true;
+                });
+            });
+            Object.keys(affectedLemmas).forEach(function(lem) {
+                if (isSelected) window.AppState.selectedLemmas[lem] = true;
+                else delete window.AppState.selectedLemmas[lem];
+            });
+            if (isSelected) hasInteractiveFocus = true;
+            syncSelectionsToCardsAndState();
+            updateRowStyles();
+            updateBidirectionalHighlights();
+            if (typeof refreshBookmarkClasses === 'function') refreshBookmarkClasses();
+            updateToolbarState();
+        }
+        window.applyTagUpdatedEvent = applyTagUpdatedEvent;
+
         window.applySharedSelection = function(membership, options) {
             if (!membership) return;
             var isInitialSync = Boolean(options && options.fromInitialSync);
@@ -6159,11 +6231,11 @@
 
         var audioLmbPlay = Boolean(window.__CONFIG__ && window.__CONFIG__.audio_lmb_play);
         var audioLmbSource = ((window.__CONFIG__ && window.__CONFIG__.audio_lmb_source) || "lemma");
-        var audioLmbChainMode = ((window.__CONFIG__ && window.__CONFIG__.audio_lmb_chain_mode) || "auto");
-        var audioSourceRangeMode = ((window.__CONFIG__ && window.__CONFIG__.audio_source_range_mode) || "word");
-        var audioTableRangeMode = ((window.__CONFIG__ && window.__CONFIG__.audio_table_range_mode) || "cell");
+        var audioLmbChainMode = ((window.__CONFIG__ && window.__CONFIG__.audio_lmb_chain_mode) || "joined");
+        var audioSourceRangeMode = ((window.__CONFIG__ && window.__CONFIG__.audio_source_range_mode) || "all");
+        var audioTableRangeMode = ((window.__CONFIG__ && window.__CONFIG__.audio_table_range_mode) || "none");
         var audioRmbPlay = Boolean(window.__CONFIG__ && window.__CONFIG__.audio_rmb_play);
-        var audioRmbChainMode = ((window.__CONFIG__ && window.__CONFIG__.audio_rmb_chain_mode) || "auto");
+        var audioRmbChainMode = ((window.__CONFIG__ && window.__CONFIG__.audio_rmb_chain_mode) || "separate");
         var audioRmbSource = ((window.__CONFIG__ && window.__CONFIG__.audio_rmb_source) || "word_translation");
         var audioPlaybackEngine = ((window.__CONFIG__ && window.__CONFIG__.audio_playback_engine) || "anki_tts_cli");
         var audioAnkiTtsCli = ((window.__CONFIG__ && window.__CONFIG__.audio_anki_tts_cli) || "");
@@ -7512,8 +7584,10 @@
             if (isDragSelecting || isTokenDragSelecting || isRmbDragFlipping) {
                 if (dragOccurred) {
                     justFinishedDrag = true;
+                    window.__deskJustFinishedDrag = true;
                     setTimeout(function() {
                         justFinishedDrag = false;
+                        window.__deskJustFinishedDrag = false;
                     }, 50);
                 }
 
@@ -7965,6 +8039,7 @@
         addEvent(document, 'click', function(e) {
             if (justFinishedDrag) {
                 justFinishedDrag = false;
+                window.__deskJustFinishedDrag = false;
                 return;
             }
         });
@@ -10384,6 +10459,9 @@
                 updateSyncFeedback('failed', error.message);
                 window.showToast('Membership synchronization incomplete: ' + error.message, 'warning');
                 throw error;
+            }
+            if (recovery.context && recovery.context.refreshStatus && window.SSEBridge && typeof window.SSEBridge.markCommittedRecoveryComplete === 'function') {
+                window.SSEBridge.markCommittedRecoveryComplete(recovery.context.connectionId);
             }
             updateSyncFeedback('synced', 'Membership synchronized');
         }

@@ -87,7 +87,28 @@
         }
     }
 
-    function authenticatedSource(url, token) {
+    function readLiveGlobalToken() {
+        var resolved = (window.getApiToken ? window.getApiToken() : window.API_TOKEN) || '';
+        return String(resolved);
+    }
+
+    function buildTokenResolver(explicitToken) {
+        var initialLive = readLiveGlobalToken();
+        var pinned = (explicitToken !== undefined && explicitToken !== null) ? String(explicitToken) : null;
+        return function resolveAttemptToken() {
+            var live = readLiveGlobalToken();
+            if (pinned !== null) {
+                if (live && live !== initialLive) return live;
+                return pinned;
+            }
+            return live;
+        };
+    }
+
+    function authenticatedSource(url, tokenOrResolver) {
+        var resolveToken = typeof tokenOrResolver === 'function'
+            ? tokenOrResolver
+            : buildTokenResolver(tokenOrResolver);
         var source = {readyState: 0, onopen: null, onerror: null, onmessage: null, __isAuthenticatedSource: true};
         var activeAttempt = null, timer = null, closed = false, terminalStopped = false;
         var delay = 1000, attemptId = 0, consecutiveHandlerFailures = 0;
@@ -214,7 +235,9 @@
                 return;
             }
             myAttempt.controller = new AbortController();
-            var options = {headers: {'Accept': 'text/event-stream', 'X-API-Token': token}, cache: 'no-store'};
+            var attemptToken = resolveToken();
+            if (activeEventSource === source) activeToken = attemptToken;
+            var options = {headers: {'Accept': 'text/event-stream', 'X-API-Token': attemptToken}, cache: 'no-store'};
             options.signal = myAttempt.controller.signal;
             Promise.resolve().then(function() { return fetch(url, options); }).then(function(response) {
                 if (closed || myAttempt.disposed || myAttempt.id !== attemptId) {
@@ -260,13 +283,12 @@
 
     function resolveEffectiveToken(token) {
         if (token !== undefined && token !== null) return String(token);
-        var resolved = (window.getApiToken ? window.getApiToken() : window.API_TOKEN) || '';
-        return String(resolved);
+        return readLiveGlobalToken();
     }
 
     function createSource(url, token) {
         var effectiveToken = resolveEffectiveToken(token);
-        return effectiveToken ? authenticatedSource(url, effectiveToken) : new EventSource(url);
+        return effectiveToken ? authenticatedSource(url, buildTokenResolver(token)) : new EventSource(url);
     }
 
     function clearReconnectTimer() {
@@ -439,7 +461,7 @@
 
         try {
             var sseUrl = (normalizedBase ? normalizedBase : '') + '/api/v1/events?session=' + encodeURIComponent(sessionZid);
-            var es = createSource(sseUrl, effectiveToken);
+            var es = createSource(sseUrl, token);
 
             activeConnectionId = ++connectionCounter;
             activeEventSource = es;
@@ -553,6 +575,10 @@
                 }
 
                 if (data.type === 'tag_updated') {
+                    if (typeof w.applyTagUpdatedEvent === 'function') {
+                        w.applyTagUpdatedEvent(data);
+                        return;
+                    }
                     var checkboxes = document.querySelectorAll('.kw-tag-checkbox');
                     var cb = null;
                     var hasSent = data.sentence_idx !== undefined && data.sentence_idx !== null && String(data.sentence_idx) !== '';
@@ -706,7 +732,12 @@
         hasReconnectTimer: function () {
             return reconnectTimer !== null || Boolean(activeEventSource && activeEventSource.hasPendingReconnect && activeEventSource.hasPendingReconnect());
         },
-        needsCommittedRecovery: function () { return activeEventSource && activeEventSource.recoveryMode === 'committed'; },
+        needsCommittedRecovery: function () { return Boolean(activeEventSource && activeEventSource.recoveryMode === 'committed'); },
+        markCommittedRecoveryComplete: function (connectionId) {
+            if (!activeEventSource) return;
+            if (connectionId !== undefined && connectionId !== null && connectionId !== activeConnectionId) return;
+            activeEventSource.recoveryMode = 'membership';
+        },
         getServerUrl: function () { return activeServerUrl; },
         _onPageHide: handlePageHide,
         _onPageShow: handlePageShow
