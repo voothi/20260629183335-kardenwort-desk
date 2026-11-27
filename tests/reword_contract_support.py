@@ -121,7 +121,7 @@ class RewordWorld:
 
     def targets(self, shape):
         if shape == 'visual':
-            return [{'visual_idx': self.visual('Haus'), 'sentence_idx': 99}]
+            return [{'visual_idx': self.visual('Haus'), 'sentence_idx': 1}]
         if shape == 'complete':
             return [dict(sentence_idx=1, token_order=0)]
         if shape == 'legacy':

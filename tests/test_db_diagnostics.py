@@ -207,7 +207,9 @@ def test_cli_diagnostics_dispatch(monkeypatch, capsys, tmp_path):
         kardenwort_desk.main()
     assert exc.value.code == 0
 
-    # 3. Test --db-query
+    # 3. Test --db-query against an existing database (read-only query must not create missing DB files)
+    _, resolved_paths, _, _ = kardenwort_desk.load_config()
+    KardenwortDB(resolved_paths=resolved_paths).run_migrations()
     test_args = ["kardenwort_desk.py", "--db-query", "SELECT 42 as answer;"]
     monkeypatch.setattr(sys, "argv", test_args)
 
