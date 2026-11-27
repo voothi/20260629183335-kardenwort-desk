@@ -153,18 +153,17 @@ def test_translate_text_impl_offline_fallback_does_not_jump_to_argos_when_online
         desk.clear_provider_cooldowns()
 
 
-def test_resolve_export_selection_explicit_empty_token_orders_and_contradictions():
+def test_resolve_export_selection_explicit_empty_token_orders_and_precedence():
     headers = ["SentenceSourceIndex", "TokenOrder", "WordSource"]
-    rows = [["1", "0", "Haus"], ["1", "1", "Baum"]]
+    rows = [["1", "0", "Haus"], ["2", "0", "Baum"]]
     assert reword.resolve_export_selection(rows, headers, token_orders=[]) == ()
     with pytest.raises(reword.InvalidRewordTarget):
         reword.resolve_export_selection(rows, headers, targets=[], selected_rows=[0], allow_unmapped_indices=True)
-    with pytest.raises(reword.InvalidRewordTarget):
-        reword.resolve_export_selection(
-            rows, headers,
-            targets=[{"sentence_idx": 1, "token_order": 0}],
-            token_orders=[1],
-        )
+    assert reword.resolve_export_selection(
+        rows, headers,
+        targets=[{"sentence_idx": 2, "token_order": 0}],
+        token_orders=[0],
+    ) == (1,)
 
 
 def test_update_sentence_translation_fail_fast_and_direct_word_failure_filtering(tmp_path):

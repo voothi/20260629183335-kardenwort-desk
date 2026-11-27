@@ -454,16 +454,13 @@ def export_token_indices(keys, token_orders):
     orders = coordinate_list(token_orders, 'Token orders')
     if not orders:
         return ()
-    return token_indices(keys, orders, None)
+    return token_indices(keys, token_orders, None)
 
 
-def _export_secondary_agreement(keys, requested, selected_rows, token_orders, rendered_manifest, sentence_field):
-    if token_orders is not None:
-        requested = agree(requested, export_token_indices(keys, token_orders))
-    if selected_rows is not None and rendered_manifest is not None:
-        manifest_sel = export_manifest_indices(keys, selected_rows, rendered_manifest, sentence_field, False)
-        requested = agree(requested, manifest_sel)
-    return requested
+def _empty_explicit_export(selected_rows, token_orders):
+    if selected_rows or token_orders:
+        raise InvalidRewordTarget('Contradictory export selectors')
+    return ()
 
 
 def resolve_export_selection(rows, headers, targets=None, selected_rows=None, token_orders=None,
@@ -471,24 +468,24 @@ def resolve_export_selection(rows, headers, targets=None, selected_rows=None, to
                              sentence_field='SentenceSourceIndex', allow_unmapped_indices=False):
     """Resolve explicit export selectors to immutable DB row indices, or None for implicit mode.
 
-    An explicit empty list (e.g. ``selected_rows=[]`` or ``token_orders=[]``) resolves to ``()``
-    rather than ``None`` so callers never silently fall back to persisted ``DeskSelected`` rows
-    when explicitly passing zero selections. Pass ``None`` for implicit persisted selection mode.
+    Authoritative occurrence or visual targets take precedence over legacy visual row and
+    sentence-less token_order fields sent alongside them. An explicit empty list (e.g.
+    ``selected_rows=[]`` or ``token_orders=[]``) resolves to ``()`` rather than ``None`` so
+    callers never silently fall back to persisted ``DeskSelected`` rows when explicitly passing
+    zero selections. Pass ``None`` for implicit persisted selection mode.
     """
     keys = row_keys(rows, headers, sentence_field)
     requested = export_explicit_targets(keys, targets, visual_indices, visual_manifest)
     if requested is not None:
-        return _export_secondary_agreement(
-            keys, requested, selected_rows, token_orders, rendered_manifest, sentence_field)
+        return requested
     if targets is not None or visual_indices is not None:
-        requested = ()
+        return _empty_explicit_export(selected_rows, token_orders)
     if selected_rows is not None:
-        manifest_sel = export_manifest_indices(
+        return export_manifest_indices(
             keys, selected_rows, rendered_manifest, sentence_field, allow_unmapped_indices)
-        requested = agree(requested, manifest_sel)
     if token_orders is not None:
-        requested = agree(requested, export_token_indices(keys, token_orders))
-    return requested
+        return export_token_indices(keys, token_orders)
+    return None
 
 
 def _is_word_char(ch):

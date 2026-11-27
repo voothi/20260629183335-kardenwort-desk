@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import sys
+import threading
 import time
 from unittest.mock import patch
 
@@ -42,19 +43,23 @@ def test_anki_tts_cli_decode_gtts_line_non_greedy():
 
 def test_anki_tts_cli_stateless_gtts_enforces_hard_timeout(tmp_path):
     mod = _load_cli_module()
+    release = threading.Event()
 
     class HangingGtts:
         def __init__(self, *args, **kwargs):
             pass
 
         def write_to_fp(self, fp):
-            time.sleep(2.0)
+            release.wait(2.0)
 
     out_file = tmp_path / "out.mp3"
     t0 = time.monotonic()
-    with patch.object(mod, "gTTS", HangingGtts):
-        with pytest.raises(TimeoutError, match="gTTS timed out"):
-            mod.stateless_gtts("Haus", "de", {"gtts_enabled": True, "gtts_timeout_sec": 0.2}, str(out_file))
+    try:
+        with patch.object(mod, "gTTS", HangingGtts):
+            with pytest.raises(TimeoutError, match="gTTS timed out"):
+                mod.stateless_gtts("Haus", "de", {"gtts_enabled": True, "gtts_timeout_sec": 0.2}, str(out_file))
+    finally:
+        release.set()
     elapsed = time.monotonic() - t0
     assert elapsed < 1.5
     assert not out_file.exists()
