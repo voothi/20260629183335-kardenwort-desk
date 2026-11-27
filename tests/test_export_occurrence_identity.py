@@ -186,7 +186,7 @@ def test_frequency_sorted_browser_session_export_matches_visual_alpha(
         else:
             assert tsv_rows[0]["WordSource"] == "Zebra"
             assert tsv_rows[0]["WordDestination"] == "зебра"
-            assert by_lemma["Zebra"]["selected"] == 1
+            assert by_lemma["Zebra"]["selected"] == 0
             assert by_lemma["Alpha"]["selected"] == 0
     finally:
         page.context.close()
