@@ -198,36 +198,28 @@ def sanitize_extra_fields(data: Any) -> Dict[str, Any]:
         return {}
 
     merged: Dict[str, Any] = {}
-    curr = dict(data)
+    queue: List[Dict[str, Any]] = [dict(data)]
 
-    while True:
-        nested_val = None
+    while queue:
+        curr = queue.pop(0)
         for k, v in list(curr.items()):
             k_norm = k.strip().lower().replace("_", "")
             if k_norm == "extrafields":
-                nested_val = v
+                parsed_nested = None
+                if isinstance(v, str):
+                    v_clean = v.strip()
+                    if v_clean:
+                        try:
+                            parsed_nested = json.loads(v_clean)
+                        except Exception:
+                            parsed_nested = None
+                elif isinstance(v, dict):
+                    parsed_nested = dict(v)
+                if isinstance(parsed_nested, dict):
+                    queue.append(parsed_nested)
             else:
-                if k not in merged or (v and not merged[k]):
+                if k not in merged or (merged[k] is None and v is not None):
                     merged[k] = v
-
-        if nested_val is None:
-            break
-
-        if isinstance(nested_val, str):
-            nested_val = nested_val.strip()
-            if not nested_val:
-                break
-            try:
-                curr = json.loads(nested_val)
-            except Exception:
-                break
-        elif isinstance(nested_val, dict):
-            curr = dict(nested_val)
-        else:
-            break
-
-        if not isinstance(curr, dict):
-            break
 
     # Clean occurrence_data if present
     if "occurrence_data" in merged and isinstance(merged["occurrence_data"], dict):
@@ -533,6 +525,7 @@ class KardenwortDB:
         exists = self.db_path.exists()
         size_bytes = self.db_path.stat().st_size if exists else 0
         wal_size_bytes = _wal_size(self.wal_path)
+        shm_size_bytes = _wal_size(self.shm_path)
 
         status: Dict[str, Any] = {
             "ok": True,
@@ -540,6 +533,8 @@ class KardenwortDB:
             "exists": exists,
             "size_bytes": size_bytes,
             "wal_size_bytes": wal_size_bytes,
+            "shm_size_bytes": shm_size_bytes,
+            "schema_version": 0,
             "migrations_applied": [],
             "tables": {},
         }
@@ -564,6 +559,7 @@ class KardenwortDB:
                     col_name = "filename" if "filename" in cols else "version"
                     cursor.execute(f"SELECT {col_name} FROM \"{t_name}\" ORDER BY {col_name} ASC;")
                     status["migrations_applied"] = [row[0] for row in cursor.fetchall()]
+                    status["schema_version"] = len(status["migrations_applied"])
 
                 # Count rows per user table
                 cursor.execute(
@@ -687,14 +683,19 @@ class KardenwortDB:
             if action in allowed_actions:
                 return sqlite3.SQLITE_OK
             if action == sqlite3.SQLITE_PRAGMA:
-                if arg1 and arg1.lower() in ("query_only", "table_info", "table_list", "database_list"):
+                pragma_name = (arg1 or "").lower()
+                if pragma_name == "query_only":
+                    return sqlite3.SQLITE_OK if arg2 is None else sqlite3.SQLITE_DENY
+                if pragma_name in ("table_info", "table_list", "database_list"):
                     return sqlite3.SQLITE_OK
             return sqlite3.SQLITE_DENY
 
         start_t = time.perf_counter()
+        conn = None
         try:
             conn = sqlite3.connect(
-                str(self.db_path),
+                self.db_path.as_uri() + "?mode=ro",
+                uri=True,
                 timeout=self.busy_timeout_ms / 1000.0,
                 check_same_thread=False,
             )
@@ -708,7 +709,6 @@ class KardenwortDB:
             rows = cursor.fetchall()
             result = [dict(r) for r in rows]
             cursor.close()
-            conn.close()
 
             duration_ms = (time.perf_counter() - start_t) * 1000.0
             self.logger.log(
@@ -738,12 +738,17 @@ class KardenwortDB:
             duration_ms = (time.perf_counter() - start_t) * 1000.0
             self.logger.log("ERROR", f"Unexpected error during query: {e}", zid=zid, duration_ms=duration_ms)
             raise
+        finally:
+            if conn is not None:
+                conn.close()
 
     def reset(self, force: bool = False, zid: Optional[str] = None) -> Dict[str, Any]:
         """
         Safely removes database and associated WAL/SHM sidecars for clean test teardown.
         Requires force=True.
         """
+        if self.read_only:
+            raise QuerySecurityError("MUTATION_NOT_ALLOWED", "Cannot reset a read-only database instance.")
         if not force:
             raise QuerySecurityError("INVALID_STATE", "Database reset requires --force flag.")
 
@@ -854,6 +859,8 @@ class KardenwortDB:
 
         allowed_cols = {"slug", "source_language", "target_language", "text_mode", "source_raw_text", "updated_at", "deleted_at"}
         valid_updates = {k: v for k, v in updates.items() if k in allowed_cols}
+        if not valid_updates:
+            return False
         if "updated_at" not in valid_updates:
             valid_updates["updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -971,23 +978,20 @@ class KardenwortDB:
         """
         filter_clause = "WHERE s.deleted_at IS NULL" if not include_deleted else ""
         sql = f"""
-            SELECT 
-                s.zid, 
-                s.slug, 
-                s.source_language, 
-                s.target_language, 
-                s.text_mode, 
+            SELECT
+                s.zid,
+                s.slug,
+                s.source_language,
+                s.target_language,
+                s.text_mode,
                 s.source_raw_text,
-                s.created_at, 
+                s.created_at,
                 s.updated_at,
                 s.deleted_at,
-                COUNT(w.id) as token_count,
-                COUNT(DISTINCT sn.sentence_index) as sentence_count
+                (SELECT COUNT(*) FROM words w WHERE w.session_zid = s.zid) as token_count,
+                (SELECT COUNT(*) FROM sentences sn WHERE sn.session_zid = s.zid) as sentence_count
             FROM sessions s
-            LEFT JOIN sentences sn ON sn.session_zid = s.zid
-            LEFT JOIN words w ON w.session_zid = s.zid
             {filter_clause}
-            GROUP BY s.zid
             ORDER BY s.created_at DESC
         """
         params: List[Any] = []
@@ -1113,12 +1117,12 @@ class KardenwortDB:
                 sel_map: Dict[str, int] = {}
                 try:
                     sel_sql = f"""
-                        SELECT session_zid, COUNT(DISTINCT token_key) AS selected_count FROM (
-                            SELECT session_zid, token_order AS token_key
+                        SELECT session_zid, COUNT(*) AS selected_count FROM (
+                            SELECT session_zid, sentence_index, token_order
                             FROM words
                             WHERE session_zid IN ({placeholders}) AND selected = 1
                             UNION
-                            SELECT session_zid, token_order AS token_key
+                            SELECT session_zid, sentence_index, token_order
                             FROM overview_selections
                             WHERE session_zid IN ({placeholders}) AND selected = 1
                         )
@@ -1129,17 +1133,34 @@ class KardenwortDB:
                     sel_map = {r["session_zid"]: r["selected_count"] for r in sel_rows}
                 except Exception:
                     try:
-                        fallback_sel = f"""
-                            SELECT session_zid, COUNT(*) AS selected_count
-                            FROM words
-                            WHERE session_zid IN ({placeholders}) AND selected = 1
+                        legacy_sel_sql = f"""
+                            SELECT session_zid, COUNT(*) AS selected_count FROM (
+                                SELECT session_zid, sentence_index, token_order
+                                FROM words
+                                WHERE session_zid IN ({placeholders}) AND selected = 1
+                                UNION
+                                SELECT session_zid, 1 AS sentence_index, token_order
+                                FROM overview_selections
+                                WHERE session_zid IN ({placeholders}) AND selected = 1
+                            )
                             GROUP BY session_zid;
                         """
-                        cursor.execute(fallback_sel, session_zids)
+                        cursor.execute(legacy_sel_sql, session_zids + session_zids)
                         sel_rows = cursor.fetchall()
                         sel_map = {r["session_zid"]: r["selected_count"] for r in sel_rows}
                     except Exception:
-                        sel_map = {}
+                        try:
+                            fallback_sel = f"""
+                                SELECT session_zid, COUNT(*) AS selected_count
+                                FROM words
+                                WHERE session_zid IN ({placeholders}) AND selected = 1
+                                GROUP BY session_zid;
+                            """
+                            cursor.execute(fallback_sel, session_zids)
+                            sel_rows = cursor.fetchall()
+                            sel_map = {r["session_zid"]: r["selected_count"] for r in sel_rows}
+                        except Exception:
+                            sel_map = {}
 
                 for s in sessions:
                     s["projects"] = proj_map.get(s["zid"], [])
@@ -1406,7 +1427,7 @@ class KardenwortDB:
             conn.execute("VACUUM;")
             conn.execute("PRAGMA optimize;")
             dur_ms = (time.perf_counter() - t0) * 1000.0
-            get_db_logger().log("INFO", "Database VACUUM and PRAGMA optimize completed", zid=zid, duration_ms=dur_ms)
+            self.logger.log("INFO", "Database VACUUM and PRAGMA optimize completed", zid=zid, duration_ms=dur_ms)
             return True
         finally:
             conn.close()
@@ -1438,7 +1459,7 @@ class KardenwortDB:
 
         dur_ms = (time.perf_counter() - t0) * 1000.0
         size_bytes = target_path.stat().st_size if target_path.exists() else 0
-        get_db_logger().log(
+        self.logger.log(
             "INFO",
             f"Physical backup snapshot created at {target_path.name}",
             zid=zid,
@@ -1463,6 +1484,22 @@ class KardenwortDB:
         """
         db_stat = self.get_status(zid=zid)
         integrity = self.check_integrity(zid=zid)
+
+        if not db_stat.get("exists", False):
+            return {
+                "size_bytes": 0,
+                "wal_size_bytes": db_stat.get("wal_size_bytes", 0),
+                "shm_size_bytes": db_stat.get("shm_size_bytes", 0),
+                "schema_version": 0,
+                "integrity_ok": integrity.get("ok", True),
+                "active_sessions": 0,
+                "deleted_sessions": 0,
+                "total_projects": 0,
+                "root_projects": 0,
+                "deleted_projects": 0,
+                "total_sentences": 0,
+                "total_words": 0,
+            }
 
         with self.get_connection(read_only=True, zid=zid) as conn:
             cursor = conn.cursor()
@@ -1607,6 +1644,8 @@ class KardenwortDB:
 
         allowed_cols = {"parent_id", "title", "slug", "description", "order_index", "updated_at", "deleted_at"}
         valid_updates = {k: v for k, v in updates.items() if k in allowed_cols}
+        if not valid_updates:
+            return False
         if "updated_at" not in valid_updates:
             valid_updates["updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -1780,47 +1819,76 @@ class KardenwortDB:
                 SELECT ps.project_id, ps.session_zid, ps.order_index, ps.added_at,
                        s.slug, s.source_language, s.target_language, s.text_mode, s.created_at,
                        (
-                           SELECT COUNT(DISTINCT token_key)
+                           SELECT COUNT(*)
                            FROM (
-                               SELECT token_order AS token_key FROM words WHERE session_zid = ps.session_zid AND selected = 1
+                               SELECT sentence_index, token_order FROM words WHERE session_zid = ps.session_zid AND selected = 1
                                UNION
-                               SELECT token_order AS token_key FROM overview_selections WHERE session_zid = ps.session_zid AND selected = 1
+                               SELECT sentence_index, token_order FROM overview_selections WHERE session_zid = ps.session_zid AND selected = 1
                            ) w
                        ) AS selected_count
                 FROM project_sessions ps
                 JOIN sessions s ON ps.session_zid = s.zid {sess_del_join}
                 ORDER BY ps.order_index ASC, ps.added_at ASC;
             """
-            cursor.execute(ps_sql)
-            all_links = [dict(r) for r in cursor.fetchall()]
+            try:
+                cursor.execute(ps_sql)
+                all_links = [dict(r) for r in cursor.fetchall()]
+            except sqlite3.OperationalError:
+                legacy_ps_sql = f"""
+                    SELECT ps.project_id, ps.session_zid, ps.order_index, ps.added_at,
+                           s.slug, s.source_language, s.target_language, s.text_mode, s.created_at,
+                           (
+                               SELECT COUNT(*)
+                               FROM (
+                                   SELECT sentence_index, token_order FROM words WHERE session_zid = ps.session_zid AND selected = 1
+                                   UNION
+                                   SELECT 1 AS sentence_index, token_order FROM overview_selections WHERE session_zid = ps.session_zid AND selected = 1
+                               ) w
+                           ) AS selected_count
+                    FROM project_sessions ps
+                    JOIN sessions s ON ps.session_zid = s.zid {sess_del_join}
+                    ORDER BY ps.order_index ASC, ps.added_at ASC;
+                """
+                cursor.execute(legacy_ps_sql)
+                all_links = [dict(r) for r in cursor.fetchall()]
 
         project_sessions_map: Dict[int, List[Dict[str, Any]]] = {}
         for link in all_links:
             p_id = link["project_id"]
             project_sessions_map.setdefault(p_id, []).append(link)
 
-        node_map: Dict[int, Dict[str, Any]] = {}
+        raw_map: Dict[int, Dict[str, Any]] = {p["id"]: dict(p) for p in all_projects}
+        children_by_parent: Dict[int, List[int]] = {}
+        root_ids: List[int] = []
         for p in all_projects:
-            node = dict(p)
-            node["children"] = []
-            node["sessions"] = project_sessions_map.get(p["id"], [])
-            node_map[p["id"]] = node
-
-        roots: List[Dict[str, Any]] = []
-        for p in all_projects:
-            node = node_map[p["id"]]
-            p_id = p.get("parent_id")
-            if p_id and p_id in node_map:
-                node_map[p_id]["children"].append(node)
+            pid = p["id"]
+            parent_id = p.get("parent_id")
+            if parent_id and parent_id in raw_map and parent_id != pid:
+                children_by_parent.setdefault(parent_id, []).append(pid)
             else:
-                roots.append(node)
+                root_ids.append(pid)
+
+        effective_max_depth = max(0, int(max_depth)) if max_depth is not None else 100
+
+        def _build_node(pid: int, depth: int, ancestors: set) -> Dict[str, Any]:
+            node = dict(raw_map[pid])
+            node["sessions"] = list(project_sessions_map.get(pid, []))
+            node["children"] = []
+            if depth >= effective_max_depth:
+                return node
+            next_ancestors = ancestors | {pid}
+            for child_id in children_by_parent.get(pid, []):
+                if child_id in next_ancestors:
+                    continue
+                node["children"].append(_build_node(child_id, depth + 1, next_ancestors))
+            return node
 
         if project_id is not None:
-            if project_id in node_map:
-                return [node_map[project_id]]
+            if project_id in raw_map:
+                return [_build_node(project_id, 0, set())]
             return []
 
-        return roots
+        return [_build_node(rid, 0, set()) for rid in root_ids]
 
     # ---------------------------------------------------------------------------
     # Session Linking & Reordering Methods
@@ -2401,6 +2469,7 @@ class KardenwortDB:
         limit: int = 10,
         zid: Optional[str] = None,
         conn: Optional[Any] = None,
+        target_language: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Fast indexed search for wordfill candidates querying words and sessions.
@@ -2409,18 +2478,29 @@ class KardenwortDB:
         if not word or not word.strip():
             return []
 
+        from kardenwort_translation_validation import is_stored_translation_failure, is_unfinished_translation
+
         clean_word = word.strip()
-        sql = """
+        valid_dest_sql = (
+            "w.word_destination IS NOT NULL AND trim(w.word_destination) != '' "
+            "AND w.word_destination NOT LIKE '%skeleton-loader%' "
+            "AND trim(w.word_destination) != '[FAILED]' "
+            "AND trim(w.word_destination) NOT LIKE '[Error%' "
+            "AND trim(w.word_destination) NOT LIKE '[Translation Error%' "
+            "AND lower(trim(w.word_destination)) != 'http 429 too many requests' "
+            "AND lower(trim(w.word_destination)) NOT LIKE 'error calling %http 429%'"
+        )
+        sql = f"""
             SELECT 
                 w.lemma, w.quotation, w.inflected_form, w.word_destination,
                 w.pos, w.gender, w.morphology, w.ipa, w.extra_fields,
-                s.created_at, s.zid as session_zid, s.source_language
+                s.created_at, s.zid as session_zid, s.source_language, s.target_language
             FROM words w
             JOIN sessions s ON w.session_zid = s.zid
             WHERE (w.lemma = ? OR w.quotation = ? OR w.inflected_form = ?)
               AND s.deleted_at IS NULL
               AND (
-                  (w.word_destination IS NOT NULL AND trim(w.word_destination) != '' AND w.word_destination NOT LIKE '%skeleton-loader%')
+                  ({valid_dest_sql})
                   OR (w.ipa IS NOT NULL AND trim(w.ipa) != '' AND w.ipa NOT LIKE '%skeleton-loader%')
                   OR (w.morphology IS NOT NULL AND trim(w.morphology) != '' AND w.morphology NOT LIKE '%skeleton-loader%')
               )
@@ -2431,26 +2511,48 @@ class KardenwortDB:
             sql += " AND s.source_language = ?"
             params.append(language)
 
+        if target_language:
+            sql += " AND s.target_language = ?"
+            params.append(target_language)
+
         if exclude_zid:
             sql += " AND s.zid != ?"
             params.append(exclude_zid)
 
-        sql += """ ORDER BY 
-            (CASE WHEN w.word_destination IS NOT NULL AND trim(w.word_destination) != '' AND w.word_destination NOT LIKE '%skeleton-loader%' THEN 1 ELSE 0 END) DESC,
-            s.created_at DESC LIMIT ?;"""
-        params.append(limit)
+        sql += f""" ORDER BY 
+            (CASE WHEN {valid_dest_sql} THEN 1 ELSE 0 END) DESC,
+            s.created_at DESC;"""
+
+        def _filter_candidates(raw_rows):
+            filtered = []
+            for r in raw_rows:
+                item = self._deserialize_extra_fields(dict(r))
+                if is_stored_translation_failure(item.get("word_destination")):
+                    item["word_destination"] = None
+                if is_stored_translation_failure(item.get("ipa")):
+                    item["ipa"] = None
+                if is_stored_translation_failure(item.get("morphology")):
+                    item["morphology"] = None
+                has_usable = any(
+                    not is_unfinished_translation(item.get(k))
+                    for k in ("word_destination", "ipa", "morphology")
+                )
+                if not has_usable:
+                    continue
+                filtered.append(item)
+                if len(filtered) >= limit:
+                    break
+            return filtered
 
         if conn is not None:
             cursor = conn.cursor()
             cursor.execute(sql, params)
-            rows = [dict(r) for r in cursor.fetchall()]
-            return [self._deserialize_extra_fields(r) for r in rows]
+            return _filter_candidates(cursor.fetchall())
 
         with self.get_connection(read_only=True, zid=zid) as c:
             cursor = c.cursor()
             cursor.execute(sql, params)
-            rows = [dict(r) for r in cursor.fetchall()]
-            return [self._deserialize_extra_fields(r) for r in rows]
+            return _filter_candidates(cursor.fetchall())
 
     def update_word(
         self, word_id: int, updates: Dict[str, Any], zid: Optional[str] = None
@@ -2645,6 +2747,9 @@ class KardenwortDB:
                     direct_cols["extra_fields"] = self._serialize_extra_fields(base_ef)
                     custom_fields = {}
 
+                if word_id is None and token_order is None:
+                    continue
+
                 if direct_cols:
                     set_clauses = [f"{c} = ?" for c in direct_cols.keys()]
                     params = list(direct_cols.values())
@@ -2667,8 +2772,8 @@ class KardenwortDB:
                         cursor.execute("SELECT id, extra_fields FROM words WHERE session_zid = ? AND sentence_index = ? AND token_order = ?;", (session_zid, sentence_idx, token_order))
                     elif token_order is not None:
                         cursor.execute("SELECT id, extra_fields FROM words WHERE session_zid = ? AND token_order = ?;", (session_zid, token_order))
-                    row = cursor.fetchone()
-                    if row:
+                    rows = cursor.fetchall()
+                    for row in rows:
                         w_id = row["id"]
                         raw_ef = row["extra_fields"]
                         ef_dict = sanitize_extra_fields(raw_ef)

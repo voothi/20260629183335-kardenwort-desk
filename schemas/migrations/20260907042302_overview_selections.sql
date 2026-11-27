@@ -3,9 +3,10 @@
 
 CREATE TABLE IF NOT EXISTS overview_selections (
     session_zid TEXT NOT NULL,
+    sentence_index INTEGER NOT NULL DEFAULT 1,
     token_order INTEGER NOT NULL,
     selected INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (session_zid, token_order),
+    PRIMARY KEY (session_zid, sentence_index, token_order),
     FOREIGN KEY (session_zid) REFERENCES sessions(zid) ON DELETE CASCADE
 );
 

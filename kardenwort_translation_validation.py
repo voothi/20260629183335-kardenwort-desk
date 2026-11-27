@@ -21,7 +21,7 @@ def is_stored_translation_failure(value) -> bool:
     if not isinstance(value, str):
         return False
     text = value.strip()
-    if text == '[FAILED]' or text.startswith('[Error'):
+    if text == '[FAILED]' or text.startswith(('[Error', '[Translation Error')):
         return True
     return is_stored_rate_limit_failure(text)
 

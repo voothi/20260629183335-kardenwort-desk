@@ -79,7 +79,7 @@ def descriptor_kind(item):
     if 'visual_idx' in item:
         index_value(item['visual_idx'])
         if 'sentence_idx' in item:
-            index_value(item['sentence_idx'])
+            index_value(item['sentence_idx'], 1)
         return 'visual'
     raise InvalidRewordTarget('Incomplete Re-word occurrence descriptor')
 
@@ -169,6 +169,28 @@ def request_visuals(targets, visual_indices):
     return explicit or embedded
 
 
+def _visual_sentence_constraints(targets):
+    constraints = {}
+    for item in targets:
+        if 'visual_idx' not in item or 'sentence_idx' not in item:
+            continue
+        visual = index_value(item['visual_idx'])
+        sentence = index_value(item['sentence_idx'], 1)
+        if visual in constraints and constraints[visual] != sentence:
+            raise InvalidRewordTarget('Contradictory Re-word visual sentence_idx')
+        constraints[visual] = sentence
+    return constraints
+
+
+def _check_visual_sentences(keys, indices, visuals, constraints):
+    for index, visual in zip(indices, visuals):
+        expected = constraints.get(visual)
+        if expected is not None and keys[index][0] != expected:
+            raise InvalidRewordTarget(
+                f'Visual target {visual} resolves to sentence {keys[index][0]}, not {expected}'
+            )
+
+
 def resolve_selection(rows, headers, targets=None, selected_rows=None, token_orders=None,
                       visual_indices=None, visual_manifest=None, all_rows=False,
                       sentence_field='SentenceSourceIndex'):
@@ -176,8 +198,11 @@ def resolve_selection(rows, headers, targets=None, selected_rows=None, token_ord
     keys = row_keys(rows, headers, sentence_field)
     selected = token_indices(keys, token_orders, list_indices(selected_rows, len(rows)))
     visuals = request_visuals(targets, visual_indices)
+    visual_sentences = _visual_sentence_constraints(targets)
     requested = occurrence_indices(targets, keys)
-    requested, visual_keys = resolve_visual_selection(keys, requested, selected, visuals, visual_manifest)
+    requested, visual_keys = resolve_visual_selection(
+        keys, requested, selected, visuals, visual_manifest, visual_sentences=visual_sentences
+    )
     requested = agree(selected, requested)
     if requested is None:
         requested = tuple(range(len(rows))) if all_rows else ()
@@ -185,11 +210,13 @@ def resolve_selection(rows, headers, targets=None, selected_rows=None, token_ord
                            visual_keys)
 
 
-def resolve_visual_selection(keys, requested, selected, visuals, manifest):
+def resolve_visual_selection(keys, requested, selected, visuals, manifest, visual_sentences=None):
     if not visuals:
         return requested, ()
     allowed = requested if requested is not None else selected
     indices = tuple(unique_visual(value, manifest or {}, allowed) for value in visuals)
+    if visual_sentences:
+        _check_visual_sentences(keys, indices, visuals, visual_sentences)
     requested = agree(requested, tuple(dict.fromkeys(indices)))
     return requested, tuple((keys[index], visual) for index, visual in zip(indices, visuals))
 
@@ -300,7 +327,7 @@ def validate_provider_columns(rows, headers):
 def fast_provider_results(lemmas, values):
     if not isinstance(values, dict) or set(values) != set(lemmas):
         raise InvalidRewordTarget('Fast provider changed the requested lemma batch')
-    if any(not isinstance(value, str) or not value.strip() for value in values.values()):
+    if any(not isinstance(value, str) or is_unfinished_translation(value) for value in values.values()):
         raise InvalidRewordTarget('Fast provider returned an incomplete translation batch')
     return values
 
@@ -522,7 +549,7 @@ def is_stored_translation_failure(value):
     if not isinstance(value, str):
         return False
     text = value.strip()
-    if text == '[FAILED]' or text.startswith('[Error'):
+    if text == '[FAILED]' or text.startswith(('[Error', '[Translation Error')):
         return True
     return is_stored_rate_limit_failure(text)
 

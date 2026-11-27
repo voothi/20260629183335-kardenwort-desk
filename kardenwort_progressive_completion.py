@@ -83,7 +83,7 @@ def _default_failure(value):
     if not isinstance(value, str):
         return False
     text = value.strip()
-    if text == '[FAILED]' or text.startswith('[Error'):
+    if text == '[FAILED]' or text.startswith(('[Error', '[Translation Error')):
         return True
     return bool(text) and _is_rate_limit_failure(text)
 
@@ -450,7 +450,7 @@ def _matched_chunk_rows(data_rows, col_lemma, col_word_dest, chunk_trans):
         if not _is_unfinished_cell(current_value(row, col_word_dest)):
             continue
         trans = chunk_trans.get(current_value(row, col_lemma))
-        if trans and str(trans).strip():
+        if trans and not _is_unfinished_cell(trans):
             matched.append((row_idx, trans))
     return matched
 

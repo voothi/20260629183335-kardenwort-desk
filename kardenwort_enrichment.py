@@ -101,11 +101,12 @@ def eligible_selection(rows, headers, selection, roles, prompt='', reprocess=Fal
     return reword.RewordSelection(keys, indices, visuals, visual_keys)
 
 
-def enrich_rows(rows, headers, selection, language, prompt, config, query, zid=None, trace_id=None):
+def enrich_rows(rows, headers, selection, language, prompt, config, query, zid=None, trace_id=None, roles=None):
     batch = [dict(zip(headers, rows[index]), row_id=index) for index in selection.rows]
     patches = request_batch(batch, prompt, language, config, query, zid, trace_id)
     changes = {key: patches[index] for index, key in zip(selection.rows, selection.keys)}
-    columns, output = reword.merge_changes(rows, headers, changes)
+    sentence_field = (roles or {}).get('sentence_index', 'SentenceSourceIndex')
+    columns, output = reword.merge_changes(rows, headers, changes, sentence_field=sentence_field)
     return columns, output, {index: set(patch) for index, patch in patches.items()}
 
 

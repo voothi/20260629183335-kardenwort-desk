@@ -211,10 +211,11 @@ def test_pipe_h4_all_bypassed_failure_sites_filter_rate_limit_and_translation_er
             assert trans_err not in row2[r_headers.index(ctx_col)]
 
     # 7. write_update_js SQLite sentence projection
+    import kardenwort_delivery
     upd_payload = {}
-    orig_emit = desk.emit_controller_update
+    orig_deliver = kardenwort_delivery.deliver_stage
     try:
-        desk.emit_controller_update = lambda zid_arg, payload, **kw: upd_payload.update(payload) or True
+        kardenwort_delivery.deliver_stage = lambda cfg, zid_arg, payload, dispatcher: upd_payload.update(payload) or True
         desk.write_update_js(
             zid,
             restored["data_rows"],
@@ -226,10 +227,10 @@ def test_pipe_h4_all_bypassed_failure_sites_filter_rate_limit_and_translation_er
             storage_adapter=adapter,
         )
     finally:
-        desk.emit_controller_update = orig_emit
-    if "translated_text" in upd_payload and upd_payload["translated_text"]:
-        assert rate_err not in upd_payload["translated_text"]
-        assert trans_err not in upd_payload["translated_text"]
+        kardenwort_delivery.deliver_stage = orig_deliver
+    if "translatedText" in upd_payload and upd_payload["translatedText"]:
+        assert rate_err not in upd_payload["translatedText"]
+        assert trans_err not in upd_payload["translatedText"]
 
     # 8. WordFill candidates (SQLite & find_wordfill_match)
     cands = adapter.db.find_wordfill_candidates("two", language="en")

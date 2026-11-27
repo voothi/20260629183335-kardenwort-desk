@@ -70,7 +70,7 @@ def failed_sentence_text(value):
     if not isinstance(value, str):
         return False
     text = value.strip()
-    if text == '[FAILED]' or text.startswith('[Error'):
+    if text == '[FAILED]' or text.startswith(('[Error', '[Translation Error')):
         return True
     return bool(text) and _is_rate_limit_failure(text)
 

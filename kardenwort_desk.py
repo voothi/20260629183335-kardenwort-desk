@@ -2642,7 +2642,7 @@ def aggregate_sequential_distinct(
         if not val or not str(val).strip():
             continue
         val_str = str(val).strip()
-        if val_str in ("[FAILED]", "-", "--") or "skeleton-loader" in val_str:
+        if val_str in ("-", "--") or is_unfinished_translation(val_str):
             continue
         parts = [p.strip() for p in val_str.split(delim_char)] if (split_subtokens and delim_char in val_str) else [val_str]
         for p in parts:
@@ -3673,7 +3673,8 @@ class SqliteStorageAdapter(StorageAdapter):
 
     def _init_db(self) -> None:
         """
-        Ensures dedicated tables such as overview_selections exist.
+        Ensures dedicated tables such as overview_selections exist and are migrated
+        to composite (session_zid, sentence_index, token_order) primary keys.
         """
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
@@ -3681,13 +3682,44 @@ class SqliteStorageAdapter(StorageAdapter):
                 """
                 CREATE TABLE IF NOT EXISTS overview_selections (
                     session_zid TEXT NOT NULL,
+                    sentence_index INTEGER NOT NULL DEFAULT 1,
                     token_order INTEGER NOT NULL,
                     selected INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (session_zid, token_order),
+                    PRIMARY KEY (session_zid, sentence_index, token_order),
                     FOREIGN KEY (session_zid) REFERENCES sessions(zid) ON DELETE CASCADE
                 );
                 """
             )
+            cols = [row[1] for row in cursor.execute("PRAGMA table_info(overview_selections);").fetchall()]
+            if "sentence_index" not in cols:
+                cursor.execute(
+                    """
+                    CREATE TABLE overview_selections_new (
+                        session_zid TEXT NOT NULL,
+                        sentence_index INTEGER NOT NULL DEFAULT 1,
+                        token_order INTEGER NOT NULL,
+                        selected INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY (session_zid, sentence_index, token_order),
+                        FOREIGN KEY (session_zid) REFERENCES sessions(zid) ON DELETE CASCADE
+                    );
+                    """
+                )
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO overview_selections_new (session_zid, sentence_index, token_order, selected)
+                    SELECT o.session_zid,
+                           COALESCE(
+                               (SELECT MIN(w.sentence_index) FROM words w
+                                WHERE w.session_zid = o.session_zid AND w.token_order = o.token_order),
+                               1
+                           ),
+                           o.token_order,
+                           o.selected
+                    FROM overview_selections o;
+                    """
+                )
+                cursor.execute("DROP TABLE overview_selections;")
+                cursor.execute("ALTER TABLE overview_selections_new RENAME TO overview_selections;")
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_overview_selections_session ON overview_selections(session_zid);"
             )
@@ -4269,7 +4301,9 @@ class SqliteStorageAdapter(StorageAdapter):
                 seen_direct_coords.add((s_coord, t_coord))
                 parsed_direct_words.append((w_idx, s_coord, t_coord, w_dict))
 
-            unique_direct_tokens = len({t for _, _, t, _ in parsed_direct_words}) == len(parsed_direct_words)
+            unique_direct_tokens = progressive._token_aliases_safe(
+                [(s, t) for _, s, t, _ in parsed_direct_words]
+            )
             for w_idx, s_coord, t_coord, w_dict in parsed_direct_words:
                 w_dict["sentence_index"] = s_coord
                 w_dict["token_order"] = t_coord
@@ -4330,6 +4364,7 @@ class SqliteStorageAdapter(StorageAdapter):
 
             known_word_cols = {
                 "selected", selected_field,
+                "tokenorder", "token_order",
                 "word_provenance", "provenance",
                 "quotation", "wordsource", "wordsourceinflectedform",
                 "worddestination", "worddestinationinflectedform",
@@ -4342,6 +4377,7 @@ class SqliteStorageAdapter(StorageAdapter):
                 "sentencedestinationcontextleft", "sentencedestinationcontextright",
                 "sentencedestination2contextleft", "sentencedestination2contextright",
             }
+            known_word_cols.update(str(v).strip().lower() for v in role_fields.values() if v)
 
             existing_sents_by_idx = {}
             ex_sents = self.db.get_sentences_by_session(session_zid, zid=zid)
@@ -4440,7 +4476,7 @@ class SqliteStorageAdapter(StorageAdapter):
             unique_tabular_tokens = (
                 not is_multi_sentence_existing
                 and len({s for s, _ in tabular_row_coords}) <= 1
-                and len({t for _, t in tabular_row_coords}) == len(tabular_row_coords)
+                and progressive._token_aliases_safe(tabular_row_coords)
             )
 
             for row_idx, row in enumerate(data_rows):
@@ -4628,7 +4664,7 @@ class SqliteStorageAdapter(StorageAdapter):
                                 sent_map[target_s_idx]["text_provenance"] = text_provenance
 
             if sentences is not None:
-                norm_sentences = [{**dict(s), "session_zid": session_zid} for s in sentences]
+                pass
             elif not sent_map:
                 try:
                     existing_sents = self.db.get_sentences_by_session(session_zid, zid=zid)
@@ -4826,17 +4862,19 @@ class SqliteStorageAdapter(StorageAdapter):
                 seen_tokens.add(token_key)
                 unique_db_words.append(word)
 
-            overview_selected_orders = set()
+            overview_selected_coords: Set[Tuple[int, int]] = set()
             if include_overview_selections:
                 try:
-                    overview_selected_orders = self.get_overview_selections(zid, zid=zid)
+                    overview_selected_coords = self.get_overview_selection_coords(zid, zid=zid)
                 except Exception:
-                    overview_selected_orders = set()
+                    overview_selected_coords = set()
 
                 for word in unique_db_words:
+                    s_idx_w = word.get("sentence_index", 1)
                     t_ord = word.get("token_order")
                     t_ord_int = int(t_ord) if (t_ord is not None and str(t_ord).strip().isdigit()) else None
-                    if t_ord_int is not None and t_ord_int in overview_selected_orders:
+                    s_idx_int = int(s_idx_w) if (s_idx_w is not None and str(s_idx_w).strip().isdigit()) else 1
+                    if t_ord_int is not None and (s_idx_int, t_ord_int) in overview_selected_coords:
                         word["selected"] = 1
 
             selected_field = self._role_fields(headers).get('selected', 'DeskSelected').lower()
@@ -4851,11 +4889,31 @@ class SqliteStorageAdapter(StorageAdapter):
                 src_left_parts = [sentences_by_idx[j]["sentence_source"] for j in left_indices if sentences_by_idx[j].get("sentence_source")]
                 src_right_parts = [sentences_by_idx[j]["sentence_source"] for j in right_indices if sentences_by_idx[j].get("sentence_source")]
 
-                dst_left_parts = [sentences_by_idx[j]["sentence_destination"] for j in left_indices if sentences_by_idx[j].get("sentence_destination")]
-                dst_right_parts = [sentences_by_idx[j]["sentence_destination"] for j in right_indices if sentences_by_idx[j].get("sentence_destination")]
+                dst_left_parts = [
+                    sentences_by_idx[j]["sentence_destination"]
+                    for j in left_indices
+                    if sentences_by_idx[j].get("sentence_destination")
+                    and not is_stored_translation_failure(sentences_by_idx[j]["sentence_destination"])
+                ]
+                dst_right_parts = [
+                    sentences_by_idx[j]["sentence_destination"]
+                    for j in right_indices
+                    if sentences_by_idx[j].get("sentence_destination")
+                    and not is_stored_translation_failure(sentences_by_idx[j]["sentence_destination"])
+                ]
 
-                dst2_left_parts = [sentences_by_idx[j]["sentence_destination2"] for j in left_indices if sentences_by_idx[j].get("sentence_destination2")]
-                dst2_right_parts = [sentences_by_idx[j]["sentence_destination2"] for j in right_indices if sentences_by_idx[j].get("sentence_destination2")]
+                dst2_left_parts = [
+                    sentences_by_idx[j]["sentence_destination2"]
+                    for j in left_indices
+                    if sentences_by_idx[j].get("sentence_destination2")
+                    and not is_stored_translation_failure(sentences_by_idx[j]["sentence_destination2"])
+                ]
+                dst2_right_parts = [
+                    sentences_by_idx[j]["sentence_destination2"]
+                    for j in right_indices
+                    if sentences_by_idx[j].get("sentence_destination2")
+                    and not is_stored_translation_failure(sentences_by_idx[j]["sentence_destination2"])
+                ]
 
                 src_left = " ".join(src_left_parts)
                 src_right = " ".join(src_right_parts)
@@ -4911,7 +4969,8 @@ class SqliteStorageAdapter(StorageAdapter):
                     elif h_lower in ("deskselected", "selected", selected_field):
                         t_ord = word.get("token_order")
                         t_ord_int = int(t_ord) if (t_ord is not None and str(t_ord).strip().isdigit()) else None
-                        is_sel = 1 if (word.get("selected", 0) or (include_overview_selections and t_ord_int is not None and t_ord_int in overview_selected_orders)) else 0
+                        s_idx_int = int(s_idx) if (s_idx is not None and str(s_idx).strip().isdigit()) else 1
+                        is_sel = 1 if (word.get("selected", 0) or (include_overview_selections and t_ord_int is not None and (s_idx_int, t_ord_int) in overview_selected_coords)) else 0
                         row_cells.append(str(is_sel))
                     elif h_lower in ("leitnerbox", "leitner_box"):
                         row_cells.append(str(word.get("leitner_box", 1)))
@@ -5006,7 +5065,7 @@ class SqliteStorageAdapter(StorageAdapter):
         raw_text = source_raw_text or kwargs.get("text") or ""
         if raw_text:
             normalized_raw = raw_text.strip()
-            conditions = ["TRIM(source_raw_text) = ?", "source_language = ?"]
+            conditions = ["deleted_at IS NULL", "TRIM(source_raw_text) = ?", "source_language = ?"]
             params: List[Any] = [normalized_raw, source_language]
             if target_language:
                 conditions.append("target_language = ?")
@@ -5030,11 +5089,14 @@ class SqliteStorageAdapter(StorageAdapter):
 
             # Strategy fallback for normalized or contextual
             if strategy in ("normalized", "contextual"):
-                cand_conditions = ["source_language = ?"]
+                cand_conditions = ["deleted_at IS NULL", "source_language = ?"]
                 cand_params: List[Any] = [source_language]
                 if target_language:
                     cand_conditions.append("target_language = ?")
                     cand_params.append(target_language)
+                if text_mode:
+                    cand_conditions.append("text_mode = ?")
+                    cand_params.append(text_mode)
                 cand_params.append(lookup_ttl_seconds)
                 cand_sql = f"""
                     SELECT zid, slug, source_language, target_language, text_mode, source_raw_text, created_at, updated_at
@@ -5055,14 +5117,23 @@ class SqliteStorageAdapter(StorageAdapter):
                             return self.db.get_session_bundle(cr["zid"], zid=zid)
             return None
 
-        sql = """
+        slug_conditions = ["deleted_at IS NULL", "slug = ?", "source_language = ?"]
+        slug_params: List[Any] = [slug, source_language]
+        if target_language:
+            slug_conditions.append("target_language = ?")
+            slug_params.append(target_language)
+        if text_mode:
+            slug_conditions.append("text_mode = ?")
+            slug_params.append(text_mode)
+        slug_params.append(lookup_ttl_seconds)
+        sql = f"""
             SELECT zid, slug, source_language, target_language, text_mode, source_raw_text, created_at, updated_at
             FROM sessions
-            WHERE slug = ? AND source_language = ?
+            WHERE {' AND '.join(slug_conditions)}
               AND (julianday('now') - julianday(created_at)) * 86400 <= ?
             ORDER BY created_at DESC LIMIT 1;
         """
-        rows = self.db.query_readonly(sql, (slug, source_language, lookup_ttl_seconds), zid=zid)
+        rows = self.db.query_readonly(sql, tuple(slug_params), zid=zid)
         if rows:
             cached_zid = rows[0]["zid"]
             return self.db.get_session_bundle(cached_zid, zid=zid)
@@ -5309,9 +5380,11 @@ class SqliteStorageAdapter(StorageAdapter):
             matching = [word for word in words if (word['lemma'] or '').strip().lower() == lemma]
             conn.executemany("UPDATE words SET selected = ? WHERE session_zid = ? AND sentence_index = ? AND token_order = ?",
                              [(selected_value, session_zid, word['sentence_index'], word['token_order']) for word in matching])
-            conn.executemany("INSERT INTO overview_selections(session_zid, token_order, selected) VALUES (?, ?, ?) "
-                             "ON CONFLICT(session_zid, token_order) DO UPDATE SET selected = excluded.selected",
-                             [(session_zid, word['token_order'], selected_value) for word in matching])
+            conn.executemany(
+                "INSERT INTO overview_selections(session_zid, sentence_index, token_order, selected) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(session_zid, sentence_index, token_order) DO UPDATE SET selected = excluded.selected",
+                [(session_zid, word['sentence_index'], word['token_order'], selected_value) for word in matching],
+            )
         return True
 
     @staticmethod
@@ -5339,6 +5412,59 @@ class SqliteStorageAdapter(StorageAdapter):
                     (session_zid,),
                 )
                 return {int(row[0]) for row in cursor.fetchall()}
+            except Exception:
+                return set()
+
+    def get_overview_selection_coords(
+        self,
+        session_zid: str,
+        zid: Optional[str] = None,
+    ) -> Set[Tuple[int, int]]:
+        """
+        Retrieves composite (sentence_index, token_order) coordinates selected in overview_selections.
+        """
+        with self.db.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            try:
+                cols = [row[1] for row in cursor.execute("PRAGMA table_info(overview_selections);").fetchall()]
+                if "sentence_index" in cols:
+                    raw_coords = [
+                        (int(row[0]), int(row[1]))
+                        for row in cursor.execute(
+                            "SELECT sentence_index, token_order FROM overview_selections WHERE session_zid = ? AND selected = 1;",
+                            (session_zid,),
+                        ).fetchall()
+                    ]
+                else:
+                    raw_coords = [
+                        (1, int(row[0]))
+                        for row in cursor.execute(
+                            "SELECT token_order FROM overview_selections WHERE session_zid = ? AND selected = 1;",
+                            (session_zid,),
+                        ).fetchall()
+                    ]
+                if not raw_coords:
+                    return set()
+                word_coords = [
+                    (int(row[0]), int(row[1]))
+                    for row in cursor.execute(
+                        "SELECT sentence_index, token_order FROM words WHERE session_zid = ?;",
+                        (session_zid,),
+                    ).fetchall()
+                ]
+                word_coord_set = set(word_coords)
+                by_token: Dict[int, List[int]] = {}
+                for w_sent, w_tok in word_coords:
+                    by_token.setdefault(w_tok, []).append(w_sent)
+                resolved: Set[Tuple[int, int]] = set()
+                for s_idx, t_ord in raw_coords:
+                    if (s_idx, t_ord) in word_coord_set or s_idx != 1:
+                        resolved.add((s_idx, t_ord))
+                    elif len(by_token.get(t_ord, ())) == 1:
+                        resolved.add((by_token[t_ord][0], t_ord))
+                    else:
+                        resolved.add((s_idx, t_ord))
+                return resolved
             except Exception:
                 return set()
 
@@ -5396,16 +5522,29 @@ class SqliteStorageAdapter(StorageAdapter):
 
     @staticmethod
     def _persist_retext_context(conn, session_zid, main, padded):
-        words = conn.execute("SELECT sentence_index, token_order, extra_fields FROM words WHERE session_zid = ?",
-                             (session_zid,)).fetchall()
+        """Remove legacy SentenceDestination bloat from words.extra_fields; sentences table owns translations."""
+        words = conn.execute(
+            "SELECT sentence_index, token_order, extra_fields FROM words WHERE session_zid = ? AND extra_fields IS NOT NULL AND extra_fields != ''",
+            (session_zid,),
+        ).fetchall()
         for word in words:
-            fields = json.loads(word['extra_fields'] or '{}')
-            for name, values in (('SentenceDestination', main), ('SentenceDestination2', padded)):
-                value = values.get(word['sentence_index'])
-                if value and value.strip():
-                    fields[name] = value
-            conn.execute("UPDATE words SET extra_fields = ? WHERE session_zid = ? AND sentence_index = ? AND token_order = ?",
-                         (json.dumps(fields, ensure_ascii=False), session_zid, word['sentence_index'], word['token_order']))
+            try:
+                fields = json.loads(word['extra_fields'] or '{}')
+            except Exception:
+                continue
+            if not isinstance(fields, dict):
+                continue
+            removed = False
+            for stale_key in ('SentenceDestination', 'SentenceDestination2'):
+                if stale_key in fields:
+                    fields.pop(stale_key, None)
+                    removed = True
+            if removed:
+                new_val = json.dumps(fields, ensure_ascii=False) if fields else None
+                conn.execute(
+                    "UPDATE words SET extra_fields = ? WHERE session_zid = ? AND sentence_index = ? AND token_order = ?",
+                    (new_val, session_zid, word['sentence_index'], word['token_order']),
+                )
 
     def update_sentence_translation(
         self,
@@ -5478,7 +5617,7 @@ class SqliteStorageAdapter(StorageAdapter):
         scratch = reword_scratch_rows(rows, headers, roles, selection, source)
         updated_headers, updated_rows, fields = enrich_rows(
             scratch, headers, selection, restored.get('source_language'), prompt_name,
-            self.config, query_intellifiller_server, zid or session_zid, trace_id)
+            self.config, query_intellifiller_server, zid or session_zid, trace_id, roles=roles)
         output = checked_provider_rows(rows, headers, updated_rows, updated_headers, roles)
         changes = reword.provider_changes(rows, headers, output, updated_headers, selection, roles, fields)
         commit_reword_sqlite(self, session_zid, changes, selection, roles, rows, headers,
@@ -6276,22 +6415,55 @@ def _overview_row_has_highlighted(
     return False
 
 
+def _overview_row_coords(
+    overview_data_rows: List[List[str]],
+    matched_ids: List[int],
+    ov_token_order: str,
+    col_token_order: int,
+    col_index: int = -1,
+) -> Set[Tuple[int, int]]:
+    coords: Set[Tuple[int, int]] = set()
+    for mid in matched_ids:
+        t_ord = _row_token_order(overview_data_rows, mid, col_token_order)
+        if t_ord is None:
+            continue
+        s_idx = 1
+        if 0 <= mid < len(overview_data_rows) and 0 <= col_index < len(overview_data_rows[mid]):
+            parsed_s = _parse_int_order(overview_data_rows[mid][col_index])
+            if parsed_s is not None and parsed_s >= 1:
+                s_idx = parsed_s
+        coords.add((s_idx, t_ord))
+    if not coords:
+        fallback = _parse_int_order(ov_token_order)
+        if fallback is not None:
+            coords.add((1, fallback))
+    return coords
+
+
 def _overview_row_is_selected(
     overview_data_rows: List[List[str]],
     matched_ids: List[int],
     ov_token_order: str,
     col_token_order: int,
     col_highlighted: int,
-    saved_overview_selections: Set[int],
+    saved_overview_selections: Set[Any],
     is_container: bool,
+    col_index: int = -1,
 ) -> str:
     has_highlighted = _overview_row_has_highlighted(overview_data_rows, matched_ids, col_highlighted)
     if not is_container:
         return "1" if has_highlighted else "0"
-    matched_orders = _overview_row_token_orders(
-        overview_data_rows, matched_ids, ov_token_order, col_token_order
-    )
-    if matched_orders & saved_overview_selections and (col_highlighted == -1 or has_highlighted):
+    if any(isinstance(item, tuple) for item in saved_overview_selections):
+        matched_coords = _overview_row_coords(
+            overview_data_rows, matched_ids, ov_token_order, col_token_order, col_index=col_index
+        )
+        matched = bool(matched_coords & saved_overview_selections)
+    else:
+        matched_orders = _overview_row_token_orders(
+            overview_data_rows, matched_ids, ov_token_order, col_token_order
+        )
+        matched = bool(matched_orders & saved_overview_selections)
+    if matched and (col_highlighted == -1 or has_highlighted):
         return "1"
     return "0"
 
@@ -6751,6 +6923,11 @@ class StorageRouter:
     def get_overview_selections(self, *args, **kwargs):
         return self.adapter.get_overview_selections(*args, **kwargs)
 
+    def get_overview_selection_coords(self, *args, **kwargs):
+        if hasattr(self.adapter, 'get_overview_selection_coords'):
+            return self.adapter.get_overview_selection_coords(*args, **kwargs)
+        return {(1, t) for t in self.adapter.get_overview_selections(*args, **kwargs)}
+
     def get_shared_selection(self, *args, **kwargs):
         return self.adapter.get_shared_selection(*args, **kwargs)
 
@@ -6815,13 +6992,13 @@ def file_lock(file_path: Path, adapter: Optional[StorageAdapter] = None):
 
 def _sanitize_rows(data_rows: Optional[List[List[str]]]) -> Optional[List[List[str]]]:
     """
-    Sanitizes data rows by replacing internal '[FAILED]' sentinels with empty string.
+    Sanitizes data rows by replacing recognized stored translation failures with empty string.
     """
     if not data_rows:
         return data_rows
     sanitized = []
     for row in data_rows:
-        sanitized.append([("" if (isinstance(cell, str) and (cell.strip() == "[FAILED]" or cell.strip().startswith("[Error"))) else cell) for cell in row])
+        sanitized.append([("" if is_stored_translation_failure(cell) else cell) for cell in row])
     return sanitized
 
 
@@ -6929,12 +7106,12 @@ def is_base_translation_finished(headers, data_rows, role_fields, lemma_base_pro
     if col_lemma != -1 and col_word_dest != -1:
         for row in data_rows:
             if len(row) > col_lemma and row[col_lemma].strip():
-                if len(row) <= col_word_dest or not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest]:
+                if is_field_empty(row, col_word_dest):
                     return False
                 if lemma_base_provider == 'intellifiller':
-                    if col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip() or 'skeleton-loader' in row[col_ipa]):
+                    if col_ipa != -1 and is_field_empty(row, col_ipa):
                         return False
-                    if col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip() or 'skeleton-loader' in row[col_morph]):
+                    if col_morph != -1 and is_field_empty(row, col_morph):
                         return False
     return True
 
@@ -10489,7 +10666,7 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                     new_trans = str(row[eff_col_dest] or "").strip()
                     seen_trans = []
                     for t_val in (existing_trans, new_trans):
-                        if t_val and t_val != "[FAILED]" and "skeleton-loader" not in t_val and t_val not in ("-", "--"):
+                        if t_val and not is_unfinished_translation(t_val) and t_val not in ("-", "--"):
                             for part in t_val.split(','):
                                 p_clean = part.strip()
                                 if p_clean and p_clean.lower() not in [x.lower() for x in seen_trans]:
@@ -12364,30 +12541,32 @@ html, body {{
                             try:
                                 _occ = _san_ef(w.get("extra_fields")).get("occurrence_data")
                                 if isinstance(_occ, dict) and len(_occ) > 0:
-                                    row_occurrences[(str(w['sentence_index']), str(w['token_order']))] = _occ
+                                    row_occurrences[(str(w['sentence_index']), str(w['token_order']))] = sanitize_occurrence_translations(_occ)
                             except Exception:
                                 pass
                             w_prov = w.get("word_provenance")
-                            if w_prov or w.get('word_destination'):
+                            has_valid_dest = not is_unfinished_translation(w.get('word_destination'))
+                            if w_prov or has_valid_dest:
                                 occurrence_provenances[(str(w['sentence_index']), str(w['token_order']))] = w_prov or 'cached:sqlite'
                             if w_prov:
                                 t_ord = str(w.get("token_order", ""))
                                 row_provenances[t_ord] = w_prov
                                 if t_ord.isdigit():
                                     row_provenances[int(t_ord)] = w_prov
-                        if row_provenances:
+                        if row_provenances or occurrence_provenances:
                             break
                 except Exception:
                     pass
 
-        # Fallback: rows that have a translation but no stored word_provenance (pre-provenance-column sessions).
+        # Fallback: rows that have a valid translation but no stored word_provenance (pre-provenance-column sessions).
         # Only fills in what is missing; does not overwrite explicitly stored provenance.
-        # Key by token_order only (not by positional r_i) because data_rows is sorted later
-        # and prov_val lookup at render time uses token_order_val, not the sorted position index.
         if col_word_dest != -1:
             for r_i, r in enumerate(data_rows):
-                if len(r) > col_word_dest and r[col_word_dest].strip() and "skeleton-loader" not in r[col_word_dest]:
+                if len(r) > col_word_dest and not is_unfinished_translation(r[col_word_dest]):
                     t_ord_str = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
+                    s_idx_str = str(r[col_index]).strip() if col_index != -1 and len(r) > col_index and str(r[col_index]).strip() else "1"
+                    if (s_idx_str, t_ord_str) not in occurrence_provenances:
+                        occurrence_provenances[(s_idx_str, t_ord_str)] = "cached:sqlite"
                     if t_ord_str not in row_provenances:
                         row_provenances[t_ord_str] = "cached:sqlite"
                         if t_ord_str.isdigit():
@@ -12653,17 +12832,22 @@ html, body {{
                         if col_word_dest != -1:
                             while len(row) <= col_word_dest:
                                 row.append("")
-                            if not row[col_word_dest].strip():
+                            if is_unfinished_translation(row[col_word_dest]):
                                 trans_val = lemma_translations.get(lemma_val, "")
-                                if trans_val:
-                                    row[col_word_dest] = trans_val
-                                    row_provenances[row_id] = fast_prov
+                                if trans_val and not is_unfinished_translation(trans_val):
+                                    item_prov = getattr(trans_val, 'provenance', None) or fast_prov
+                                    row[col_word_dest] = str(trans_val)
+                                    t_ord_str = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_id)
+                                    s_idx_str = str(row[col_index]).strip() if col_index != -1 and len(row) > col_index and str(row[col_index]).strip() else "1"
+                                    occurrence_provenances[(s_idx_str, t_ord_str)] = item_prov
+                                    if not is_sqlite:
+                                        row_provenances[row_id] = item_prov
                 if is_sqlite:
                     storage_adapter.save_session(
                         session_zid=zid, slug=tsv_slug, source_language=language,
                         target_language=target_lang, text_mode=text_mode, source_raw_text=text,
                         comments=comments, headers=headers, data_rows=data_rows,
-                        working_tsv_path=None, row_provenances=row_provenances, zid=zid)
+                        working_tsv_path=None, row_provenances=occurrence_provenances or row_provenances, zid=zid)
                 else:
                     with file_lock(working_tsv_path):
                         save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
@@ -13438,10 +13622,13 @@ html, body {{
         pos_tooltip = format_pos_tooltip(pos_raw)
         pos_title_attr = f' title="{html.escape(pos_tooltip, quote=True)}"' if pos_tooltip else ''
 
-        prov_val = row_provenances.get(row_id) or row_provenances.get(token_order_val) or row_provenances.get(str(token_order_val))
-        prov_val = occurrence_provenances.get((str(sent_idx_val), str(token_order_val)), prov_val)
+        prov_val = occurrence_provenances.get((str(sent_idx_val), str(token_order_val)))
+        if not prov_val and not occurrence_provenances:
+            prov_val = row_provenances.get(row_id) or row_provenances.get(token_order_val) or row_provenances.get(str(token_order_val))
         if not prov_val and col_provenance != -1 and len(row) > col_provenance:
             prov_val = row[col_provenance]
+        if not trans_val or is_stored_translation_failure(trans_val):
+            prov_val = None
 
         gender_tooltip = format_gender_tooltip(gender_raw, lemma=lemma_val, provenance=prov_val)
         gender_title_attr = f' title="{html.escape(gender_tooltip, quote=True)}"' if gender_tooltip else ''
@@ -13659,7 +13846,9 @@ html, body {{
             for s in db_sents:
                 s_i = s.get("sentence_index", 1) - 1
                 s_d = str(s.get("sentence_destination") or "").strip()
-                child_sentence_translations.setdefault(s_i, s_d if s_d.lower() != 'none' else "")
+                if s_d.lower() == 'none' or is_stored_translation_failure(s_d):
+                    s_d = ""
+                child_sentence_translations.setdefault(s_i, s_d)
 
         if len(child_sentence_translations) < len(source_sentences):
             for i in range(len(source_sentences)):
@@ -13765,7 +13954,10 @@ html, body {{
         saved_overview_selections = set()
         if is_container and not preloaded_bundle and zid and str(zid).strip() and str(zid).strip() != "00000000000000":
             try:
-                saved_overview_selections = storage_adapter.get_overview_selections(str(zid).strip())
+                if hasattr(storage_adapter, "get_overview_selection_coords"):
+                    saved_overview_selections = storage_adapter.get_overview_selection_coords(str(zid).strip())
+                else:
+                    saved_overview_selections = storage_adapter.get_overview_selections(str(zid).strip())
             except Exception as e:
                 logger.warning(f"[{zid}] Failed to retrieve overview selections: {e}")
                 saved_overview_selections = set()
@@ -13775,7 +13967,7 @@ html, body {{
             ov_lemma = ov_r[col_lemma] if col_lemma != -1 and len(ov_r) > col_lemma else ""
             ov_inflected = resolve_row_inflected_form(ov_r, col_inflected, col_inflected2, col_quotation, col_lemma)
             ov_trans = ov_r[col_word_dest] if col_word_dest != -1 and len(ov_r) > col_word_dest else ""
-            if ov_trans == "[FAILED]":
+            if is_stored_translation_failure(ov_trans):
                 ov_trans = ""
             ov_morph = ov_r[col_morph] if col_morph != -1 and len(ov_r) > col_morph else ""
             ov_ipa = ov_r[col_ipa] if col_ipa != -1 and len(ov_r) > col_ipa else ""
@@ -13803,6 +13995,7 @@ html, body {{
                 col_highlighted,
                 saved_overview_selections,
                 is_container,
+                col_index=col_index,
             )
 
             # Translation deduplication and rollup across atomic occurrences for merged rows
@@ -13912,13 +14105,18 @@ html, body {{
             ov_pos_tooltip = format_pos_tooltip(ov_pos_raw)
             ov_pos_title = f' title="{html.escape(ov_pos_tooltip, quote=True)}"' if ov_pos_tooltip else ''
 
-            ov_prov_val = row_provenances.get(ov_id) or row_provenances.get(ov_token_order) or row_provenances.get(str(ov_token_order))
-            if col_index != -1 and col_token_order != -1:
+            ov_prov_val = None
+            if col_index != -1 and col_token_order != -1 and 0 <= primary_id < len(overview_data_rows):
                 primary_row = overview_data_rows[primary_id]
                 ov_prov_val = occurrence_provenances.get(
-                    (str(primary_row[col_index]), str(primary_row[col_token_order])), ov_prov_val)
+                    (str(primary_row[col_index]), str(primary_row[col_token_order]))
+                )
+            if not ov_prov_val and not occurrence_provenances:
+                ov_prov_val = row_provenances.get(ov_id) or row_provenances.get(ov_token_order) or row_provenances.get(str(ov_token_order))
             if not ov_prov_val and col_provenance != -1 and len(ov_r) > col_provenance:
                 ov_prov_val = ov_r[col_provenance]
+            if not ov_trans or is_stored_translation_failure(ov_trans):
+                ov_prov_val = None
 
             ov_gender_tooltip = format_gender_tooltip(ov_gender_raw, lemma=ov_lemma, provenance=ov_prov_val)
             ov_gender_title = f' title="{html.escape(ov_gender_tooltip, quote=True)}"' if ov_gender_tooltip else ''
@@ -16184,19 +16382,21 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
         if db and db.db_path and db.db_path.exists():
             is_sqlite_active = True
             search_lang = language if scan_match_language else None
+            target_lang_filter = wordfill_cfg.get('target_language')
             candidates = db.find_wordfill_candidates(
                 word=word,
                 language=search_lang,
                 exclude_zid=exclude_zid,
                 limit=10,
+                target_language=target_lang_filter,
             )
             for cand in candidates:
                 match_dict = {}
-                if cand.get('word_destination'):
+                if cand.get('word_destination') and not is_unfinished_translation(cand['word_destination']):
                     match_dict['WordDestination'] = str(cand['word_destination']).strip()
-                if cand.get('morphology'):
+                if cand.get('morphology') and not is_unfinished_translation(cand['morphology']):
                     match_dict['WordSourceMorphologyAI'] = str(cand['morphology']).strip()
-                if cand.get('ipa'):
+                if cand.get('ipa') and not is_unfinished_translation(cand['ipa']):
                     match_dict['WordSourceIPA'] = str(cand['ipa']).strip()
                 if cand.get('pos'):
                     match_dict['WordSourcePOS'] = str(cand['pos']).strip()
@@ -16206,7 +16406,7 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
                 extra = cand.get('extra_fields') or {}
                 if isinstance(extra, dict):
                     for k, v in extra.items():
-                        if is_wordfill_eligible(k) and v and 'skeleton-loader' not in str(v):
+                        if is_wordfill_eligible(k) and v and not is_unfinished_translation(str(v)):
                             match_dict[k] = str(v).strip()
 
                 if match_dict:
@@ -16280,7 +16480,7 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
                     if is_wordfill_eligible(col):
                         if len(row) > col_idx:
                             val = row[col_idx].strip()
-                            if val and 'skeleton-loader' not in val:
+                            if val and not is_unfinished_translation(val):
                                 match_dict[col] = val
 
                 if match_dict:
@@ -17762,7 +17962,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                     if db_sents:
                         for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1)):
                             s_dest = s.get("sentence_destination")
-                            if s_dest and str(s_dest).strip():
+                            if s_dest and str(s_dest).strip() and not is_stored_translation_failure(str(s_dest)):
                                 clean_translations.append(str(s_dest).strip())
                     if clean_translations:
                         norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
@@ -17800,7 +18000,11 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                                 txt_content = f.read_text(encoding='utf-8').strip()
                                 if txt_content:
                                     norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
-                                    lines = [re.sub(r'</?[a-zA-Z][^>]*>', '', (normalize_bracket_spacing(line.strip()) if norm_brackets else line.strip())).strip() for line in txt_content.splitlines()]
+                                    lines = [
+                                        re.sub(r'</?[a-zA-Z][^>]*>', '', (normalize_bracket_spacing(line.strip()) if norm_brackets else line.strip())).strip()
+                                        for line in txt_content.splitlines()
+                                        if not is_stored_translation_failure(line)
+                                    ]
                                     is_single = True
                                     source_txt_path = tsv_path.with_suffix('.txt')
                                     if source_txt_path.exists():
@@ -17826,7 +18030,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                     for row in data_rows:
                         if len(row) > col_sentence_dest:
                             s = row[col_sentence_dest].strip()
-                            if s:
+                            if s and not is_stored_translation_failure(s):
                                 idx_val = 0
                                 if col_index != -1 and len(row) > col_index and row[col_index].strip():
                                     try:
@@ -18347,7 +18551,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                 _sync_cli_row_provenances(row_provenances, occurrence_keys, occurrence_provenances)
             elif col_word_dest != -1:
                 for r_i, r in enumerate(data_rows):
-                    if len(r) > col_word_dest and r[col_word_dest].strip() and "skeleton-loader" not in r[col_word_dest]:
+                    if len(r) > col_word_dest and not is_unfinished_translation(r[col_word_dest]):
                         t_ord_str = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
                         if t_ord_str not in row_provenances:
                             row_provenances[t_ord_str] = "cached:sqlite"
