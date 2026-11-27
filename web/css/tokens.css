@@ -364,19 +364,63 @@ body.text-selection-mode-active span.highlight-orange-active,
 body.text-selection-mode-active span.highlight-purple-active,
 body.text-selection-mode-active span.hl-mvp-pin,
 body.text-selection-mode-active span.hl-mvp-hover,
-body.text-selection-mode-active span[class*="hl-mvp-"] {
+body.text-selection-mode-active span[class*="hl-mvp-"],
+body.text-selection-mode-active span.lemma-peer-highlight,
+body.text-selection-mode-active span.active-subtoken,
+body.text-selection-mode-active span.flipped,
+:is(
+    body.text-selection-mode-active,
+    body.theme-dark.text-selection-mode-active,
+    body.theme-light.text-selection-mode-active,
+    body.theme-white.text-selection-mode-active,
+    body.theme-compact.text-selection-mode-active
+) :is(#source-container, #translation-container) span.word:is(
+    .highlight-orange-active,
+    .highlight-purple-active,
+    .hl-mvp-pin,
+    .hl-mvp-hover,
+    [class*="hl-mvp-"],
+    .lemma-peer-highlight,
+    .active-subtoken,
+    .flipped
+),
+:is(
+    body.text-selection-mode-active,
+    body.theme-dark.text-selection-mode-active,
+    body.theme-light.text-selection-mode-active,
+    body.theme-white.text-selection-mode-active,
+    body.theme-compact.text-selection-mode-active
+) :is(#source-container, #translation-container) span.word:is(
+    .highlight-orange-active,
+    .highlight-purple-active,
+    .hl-mvp-pin,
+    .hl-mvp-hover,
+    [class*="hl-mvp-"],
+    .lemma-peer-highlight,
+    .active-subtoken,
+    .flipped
+):hover {
     background-color: transparent !important;
     background: transparent !important;
     color: inherit !important;
     outline: none !important;
     text-decoration: none !important;
     box-shadow: none !important;
+    transition: none !important;
 }
 
 body.text-selection-mode-active span.word:hover,
 body.text-selection-mode-active #source-container span.word:hover,
-body.text-selection-mode-active #translation-container span.word:hover {
+body.text-selection-mode-active #translation-container span.word:hover,
+:is(
+    body.theme-dark.text-selection-mode-active,
+    body.theme-light.text-selection-mode-active,
+    body.theme-white.text-selection-mode-active,
+    body.theme-compact.text-selection-mode-active
+) :is(#source-container, #translation-container) span.word:hover {
     background-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
 }
 
 /* Invariant Pin Strip / Frame Layout Metrics */

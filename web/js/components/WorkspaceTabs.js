@@ -1055,6 +1055,9 @@
             activeTabSeq = targetCard.seq_num;
             activeSentenceIdx = targetCard.sentence_idx;
             w._kwActiveTabSeq = activeTabSeq;
+            if (!isImmediate && typeof w.resetRowSelectionAnchors === 'function') {
+                w.resetRowSelectionAnchors();
+            }
 
             if (w.AppState && w.AppState.activeTokenSelections && w.AppState.activeTokenSelections.length > 0) {
                 if (activeSentenceIdx > 0) {

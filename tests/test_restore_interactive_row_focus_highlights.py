@@ -173,11 +173,11 @@ def test_select_all_from_keyboard_highlights_primary_occurrences_and_isolates_un
         assert cfg_resp.value.ok
         _assert_source_roles(page, ["haus", "baum"], ["primary", "peer", "primary", "peer"])
 
-        # Unrelated client receives shared membership without inventing client focus or highlights.
+        # Unrelated client receives shared membership and projects selected-row highlights without mutating its saved client view.
         other.wait_for_function("getSelectedRowsArray().length === 2")
         assert other.evaluate("AppState.activeTokenSelections") == []
         assert other.evaluate("getFocusedRowId()") is None
-        _assert_source_roles(other, ["haus", "baum"], ["baseline", "baseline", "baseline", "baseline"])
+        _assert_source_roles(other, ["haus", "baum"], ["primary", "peer", "primary", "peer"])
         views_after = _client_view_rows(adapter, ZID)
         assert views_after.get(other_client_id) == views_before.get(other_client_id)
         assert config_path.read_bytes() == initial_config

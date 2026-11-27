@@ -654,8 +654,13 @@ def test_playwright_action_toolbar_shortcuts_modal_and_audio(page, test_server):
     page.keyboard.press("Control+a")
     assert len(page.evaluate("() => window.getSelectedRowsArray()")) == 2
 
-    # Ctrl+Shift+A deselects all rows (Task 7.4, R14)
+    # Ctrl+Shift+A toggles Hand Tool without clearing selections; Escape clears all rows
     page.keyboard.press("Control+Shift+A")
+    assert page.evaluate("() => document.body.classList.contains('text-selection-mode-active')") is True
+    assert len(page.evaluate("() => window.getSelectedRowsArray()")) == 2
+    page.keyboard.press("Control+Shift+A")
+    assert page.evaluate("() => document.body.classList.contains('text-selection-mode-active')") is False
+    page.keyboard.press("Escape")
     assert len(page.evaluate("() => window.getSelectedRowsArray()")) == 0
 
     # 7. Retext & Reword endpoints (Task 7.18, 7.19)
@@ -1071,7 +1076,7 @@ def test_unslop_code_hygiene_and_contract_hardening(page, test_server):
     has_sync = page.evaluate("() => typeof window.WorkspaceTabs.syncSelectionsToCardsAndState === 'function'")
     assert has_sync is True
 
-    # 3. Active tab chip and action toolbar button font-weight box metric invariance (font-weight: 400)
+    # 3. Active tab chip and action toolbar button font-weight box metric invariance (font-weight: 500)
     chip_weight = page.evaluate("""() => {
         const chip = document.createElement('div');
         chip.className = 'kw-tab-chip active';
@@ -1081,7 +1086,7 @@ def test_unslop_code_hygiene_and_contract_hardening(page, test_server):
         chip.remove();
         return weight;
     }""")
-    assert chip_weight in ('400', 'normal')
+    assert chip_weight in ('500',)
 
     btn_weight = page.evaluate("""() => {
         const toolbar = document.getElementById('kw-action-toolbar');

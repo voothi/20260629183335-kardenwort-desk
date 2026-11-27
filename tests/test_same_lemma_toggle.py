@@ -1788,8 +1788,8 @@ def test_row_space_preserves_existing_token_focus_and_row_scopes(page, tmp_path,
     assert page.evaluate('JSON.stringify(AppState.activeTokenSelections)') == focused_tokens
     assert page.evaluate('getSelectedRowsArray()') == ([0, 1] if token_focus else [1])
     _assert_source_roles(page, ['haus'], ['baseline', 'primary'] if token_focus else ['baseline', 'baseline'])
-    # Exact-token mode deliberately retains its existing primary-ID expansion.
-    _assert_source_roles(page, ['baum'], ['primary', 'primary'] if token_focus else ['primary', 'baseline'])
+    # Orthogonal per-lemma highlight isolation (H2): unrelated active tokens never promote another row's peers.
+    _assert_source_roles(page, ['baum'], ['primary', 'baseline'])
     page.keyboard.press('Space')
     assert page.evaluate('JSON.stringify(AppState.activeTokenSelections)') == focused_tokens
     _assert_source_roles(page, ['baum'], ['baseline', 'baseline'])

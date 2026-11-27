@@ -265,12 +265,14 @@ def test_h5_h6_translation_hover_flipped_lemma_alt_mouseout_and_click_persistenc
         }"""
     )
 
-    # H5a: Hovering translation span 0 ('Женщину', which aligns to source 0 'Der', NOT row 0 'Mann')
+    # H5a: Hovering translation span 0 ('Женщину', which aligns to source 0 'Der', NOT 'Mann')
     # must NOT index translation span directly into source tokenMap by data-order/data-word-idx.
+    mann_row = page.locator("#lemma-table tbody tr", has_text="Mann").first
+    mann_vidx = _source_words(page, ["mann"]).first.get_attribute("data-word-idx")
     trans_first = page.locator("#translation-container span.word.hl-mvp").nth(0)
-    trans_first.evaluate("el => el.setAttribute('data-word-idx', '2')")
+    trans_first.evaluate("(el, vidx) => el.setAttribute('data-word-idx', vidx)", mann_vidx)
     trans_first.hover()
-    row_mann_hovered = page.locator('#lemma-table tbody tr[data-row-id="0"]').evaluate("el => el.classList.contains('hl-mvp-hover')")
+    row_mann_hovered = mann_row.evaluate("el => el.classList.contains('hl-mvp-hover')")
     assert row_mann_hovered is False, "H5: Translation span hover indexed source tokenMap via data-word-idx and highlighted wrong table row"
     page.mouse.move(0, 0)
 
@@ -289,6 +291,7 @@ def test_h5_h6_translation_hover_flipped_lemma_alt_mouseout_and_click_persistenc
     # H5c: RMB-flipping a source span must still resolve peers via canonical data-lower-clean/manifest, not flipped textContent.
     der_first.click(button="right")
     assert "flipped" in (der_first.get_attribute("class") or "")
+    page.mouse.move(0, 0)
     der_first.hover()
     assert "lemma-peer-highlight" in (_source_words(page, ["der"]).nth(1).get_attribute("class") or ""), (
         "H5: Hovering RMB-flipped source span lost canonical lemma peer lookup"
@@ -298,22 +301,31 @@ def test_h5_h6_translation_hover_flipped_lemma_alt_mouseout_and_click_persistenc
 
     # H6: Clicking translation span corresponding to 2nd 'der' persists via notifyAHKSelection, highlights 2nd 'der',
     # and deselecting while 1st 'der' is also active keeps row 'der' selected.
-    page.evaluate("window.__fetches = []")
+    page.evaluate(
+        """() => {
+            window.__notifyCalls = 0;
+            const origNotify = window.notifyAHKSelection;
+            window.notifyAHKSelection = function() {
+                window.__notifyCalls++;
+                return origNotify && origNotify.apply(this, arguments);
+            };
+        }"""
+    )
     trans_for_second_der = page.locator("#translation-container span.word.hl-mvp").nth(2)
     trans_for_second_der.click()
     assert "highlight-orange-active" in (_source_words(page, ["der"]).nth(1).get_attribute("class") or ""), (
         "H6: Clicking translation span did not apply primary highlight to mapped second occurrence"
     )
     assert "hl-mvp-pin" in (_source_words(page, ["der"]).nth(1).get_attribute("class") or "")
-    fetches = page.evaluate("() => window.__fetches")
-    assert len(fetches) >= 1, "H6: Translation-span click did not persist selection via notifyAHKSelection()"
+    assert page.evaluate("() => window.__notifyCalls") >= 1, "H6: Translation-span click did not persist selection via notifyAHKSelection()"
 
     # Also select first 'der' in source, then click translation span again to deselect 2nd 'der':
     # row 'der' must remain selected because 1st 'der' still needs it.
+    der_row_id = int(page.locator("#lemma-table tbody tr", has_text="der").first.get_attribute("data-row-id"))
     _source_words(page, ["der"]).nth(0).click()
     trans_for_second_der.click()
     selected_ids = json.loads(page.evaluate("window.getSelectedRows()"))
-    assert 1 in selected_ids, f"H6: Deselecting translation span wiped row 1 still needed by active 1st 'der': {selected_ids}"
+    assert der_row_id in selected_ids, f"H6: Deselecting translation span wiped row {der_row_id} still needed by active 1st 'der': {selected_ids}"
 
 
 def test_h7_reversible_table_marquee_drag_and_container_constituents(page, tmp_path):
@@ -358,9 +370,17 @@ def test_h7_reversible_table_marquee_drag_and_container_constituents(page, tmp_p
     page.mouse.move(*centers[1])
     page.mouse.up(button="left")
 
+    expected_lemmas = sorted(
+        page.evaluate(
+            """() => {
+                const trs = document.querySelectorAll('#lemma-table tbody tr[data-row-id]');
+                return [window.getRowLemma(trs[0]), window.getRowLemma(trs[1])];
+            }"""
+        )
+    )
     selected_lemmas = page.evaluate("() => Object.keys(window.AppState.selectedLemmas).filter(k => window.AppState.selectedLemmas[k]).sort()")
-    assert selected_lemmas == ["eins", "zwei"], (
-        f"H7: Reversing table marquee drag leaked swept lemmas in AppState.selectedLemmas: {selected_lemmas}"
+    assert selected_lemmas == expected_lemmas, (
+        f"H7: Reversing table marquee drag leaked swept lemmas in AppState.selectedLemmas: {selected_lemmas} != {expected_lemmas}"
     )
     selected_ids = json.loads(page.evaluate("window.getSelectedRows()"))
     assert 99 in selected_ids, f"H7: Container-mode table drag dropped merged data-all-row-ids constituent 99: {selected_ids}"
@@ -407,17 +427,18 @@ def test_h8_sse_remote_deselect_and_restore_client_view_sqlite_authority(page, p
     client_id = re.search(r"kw-client=([0-9a-f]{32})", page.url).group(1)
     manifest = page.evaluate('() => JSON.parse(document.getElementById("token-map").textContent)')
     der_tok = next(t for t in manifest if t.get("lower_clean") == "der")
-    ClientViewAdapter(adapter.db).save(
+    ClientViewAdapter(adapter.db).set(
         zid,
         client_id,
-        active_card=1,
-        active_tokens=[{
+        1,
+        [{
             "visual_idx": der_tok["visual_idx"],
             "lemma": "der",
             "atomic_id": 0,
             "atomic_row_ids": [0],
             "row_ids": [0],
-            "sentence_idx": 1,
+            "sentence_idx": der_tok["sentence_idx"],
+            "token_order": der_tok["token_order"],
         }],
     )
     page.reload()
@@ -634,6 +655,9 @@ def test_m5_table_css_chip_weight_pin_border_toolbar_var_and_compact_dock(page, 
         }"""
     )
     page.locator(".kw-workspace-tab-bar").hover()
+    page.wait_for_function(
+        "() => getComputedStyle(document.querySelector('.kw-workspace-tab-bar')).backgroundColor === 'rgb(12, 34, 56)'"
+    )
     hover_bg = page.evaluate("() => getComputedStyle(document.querySelector('.kw-workspace-tab-bar')).backgroundColor")
     assert hover_bg == "rgb(12, 34, 56)", f"M5: .kw-tab-dock-top:hover ignored --toolbar-bg: {hover_bg}"
 
