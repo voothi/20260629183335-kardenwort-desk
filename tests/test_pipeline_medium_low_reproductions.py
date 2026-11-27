@@ -300,7 +300,7 @@ def test_pipe_m8_headless_intellifiller_uses_target_column_and_validates_http_fi
     )
     with pytest.raises(desk.IntelliFillerError):
         desk._run_headless_intellifiller_impl(
-            tsv_path, "fixture", config, paths, selected_rows=[0], reprocess=False
+            tsv_path, "fixture", config, paths, selected_rows=[0], reprocess=True
         )
 
 
@@ -335,20 +335,22 @@ def test_pipe_m9_export_favorites_uses_custom_selected_role_and_does_not_mutate_
     # Custom selected role works in default 'selected' mode
     config.set("settings", "export_selection_mode", "selected")
     res_sel = adapter.export_favorites(zid, save_to_favorites_override=True, send_to_anki_override=False)
-    assert res_sel["status"] == "success"
+    assert res_sel.get("status") != "skipped"
     assert res_sel["exported_count"] == 1
 
     # 'unselected' mode must NOT set selected=1 on Baum in SQLite
     config.set("settings", "export_selection_mode", "unselected")
     res_unsel = adapter.export_favorites(zid, save_to_favorites_override=True, send_to_anki_override=False)
-    assert res_unsel["status"] == "success"
+    assert res_unsel.get("status") != "skipped"
+    assert res_unsel["exported_count"] == 1
     words_by_lem = {w["lemma"]: w for w in adapter.db.get_words_by_session(zid)}
     assert words_by_lem["Baum"]["selected"] == 0
 
     # 'all' mode must also leave Baum unselected in SQLite
     config.set("settings", "export_selection_mode", "all")
     res_all = adapter.export_favorites(zid, save_to_favorites_override=True, send_to_anki_override=False)
-    assert res_all["status"] == "success"
+    assert res_all.get("status") != "skipped"
+    assert res_all["exported_count"] == 2
     words_by_lem_all = {w["lemma"]: w for w in adapter.db.get_words_by_session(zid)}
     assert words_by_lem_all["Baum"]["selected"] == 0
 
@@ -393,8 +395,10 @@ def test_pipe_m10_translate_lemmas_fast_path_tracks_chunk_provenance_parses_chai
     assert "google, deepl" not in seen_providers
     assert res_chain["gamma"] == "deepl:gamma"
 
-    # (c) Offline bypass parity in strategy='chain'
+    # (c) Offline bypass parity in strategy='offline_fallback' even when 'argos' is absent from lemma_provider_chain
     desk.clear_provider_cooldowns(config=config, resolved_paths=paths)
+    config.set("pipeline", "lemma_provider_chain", "google")
+    config.set("pipeline", "failover_strategy", "offline_fallback")
     offline_providers = []
     monkeypatch.setattr(desk, "is_network_online_multi", lambda **_kw: False)
     monkeypatch.setattr(

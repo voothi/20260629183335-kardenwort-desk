@@ -2626,12 +2626,17 @@ def aggregate_sequential_distinct(
 
     def _sort_key(item):
         k = item[0]
-        if isinstance(k, (int, float)):
-            return (0, k)
+        if isinstance(k, tuple):
+            return (0, tuple(
+                (0, float(x)) if isinstance(x, (int, float)) and not isinstance(x, bool) else (1, str(x))
+                for x in k
+            ))
+        if isinstance(k, (int, float)) and not isinstance(k, bool):
+            return (0, ((0, float(k)),))
         try:
-            return (0, int(str(k).strip()))
+            return (0, ((0, float(int(str(k).strip()))),))
         except Exception:
-            return (1, str(k))
+            return (1, ((1, str(k)),))
 
     sorted_items = sorted(items, key=_sort_key)
     seen_lower = set()
@@ -4558,13 +4563,21 @@ class SqliteStorageAdapter(StorageAdapter):
                             if text_provenance:
                                 sent_map[s_idx]["text_provenance"] = text_provenance
 
-                # Extract word fields
-                quotation = get_col_val(row, "quotation") or get_col_val(row, "wordsourceinflectedform") or get_col_val(row, "wordsource") or ""
-                lemma = get_col_val(row, "wordsource")
-                inflected = get_col_val(row, "wordsourceinflectedform")
-                morph = get_col_val(row, "wordsourcemorphologyai")
-                ipa = get_col_val(row, "wordsourceipa")
-                w_dest = get_col_val(row, "worddestination")
+                # Extract word fields (honoring configured role_fields alongside canonical defaults)
+                lemma_col_name = role_fields.get("lemma", "WordSource")
+                inflected_col_name = role_fields.get("inflected", "WordSourceInflectedForm")
+                morph_col_name = role_fields.get("morphology", "WordSourceMorphologyAI")
+                ipa_col_name = role_fields.get("ipa", "WordSourceIPA")
+                word_dest_col_name = role_fields.get("word_translation", "WordDestination")
+                pos_col_name = role_fields.get("pos", "WordSourcePOS")
+                gender_col_name = role_fields.get("gender", "WordSourceGender")
+
+                quotation = get_col_val(row, "quotation") or get_col_val(row, inflected_col_name) or get_col_val(row, "wordsourceinflectedform") or get_col_val(row, lemma_col_name) or get_col_val(row, "wordsource") or ""
+                lemma = get_col_val(row, lemma_col_name) or get_col_val(row, "wordsource")
+                inflected = get_col_val(row, inflected_col_name) or get_col_val(row, "wordsourceinflectedform")
+                morph = get_col_val(row, morph_col_name) or get_col_val(row, "wordsourcemorphologyai")
+                ipa = get_col_val(row, ipa_col_name) or get_col_val(row, "wordsourceipa")
+                w_dest = get_col_val(row, word_dest_col_name) or get_col_val(row, "worddestination")
                 w_dest_failed = is_stored_translation_failure(w_dest)
                 if w_dest_failed:
                     w_dest = ""
@@ -4580,8 +4593,8 @@ class SqliteStorageAdapter(StorageAdapter):
                 deck = get_col_val(row, "deck") or None
                 oxford = get_col_val(row, "classificationoxford") or None
                 goethe = get_col_val(row, "classificationgoethe") or None
-                pos_val = get_col_val(row, "wordsourcepos") or get_col_val(row, "pos") or None
-                gender_val = get_col_val(row, "wordsourcegender") or get_col_val(row, "gender") or None
+                pos_val = get_col_val(row, pos_col_name) or get_col_val(row, "wordsourcepos") or get_col_val(row, "pos") or None
+                gender_val = get_col_val(row, gender_col_name) or get_col_val(row, "wordsourcegender") or get_col_val(row, "gender") or None
 
                 existing_w = self._matching_existing_word(
                     existing_words_by_coord, s_idx, token_order, lemma
@@ -4877,7 +4890,19 @@ class SqliteStorageAdapter(StorageAdapter):
                     if t_ord_int is not None and (s_idx_int, t_ord_int) in overview_selected_coords:
                         word["selected"] = 1
 
-            selected_field = self._role_fields(headers).get('selected', 'DeskSelected').lower()
+            restore_roles = self._role_fields(headers)
+            selected_field = restore_roles.get('selected', 'DeskSelected').lower()
+            lemma_role_field = restore_roles.get('lemma', 'WordSource').lower()
+            inflected_role_field = restore_roles.get('inflected', 'WordSourceInflectedForm').lower()
+            word_dest_role_field = restore_roles.get('word_translation', 'WordDestination').lower()
+            morph_role_field = restore_roles.get('morphology', 'WordSourceMorphologyAI').lower()
+            ipa_role_field = restore_roles.get('ipa', 'WordSourceIPA').lower()
+            pos_role_field = restore_roles.get('pos', 'WordSourcePOS').lower()
+            gender_role_field = restore_roles.get('gender', 'WordSourceGender').lower()
+            sent_idx_role_field = restore_roles.get('sentence_index', 'SentenceSourceIndex').lower()
+            sent_src_role_field = restore_roles.get('sentence', 'SentenceSource').lower()
+            sent_dst_role_field = restore_roles.get('sentence_destination', 'SentenceDestination').lower()
+            sent_dst2_role_field = restore_roles.get('sentence_destination2', 'SentenceDestination2').lower()
             data_rows = []
             for word in unique_db_words:
                 s_idx = word.get("sentence_index", 1)
@@ -4946,25 +4971,25 @@ class SqliteStorageAdapter(StorageAdapter):
                 for h, h_lower in header_pairs:
                     if h_lower == "quotation":
                         row_cells.append(str(word.get("quotation") or ""))
-                    elif h_lower in ("wordsource", "lemma"):
+                    elif h_lower in ("wordsource", "lemma", lemma_role_field):
                         row_cells.append(str(word.get("lemma") or ""))
                     elif h_lower == "wordsource2":
                         val = extra_fields.get(h) if h in extra_fields else (word.get("lemma") or "")
                         row_cells.append(str(val or ""))
-                    elif h_lower in ("wordsourceinflectedform", "inflected_form", "inflectedform"):
+                    elif h_lower in ("wordsourceinflectedform", "inflected_form", "inflectedform", inflected_role_field):
                         row_cells.append(str(word.get("inflected_form") or ""))
                     elif h_lower == "wordsourceinflectedform2":
                         val = extra_fields.get(h) if h in extra_fields else (word.get("inflected_form") or "")
                         row_cells.append(str(val or ""))
-                    elif h_lower in ("worddestination", "word_destination", "word_translation"):
+                    elif h_lower in ("worddestination", "word_destination", "word_translation", word_dest_role_field):
                         row_cells.append(sanitize_translation_value(word.get("word_destination") or ""))
                     elif h_lower in ("worddestinationinflectedform", "word_destination_inflected"):
                         row_cells.append(sanitize_translation_value(word.get("word_destination_inflected") or ""))
-                    elif h_lower == "tokenorder":
+                    elif h_lower in ("tokenorder", "token_order"):
                         row_cells.append(str(word.get("token_order", 0)))
-                    elif h_lower in ("wordsourcemorphologyai", "morphology", "morphologyai"):
+                    elif h_lower in ("wordsourcemorphologyai", "morphology", "morphologyai", morph_role_field):
                         row_cells.append(str(word.get("morphology") or ""))
-                    elif h_lower in ("wordsourceipa", "ipa"):
+                    elif h_lower in ("wordsourceipa", "ipa", ipa_role_field):
                         row_cells.append(str(word.get("ipa") or ""))
                     elif h_lower in ("deskselected", "selected", selected_field):
                         t_ord = word.get("token_order")
@@ -4982,28 +5007,28 @@ class SqliteStorageAdapter(StorageAdapter):
                         row_cells.append(str(word.get("classification_oxford") or ""))
                     elif h_lower in ("classificationgoethe", "classification_goethe"):
                         row_cells.append(str(word.get("classification_goethe") or ""))
-                    elif h_lower in ("wordsourcepos", "pos"):
+                    elif h_lower in ("wordsourcepos", "pos", pos_role_field):
                         row_cells.append(str(word.get("pos") or ""))
-                    elif h_lower in ("wordsourcegender", "gender"):
+                    elif h_lower in ("wordsourcegender", "gender", gender_role_field):
                         row_cells.append(str(word.get("gender") or ""))
-                    elif h_lower == "sentencesourceindex":
+                    elif h_lower in ("sentencesourceindex", sent_idx_role_field):
                         row_cells.append(str(s_idx))
                     elif h_lower == "sentencesourcecontextleft":
                         row_cells.append(src_left)
-                    elif h_lower == "sentencesource":
+                    elif h_lower in ("sentencesource", sent_src_role_field):
                         row_cells.append(src_curr)
                     elif h_lower == "sentencesourcecontextright":
                         row_cells.append(src_right)
                     elif h_lower == "sentencedestinationcontextleft":
                         row_cells.append(dst_left)
-                    elif h_lower == "sentencedestination":
+                    elif h_lower == "sentencedestination2" or (h_lower == sent_dst2_role_field and h_lower != "sentencedestination"):
+                        row_cells.append(dst2_curr)
+                    elif h_lower == "sentencedestination" or (h_lower == sent_dst_role_field and h_lower != "sentencedestination2"):
                         row_cells.append(dst_curr)
                     elif h_lower == "sentencedestinationcontextright":
                         row_cells.append(dst_right)
                     elif h_lower == "sentencedestination2contextleft":
                         row_cells.append(dst2_left)
-                    elif h_lower == "sentencedestination2":
-                        row_cells.append(dst2_curr)
                     elif h_lower == "sentencedestination2contextright":
                         row_cells.append(dst2_right)
                     elif h_lower == "sentencesourceipa":
@@ -5699,10 +5724,56 @@ class SqliteStorageAdapter(StorageAdapter):
                 raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
 
         restored = self.restore_session(session_zid)
-        headers = restored["headers"]
-        data_rows = restored["data_rows"]
+        headers, data_rows = reword.restored_manifest_rows(restored)
         db_words = restored.get("words", [])
         session = restored.get("session", {})
+
+        if (
+            rendered_manifest is not None
+            and isinstance(rendered_manifest, (tuple, list))
+            and len(rendered_manifest) == 2
+        ):
+            r_headers, r_rows = rendered_manifest
+            if (
+                isinstance(r_headers, (list, tuple))
+                and isinstance(r_rows, (list, tuple))
+                and "TokenOrder" not in r_headers
+                and "token_order" not in r_headers
+                and db_words
+                and len(r_rows) == len(db_words)
+            ):
+                r_roles = self._role_fields(list(r_headers))
+                r_s_field = r_roles.get("sentence_index", "SentenceSourceIndex")
+                r_l_field = r_roles.get("lemma", "WordSource")
+                r_q_field = "Quotation" if "Quotation" in r_headers else r_l_field
+                if r_s_field in r_headers and r_l_field in r_headers:
+                    si_c = r_headers.index(r_s_field)
+                    l_c = r_headers.index(r_l_field)
+                    q_c = r_headers.index(r_q_field) if r_q_field in r_headers else l_c
+                    sig_to_tok: Dict[Tuple[str, str, str], List[str]] = {}
+                    for w_item in db_words:
+                        sig = (
+                            str(w_item.get("sentence_index", 1)).strip(),
+                            str(w_item.get("lemma") or "").strip().lower(),
+                            str(w_item.get("quotation") or w_item.get("lemma") or "").strip().lower(),
+                        )
+                        sig_to_tok.setdefault(sig, []).append(str(w_item.get("token_order", 0)))
+                    if all(len(v) == 1 for v in sig_to_tok.values()):
+                        enriched_rows = []
+                        ok_match = True
+                        for r_item in r_rows:
+                            sig = (
+                                str(r_item[si_c]).strip() if si_c < len(r_item) else "",
+                                str(r_item[l_c]).strip().lower() if l_c < len(r_item) else "",
+                                str(r_item[q_c]).strip().lower() if q_c < len(r_item) else "",
+                            )
+                            tok_list = sig_to_tok.get(sig)
+                            if not tok_list:
+                                ok_match = False
+                                break
+                            enriched_rows.append(list(r_item) + [tok_list[0]])
+                        if ok_match:
+                            rendered_manifest = (list(r_headers) + ["TokenOrder"], enriched_rows)
 
         resolved_explicit = None
         if (
@@ -5753,7 +5824,13 @@ class SqliteStorageAdapter(StorageAdapter):
             except ValueError as exc:
                 raise StructuredError(ErrorCode.INVALID_PAYLOAD, str(exc)) from exc
 
-        selected_col_idx = headers.index("DeskSelected") if "DeskSelected" in headers else -1
+        export_role_fields = self._role_fields(headers)
+        selected_col_name = export_role_fields.get("selected", "DeskSelected")
+        selected_col_idx = (
+            headers.index(selected_col_name)
+            if selected_col_name in headers
+            else (headers.index("DeskSelected") if "DeskSelected" in headers else -1)
+        )
 
         export_selection_mode = "selected"
         if self.config and hasattr(self.config, "get"):
@@ -5805,14 +5882,15 @@ class SqliteStorageAdapter(StorageAdapter):
                 "message": "Warning: None of the selected row indices were valid.",
             }
 
-        # Auto-save selected=1 back into SQLite for the exported words
-        try:
-            selected_set = set(actual_export_rows)
-            for row_idx, word in enumerate(db_words):
-                if row_idx in selected_set and word.get("id"):
-                    self.db.update_word(word["id"], {"selected": 1}, zid=zid)
-        except Exception as e:
-            logger.warning(f"Failed to auto-save selected state to SQLite: {e}")
+        # Auto-save selected=1 back into SQLite only for explicit 'selected' export mode
+        if export_selection_mode == "selected":
+            try:
+                selected_set = set(actual_export_rows)
+                for row_idx, word in enumerate(db_words):
+                    if row_idx in selected_set and word.get("id"):
+                        self.db.update_word(word["id"], {"selected": 1}, zid=zid)
+            except Exception as e:
+                logger.warning(f"Failed to auto-save selected state to SQLite: {e}")
 
         # Check if session belongs to any project hierarchy and resolve deck path
         try:
@@ -8241,13 +8319,21 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
     visited = set(visited_providers or ())
 
     chain, strategy = resolve_provider_chain(config, task_type='lemma')
-    norm_p = (provider or "").strip().lower()
-    if not norm_p or norm_p == 'default' or (chain and norm_p == chain[0]):
+    raw_providers = [p.strip().lower() for p in str(provider or "").split(",") if p.strip()]
+    if not raw_providers or raw_providers == ['default']:
         candidates = list(chain)
         active_provider = chain[0] if chain else 'google'
+    elif len(raw_providers) > 1:
+        candidates = list(dict.fromkeys(raw_providers + [p for p in chain if p not in raw_providers]))
+        active_provider = candidates[0]
     else:
-        candidates = [norm_p] + [p for p in chain if p != norm_p]
-        active_provider = norm_p
+        norm_p = raw_providers[0]
+        if chain and norm_p == chain[0]:
+            candidates = list(chain)
+            active_provider = chain[0]
+        else:
+            candidates = [norm_p] + [p for p in chain if p != norm_p]
+            active_provider = norm_p
 
     if active_provider in visited:
         logger.warning(f"Fast-path cycle detected for provider '{active_provider}' (visited: {visited}). Terminating fast-path recursion.")
@@ -8289,6 +8375,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         chunk_visited = set(visited)
         for chunk in chunks:
             chunk_result = translate_lemmas_fast_path(chunk, source, target, config, resolved_paths, active_provider, zid=zid, on_failover=on_failover, visited_providers=chunk_visited, **kwargs)
+            this_chunk_prov = getattr(chunk_result, 'provenance', None) or chunk_prov
             if hasattr(chunk_result, 'provenance') and chunk_result.provenance:
                 chunk_prov = chunk_result.provenance
                 if str(chunk_prov).startswith("live:"):
@@ -8296,10 +8383,12 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                     if cand_p and cand_p != active_provider:
                         chunk_visited.add(active_provider)
                         active_provider = cand_p
-            translations.update(chunk_result)
+            for k_lem, v_tr in chunk_result.items():
+                v_prov = getattr(v_tr, 'provenance', None) or this_chunk_prov
+                translations[k_lem] = ProvenanceString(str(v_tr), provenance=v_prov)
         return ProvenanceDict(translations, provenance=chunk_prov)
 
-    if strategy == 'offline_fallback' and check_ips and active_provider != 'argos' and 'argos' in candidates:
+    if strategy == 'offline_fallback' and check_ips and active_provider != 'argos' and 'argos' in OFFLINE_TRANSLATION_PROVIDERS:
         if not is_network_online_multi(hosts=check_ips):
             logger.warning(f"Fast connectivity check to {check_ips} failed. Bypassing online lemma providers and switching to Argos.")
             from_lp = active_provider
@@ -8949,7 +9038,7 @@ def _build_chunks(lines, chunk_size, config):
                 continue
 
             line_len = len(line)
-            if len(chunk) >= adaptive_max_lines or (chunk_char_count + line_len) > adaptive_max_chars:
+            if chunk and (len(chunk) >= adaptive_max_lines or (chunk_char_count + line_len) > adaptive_max_chars):
                 chunks.append((chunk, chunk_indices))
                 chunk = []
                 chunk_indices = []
@@ -9128,8 +9217,6 @@ def _render_initial_card_translation(card, active_sentence, text_mode, config, p
     rendered = format_translated_html(
         translated, text_mode=text_mode, text=card["source_text"], config=config, provenance=card_prov,
     )
-    if not card_prov and provenance_attrs:
-        rendered = rendered.replace("<div", f"<div{provenance_attrs}")
     return rendered or "<div></div>"
 
 
@@ -9143,7 +9230,9 @@ def format_initial_card_translations(cards, active_sentence, text_mode, config, 
 
 
 def _is_numeric_key(key):
-    return isinstance(key, int) or (isinstance(key, str) and key.isdigit())
+    return (isinstance(key, int) and not isinstance(key, bool)) or (
+        isinstance(key, str) and key.isascii() and key.isdigit()
+    )
 
 
 def _nonempty_values(values):
@@ -9152,8 +9241,12 @@ def _nonempty_values(values):
 
 def _dict_translation_entries(mapping):
     numeric = sorted(filter(_is_numeric_key, mapping), key=int)
-    entries = [(k, mapping[k]) for k in numeric if mapping[k]]
-    return entries if entries else _nonempty_values(mapping.values())
+    if numeric:
+        return [(k, mapping[k]) for k in numeric if isinstance(mapping[k], str) and mapping[k].strip()]
+    full_text = mapping.get('FULL_TEXT')
+    if isinstance(full_text, str) and full_text.strip():
+        return [(0, full_text)]
+    return []
 
 
 def _extract_translation_entries(sentence_translations):
@@ -9597,18 +9690,22 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
                         raise IntelliFillerError(resp.get("message", "IntelliFiller server returned error"), envelope=resp)
 
                     if resp.get("status") == "success":
+                        from kardenwort_enrichment import checked_fields
+                        originals = {row["row_id"]: row for row in batch_rows}
                         try:
                             fields = reword.http_provider_fields(resp.get('enriched_rows', []), target_indices)
+                            validated_items = []
+                            for item in resp.get("enriched_rows", []):
+                                r_idx = reword.index_value(item['row_id'])
+                                cleaned_fields = checked_fields(item, originals[r_idx], fields[r_idx])
+                                validated_items.append((r_idx, cleaned_fields))
                         except reword.InvalidRewordTarget as exc:
                             raise IntelliFillerError(str(exc)) from exc
                         if produced_fields is not None:
                             produced_fields.update(fields)
-                        for item in resp.get("enriched_rows", []):
-                            r_idx = reword.index_value(item['row_id'])
+                        for r_idx, cleaned_fields in validated_items:
                             if r_idx is not None and 0 <= r_idx < len(data_rows):
-                                for k, v in item.items():
-                                    if k in ("row_id", "status", "zid", "trace_id"):
-                                        continue
+                                for k, val_str in cleaned_fields.items():
                                     if k not in headers:
                                         headers.append(k)
                                         for r in data_rows:
@@ -9616,16 +9713,6 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
                                     col_idx = headers.index(k)
                                     while len(data_rows[r_idx]) <= col_idx:
                                         data_rows[r_idx].append("")
-                                    if v is None:
-                                        val_str = ""
-                                    else:
-                                        val_str = str(v)
-                                    if k in ("gender", "WordSourceGender"):
-                                        norm_g = val_str.strip().lower()
-                                        if norm_g in ("none", "null", "n/a", "-") or norm_g not in ("m", "f", "n"):
-                                            val_str = ""
-                                        else:
-                                            val_str = norm_g
                                     data_rows[r_idx][col_idx] = val_str
 
                         save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
@@ -9682,8 +9769,9 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
                         if not line.startswith('#'):
                             headers = [h.strip() for h in line.split('\t')]
                             break
+                from kardenwort_enrichment import target_column
                 role_fields = get_role_fields(mapping, headers)
-                target_field = role_fields.get('word_translation', 'WordDestination')
+                target_field = target_column(role_fields, prompt_name)
                 if target_field:
                     cmd.extend(["--target-field", target_field])
             except Exception:
@@ -10390,17 +10478,33 @@ def _build_authoritative_sentences(
     else:
         src_sents = [ln.strip() for ln in text.splitlines() if ln.strip()] or [raw_text]
 
+    abs_to_compact: Dict[int, int] = {}
+    if eff_mode != 'single':
+        c_idx = 0
+        for a_idx, ln in enumerate(text.splitlines()):
+            if ln.strip():
+                abs_to_compact[a_idx] = c_idx + 1
+                c_idx += 1
+
+    def _mapped_sentence_idx(raw_key, default_s_idx: int) -> int:
+        if eff_mode != 'single' and abs_to_compact and any(not ln.strip() for ln in text.splitlines()):
+            if isinstance(raw_key, int) and not isinstance(raw_key, bool):
+                return abs_to_compact.get(raw_key, default_s_idx)
+            if isinstance(raw_key, str) and raw_key.isascii() and raw_key.isdigit():
+                return abs_to_compact.get(int(raw_key), default_s_idx)
+        return default_s_idx
+
     main_map: Dict[int, str] = {}
     padded_map: Dict[int, str] = {}
     if isinstance(translations_raw, dict):
-        for idx, s_idx, val in progressive.sentence_entries(translations_raw):
+        for raw_key, s_idx, val in progressive.sentence_entries(translations_raw):
             if not is_stored_translation_failure(val):
-                main_map[s_idx] = val
+                main_map[_mapped_sentence_idx(raw_key, s_idx)] = val
         raw_padded = translations_raw.get('PADDED')
         if isinstance(raw_padded, dict):
-            for _, s_idx, val in progressive.sentence_entries(raw_padded):
+            for raw_key, s_idx, val in progressive.sentence_entries(raw_padded):
                 if not is_stored_translation_failure(val):
-                    padded_map[s_idx] = val
+                    padded_map[_mapped_sentence_idx(raw_key, s_idx)] = val
     elif isinstance(translations_raw, str) and translations_raw.strip() and not is_stored_translation_failure(translations_raw):
         main_map[1] = translations_raw.strip()
 
@@ -12529,7 +12633,25 @@ html, body {{
     row_provenances = {}
     row_occurrences = {}
     occurrence_provenances = {}
-    if is_sqlite and not preloaded_bundle:
+    if isinstance(preloaded_bundle, dict) and preloaded_bundle.get("words"):
+        from kardenwort_db import sanitize_extra_fields as _san_ef
+        for w in preloaded_bundle["words"]:
+            try:
+                _occ = _san_ef(w.get("extra_fields")).get("occurrence_data")
+                if isinstance(_occ, dict) and len(_occ) > 0:
+                    row_occurrences[(str(w['sentence_index']), str(w['token_order']))] = sanitize_occurrence_translations(_occ)
+            except Exception:
+                pass
+            w_prov = w.get("word_provenance")
+            has_valid_dest = not is_unfinished_translation(w.get('word_destination'))
+            if w_prov or has_valid_dest:
+                occurrence_provenances[(str(w['sentence_index']), str(w['token_order']))] = w_prov or 'cached:sqlite'
+            if w_prov:
+                t_ord = str(w.get("token_order", ""))
+                row_provenances[t_ord] = w_prov
+                if t_ord.isdigit():
+                    row_provenances[int(t_ord)] = w_prov
+    elif is_sqlite and not preloaded_bundle:
         tsv_zid = extract_zid(working_tsv_path)
         for candidate_zid in [tsv_zid, zid]:
             if candidate_zid and str(candidate_zid).strip() and str(candidate_zid).strip() != "00000000000000":
@@ -12586,17 +12708,38 @@ html, body {{
                         lemma_val = row[col_lemma_wf].strip()
                         if lemma_val:
                             seen_lemmas.setdefault(lemma_val, []).append(i)
+                effective_wf_cfg = dict(wordfill_cfg)
+                if not effective_wf_cfg.get('target_language') and target_lang:
+                    effective_wf_cfg['target_language'] = target_lang
                 for lemma_val, row_indices in seen_lemmas.items():
-                    match = find_wordfill_match(lemma_val, language, wordfill_cfg, exclude_path=working_tsv_path)
+                    match = find_wordfill_match(lemma_val, language, effective_wf_cfg, exclude_path=working_tsv_path)
                     if match:
+                        before_states = {
+                            r_idx: (
+                                list(data_rows[r_idx]),
+                                col_word_dest != -1 and len(data_rows[r_idx]) > col_word_dest and not is_unfinished_translation(data_rows[r_idx][col_word_dest]),
+                            )
+                            for r_idx in row_indices
+                        }
                         lemma_rows = [data_rows[i] for i in row_indices]
                         apply_wordfill_to_rows(lemma_rows, headers, match)
                         wf_prov = match.get('_provenance', 'corpus:wordfill')
                         for r_idx in row_indices:
-                            if col_word_dest != -1 and len(data_rows[r_idx]) > col_word_dest and data_rows[r_idx][col_word_dest].strip():
-                                row_provenances[r_idx] = wf_prov
-                                if col_token_order != -1 and len(data_rows[r_idx]) > col_token_order and str(data_rows[r_idx][col_token_order]).strip():
-                                    row_provenances[str(data_rows[r_idx][col_token_order]).strip()] = wf_prov
+                            old_row, had_valid_dest = before_states[r_idx]
+                            row_changed = data_rows[r_idx] != old_row
+                            has_valid_dest_now = col_word_dest != -1 and len(data_rows[r_idx]) > col_word_dest and not is_unfinished_translation(data_rows[r_idx][col_word_dest])
+                            if not row_changed:
+                                continue
+                            t_ord_str = str(data_rows[r_idx][col_token_order]).strip() if col_token_order != -1 and len(data_rows[r_idx]) > col_token_order and str(data_rows[r_idx][col_token_order]).strip() else str(r_idx)
+                            s_idx_str = str(data_rows[r_idx][col_index]).strip() if col_index != -1 and len(data_rows[r_idx]) > col_index and str(data_rows[r_idx][col_index]).strip() else "1"
+                            existing_occ_prov = occurrence_provenances.get((s_idx_str, t_ord_str))
+                            filled_dest = (not had_valid_dest) and has_valid_dest_now
+                            if filled_dest or (not existing_occ_prov and not had_valid_dest):
+                                occurrence_provenances[(s_idx_str, t_ord_str)] = wf_prov
+                                if not is_sqlite:
+                                    row_provenances[r_idx] = wf_prov
+                                    if t_ord_str:
+                                        row_provenances[t_ord_str] = wf_prov
                         logger.info(
                             f"wordfill (desk): pre-filled {len(match)} field(s) for lemma '{lemma_val}' "
                             f"from corpus."
@@ -12614,7 +12757,7 @@ html, body {{
                             headers=headers,
                             data_rows=_sanitize_rows(data_rows),
                             working_tsv_path=None,
-                            row_provenances=row_provenances,
+                            row_provenances=occurrence_provenances or row_provenances,
                             zid=zid,
                         )
                     else:
@@ -12796,9 +12939,9 @@ html, body {{
                 selected_rows_to_enrich = []
                 for i, row in enumerate(data_rows):
                     if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
-                        need_dest = col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip()
-                        need_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
-                        need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
+                        need_dest = col_word_dest == -1 or is_field_empty(row, col_word_dest)
+                        need_ipa = col_ipa != -1 and is_field_empty(row, col_ipa)
+                        need_morph = col_morph != -1 and is_field_empty(row, col_morph)
                         if need_dest or need_ipa or need_morph:
                             selected_rows_to_enrich.append(i)
 
@@ -12806,14 +12949,20 @@ html, body {{
                     prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
                     if prompt_name:
                         if is_sqlite:
+                            target_coords = []
+                            for r_i in selected_rows_to_enrich:
+                                row_obj = data_rows[r_i]
+                                s_val = int(str(row_obj[col_index]).strip()) if (col_index != -1 and len(row_obj) > col_index and str(row_obj[col_index]).strip().isdigit()) else 1
+                                t_val = int(str(row_obj[col_token_order]).strip()) if (col_token_order != -1 and len(row_obj) > col_token_order and str(row_obj[col_token_order]).strip().isdigit()) else r_i
+                                target_coords.append({"session_zid": zid, "sentence_idx": s_val, "token_order": t_val})
                             storage_adapter.enrich_session_intellifiller(
-                                session_zid=zid, prompt_name=prompt_name, selected_rows=selected_rows_to_enrich, reprocess=True, zid=zid
+                                session_zid=zid, prompt_name=prompt_name, target_coordinates=target_coords, reprocess=False, zid=zid
                             )
                             comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
                         else:
                             with file_lock(working_tsv_path):
                                 save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
-                            run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths, selected_rows=selected_rows_to_enrich, reprocess=True)
+                            run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths, selected_rows=selected_rows_to_enrich, reprocess=False)
                             comments, headers, data_rows = load_tsv_rows(working_tsv_path)
             else:
                 lemmas_to_translate = []
@@ -12974,21 +13123,25 @@ html, body {{
                 sentence_translations[0] = extracted_translations.get(0, "")
         else:
             c_idx = 0
+            translated_line_count = 0
             for a_idx, ln in enumerate(text.splitlines()):
                 if ln.strip():
                     val = extracted_translations.get(c_idx, "")
                     if not val and ln.strip().startswith("#"):
                         val = ln.strip()
                     sentence_translations[a_idx] = val
+                    if val and not is_stored_translation_failure(val):
+                        translated_line_count += 1
                     if c_idx in extracted_provenances:
                         sentence_provenances[a_idx] = extracted_provenances[c_idx]
                     c_idx += 1
                 else:
                     sentence_translations[a_idx] = ""
             distinct_provs = {p for p in sentence_provenances.values() if p}
-            if len(distinct_provs) > 1:
+            all_translated_attributed = (translated_line_count > 0 and len(sentence_provenances) >= translated_line_count)
+            if len(distinct_provs) != 1 or not all_translated_attributed:
                 sentence_provenance = None
-            elif len(distinct_provs) == 1:
+            else:
                 sentence_provenance = next(iter(distinct_provs))
 
     if not read_only and not is_sqlite and not is_mismatch:
@@ -13042,10 +13195,10 @@ html, body {{
             # Monolithic mode enrichment
             if run_enrich == 'auto' and enrich_provider == 'intellifiller' and language != 'und' and prompt_name:
                 if is_sqlite:
-                    storage_adapter.enrich_session_intellifiller(zid, prompt_name, reprocess=True, zid=zid)
+                    storage_adapter.enrich_session_intellifiller(zid, prompt_name, reprocess=False, zid=zid)
                     comments, headers, data_rows = storage_adapter.load_tsv_rows(str(zid))
                 else:
-                    run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
+                    run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths, reprocess=False)
                     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
 
     if not read_only and is_progressive and not worker_launched:
@@ -13667,13 +13820,20 @@ html, body {{
 
         occ_attr = ""
         _row_occ = row_occurrences.get((str(sent_idx_val), str(token_order_val)))
-        if lemma_val and lemma_val.strip().lower() == "der":
+        is_ru_target = str(target_lang or "").strip().lower() == "ru"
+        if is_ru_target and lemma_val and lemma_val.strip().lower() == "der":
             if not isinstance(_row_occ, dict):
                 _row_occ = {}
             else:
                 _row_occ = dict(_row_occ)
             der_forms = DE_UNIFIED_ARTICLE_FORMS
+            try:
+                row_sent_int = int(str(sent_idx_val).strip())
+            except Exception:
+                row_sent_int = None
             for tok_item in source_tokens:
+                if row_sent_int is not None and len(source_sentences) > 1 and tok_item.get("sentence_idx") != row_sent_int:
+                    continue
                 if tok_item.get("is_word") and (tok_item.get("lower_clean") or "").lower() in der_forms:
                     v_key = str(tok_item.get("visual_idx"))
                     raw_w = (tok_item.get("text") or "").strip().lower()
@@ -13952,7 +14112,9 @@ html, body {{
 
         is_container = (smc.delivery_mode == "container")
         saved_overview_selections = set()
-        if is_container and not preloaded_bundle and zid and str(zid).strip() and str(zid).strip() != "00000000000000":
+        if is_container and isinstance(preloaded_bundle, dict) and preloaded_bundle.get("overview_selections") is not None:
+            saved_overview_selections = set(preloaded_bundle.get("overview_selections") or ())
+        elif is_container and zid and str(zid).strip() and str(zid).strip() != "00000000000000":
             try:
                 if hasattr(storage_adapter, "get_overview_selection_coords"):
                     saved_overview_selections = storage_adapter.get_overview_selection_coords(str(zid).strip())
@@ -13961,6 +14123,14 @@ html, body {{
             except Exception as e:
                 logger.warning(f"[{zid}] Failed to retrieve overview selections: {e}")
                 saved_overview_selections = set()
+
+        def _mid_order_key(mid_val: int) -> Tuple[int, int]:
+            if not (0 <= mid_val < len(overview_data_rows)):
+                return (1, mid_val)
+            row_m = overview_data_rows[mid_val]
+            s_k = int(str(row_m[col_index]).strip()) if (col_index != -1 and len(row_m) > col_index and str(row_m[col_index]).strip().isdigit()) else 1
+            t_k = int(str(row_m[col_token_order]).strip()) if (col_token_order != -1 and len(row_m) > col_token_order and str(row_m[col_token_order]).strip().isdigit()) else mid_val
+            return (s_k, t_k)
 
         used_primary_ids = set()
         for ov_id, ov_r in enumerate(overview_rows):
@@ -14000,46 +14170,37 @@ html, body {{
 
             # Translation deduplication and rollup across atomic occurrences for merged rows
             if col_word_dest != -1 and matched_ids and len(matched_ids) > 1:
-                sorted_matched_ids = sorted(
-                    matched_ids,
-                    key=lambda mid: int(overview_data_rows[mid][col_token_order]) if (col_token_order != -1 and len(overview_data_rows[mid]) > col_token_order and str(overview_data_rows[mid][col_token_order]).isdigit()) else mid
-                )
+                sorted_matched_ids = sorted(matched_ids, key=_mid_order_key)
                 trans_items = []
                 for mid in sorted_matched_ids:
                     if 0 <= mid < len(overview_data_rows) and len(overview_data_rows[mid]) > col_word_dest:
                         tr_cand = str(overview_data_rows[mid][col_word_dest] or "").strip()
                         if tr_cand and not is_stored_translation_failure(tr_cand) and tr_cand not in ("-", "--"):
-                            trans_items.append((mid, tr_cand))
+                            trans_items.append((_mid_order_key(mid), tr_cand))
                 if trans_items:
                     ov_trans = aggregate_sequential_distinct(trans_items, delimiter=", ")
 
             # Morphology metadata consolidation across atomic occurrences for merged rows
             if col_morph != -1 and matched_ids and len(matched_ids) > 1:
-                sorted_matched_ids = sorted(
-                    matched_ids,
-                    key=lambda mid: int(overview_data_rows[mid][col_token_order]) if (col_token_order != -1 and len(overview_data_rows[mid]) > col_token_order and str(overview_data_rows[mid][col_token_order]).isdigit()) else mid
-                )
+                sorted_matched_ids = sorted(matched_ids, key=_mid_order_key)
                 morph_items = []
                 for mid in sorted_matched_ids:
                     if 0 <= mid < len(overview_data_rows) and len(overview_data_rows[mid]) > col_morph:
                         m_cand = str(overview_data_rows[mid][col_morph] or "").strip()
                         if m_cand and not is_stored_translation_failure(m_cand) and m_cand not in ("-", "--"):
-                            morph_items.append((mid, m_cand))
+                            morph_items.append((_mid_order_key(mid), m_cand))
                 if morph_items:
                     ov_morph = aggregate_sequential_distinct(morph_items, delimiter="; ")
 
             ov_pos_raw = ov_r[col_pos] if col_pos != -1 and len(ov_r) > col_pos else ""
             if matched_ids and len(matched_ids) > 1 and col_pos != -1:
-                sorted_matched_ids = sorted(
-                    matched_ids,
-                    key=lambda mid: int(overview_data_rows[mid][col_token_order]) if (col_token_order != -1 and len(overview_data_rows[mid]) > col_token_order and str(overview_data_rows[mid][col_token_order]).isdigit()) else mid
-                )
+                sorted_matched_ids = sorted(matched_ids, key=_mid_order_key)
                 pos_items = []
                 for mid in sorted_matched_ids:
                     if 0 <= mid < len(overview_data_rows) and len(overview_data_rows[mid]) > col_pos:
                         p_val = overview_data_rows[mid][col_pos].strip()
                         if p_val:
-                            pos_items.append((mid, p_val))
+                            pos_items.append((_mid_order_key(mid), p_val))
                 if pos_items:
                     if is_ov_unified_der or not token_config.overview_deduplicate_pos_aware:
                         seen_ov_pos = []
@@ -14174,14 +14335,16 @@ html, body {{
 
             ov_occ_attr = ""
             ov_row_occ = {}
-            if row_occurrences:
+            if row_occurrences and col_index != -1 and col_token_order != -1:
                 for mid in matched_ids:
                     if 0 <= mid < len(overview_data_rows):
                         r_mid = overview_data_rows[mid]
-                        occurrence_key = (str(r_mid[col_index]), str(r_mid[col_token_order]))
-                        ov_row_occ.update(row_occurrences.get(occurrence_key, {}))
+                        if len(r_mid) > col_index and len(r_mid) > col_token_order:
+                            occurrence_key = (str(r_mid[col_index]), str(r_mid[col_token_order]))
+                            ov_row_occ.update(row_occurrences.get(occurrence_key, {}))
 
-            if is_ov_unified_der:
+            is_ov_ru_target = str(target_lang or "").strip().lower() == "ru"
+            if is_ov_unified_der and is_ov_ru_target:
                 der_forms = DE_UNIFIED_ARTICLE_FORMS
                 for tok_item in source_tokens:
                     if tok_item.get("is_word") and (tok_item.get("lower_clean") or "").lower() in der_forms:
@@ -14230,7 +14393,7 @@ html, body {{
                                 entry["inflected_tooltip"] = inf_tooltip
                             ov_row_occ[v_key] = entry
             elif matched_ids and len(matched_ids) > 1:
-                for mid in matched_ids:
+                for mid in sorted(matched_ids, key=_mid_order_key):
                     if 0 <= mid < len(overview_data_rows):
                         r_mid = overview_data_rows[mid]
                         m_inf = resolve_row_inflected_form(r_mid, col_inflected, col_inflected2, col_quotation, col_lemma).strip().lower()
@@ -14238,14 +14401,17 @@ html, body {{
                         m_pos = r_mid[col_pos].strip() if col_pos != -1 and len(r_mid) > col_pos else ""
                         m_morph = r_mid[col_morph].strip() if col_morph != -1 and len(r_mid) > col_morph else ""
                         m_t_ord = str(r_mid[col_token_order]) if col_token_order != -1 and len(r_mid) > col_token_order else str(mid)
+                        m_s_idx = int(str(r_mid[col_index]).strip()) if (col_index != -1 and len(r_mid) > col_index and str(r_mid[col_index]).strip().isdigit()) else None
                         for tok_item in source_tokens:
                             if tok_item.get("is_word"):
+                                tok_sent_idx = tok_item.get("sentence_idx")
+                                if m_s_idx is not None and tok_sent_idx is not None and tok_sent_idx != m_s_idx:
+                                    continue
                                 t_clean = (tok_item.get("lower_clean") or "").lower()
                                 t_ord_match = (str(tok_item.get("token_order")) == m_t_ord) if tok_item.get("token_order") is not None else False
                                 if t_ord_match or (t_clean in [f.strip() for f in m_inf.split(',')]):
                                     v_key = str(tok_item.get("visual_idx"))
                                     if v_key not in ov_row_occ:
-                                        tok_sent_idx = tok_item.get("sentence_idx")
                                         tok_sent_text = source_sentences[tok_sent_idx - 1] if (tok_sent_idx is not None and 1 <= tok_sent_idx <= len(source_sentences)) else ov_sentence
                                         ov_row_occ[v_key] = {
                                             "form": tok_item.get("text", "").strip(),
@@ -18482,26 +18648,52 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     active_text_prov = getattr(sentence_translations_raw, 'provenance', f"live:{main_text_provider}")
 
                     # Update sentences table directly in SQLite mode — never swallow persistence errors
+                    eff_text_mode = _effective_text_mode(text, getattr(args, 'text_mode', 'single'))
+                    abs_to_compact_sent = {}
+                    has_blank_lines = False
+                    if eff_text_mode != 'single':
+                        c_sent = 0
+                        for a_idx, ln in enumerate(text.splitlines()):
+                            if ln.strip():
+                                abs_to_compact_sent[a_idx] = c_sent + 1
+                                c_sent += 1
+                            else:
+                                has_blank_lines = True
+
+                    updated_sentence_count = 0
                     if is_sqlite and isinstance(sentence_translations_raw, dict):
                         padded_dict = sentence_translations_raw.get('PADDED') or {}
                         for s_idx_raw, trans in sentence_translations_raw.items():
-                            if s_idx_raw in ('FULL_TEXT', 'PADDED') or not (isinstance(s_idx_raw, int) or (str(s_idx_raw).isascii() and str(s_idx_raw).isdigit())):
+                            if s_idx_raw in ('FULL_TEXT', 'PADDED') or isinstance(s_idx_raw, bool) or not (isinstance(s_idx_raw, int) or (str(s_idx_raw).isascii() and str(s_idx_raw).isdigit())):
                                 continue
                             if trans and isinstance(trans, str) and not is_stored_translation_failure(trans):
-                                s_idx = int(s_idx_raw) + 1
+                                raw_int = int(s_idx_raw)
+                                s_idx = abs_to_compact_sent.get(raw_int, raw_int + 1) if (eff_text_mode != 'single' and has_blank_lines) else (raw_int + 1)
                                 ok_sent = storage_adapter.update_sentence_translation(
                                     zid, s_idx, trans, target_field="sentence_destination", zid=zid, provenance=active_text_prov
                                 )
                                 if ok_sent is False:
                                     raise RuntimeError(f"Sentence {s_idx} (sentence_destination) was not updated in SQLite")
+                                updated_sentence_count += 1
                                 if padded_dict:
-                                    padded_trans = padded_dict.get(s_idx_raw) or padded_dict.get(int(s_idx_raw) if str(s_idx_raw).isascii() and str(s_idx_raw).isdigit() else s_idx_raw)
+                                    padded_trans = padded_dict.get(s_idx_raw) or padded_dict.get(raw_int)
                                     if padded_trans and isinstance(padded_trans, str) and not is_stored_translation_failure(padded_trans):
                                         ok_pad = storage_adapter.update_sentence_translation(
                                             zid, s_idx, padded_trans, target_field="sentence_destination2", zid=zid, provenance=active_text_prov
                                         )
                                         if ok_pad is False:
                                             raise RuntimeError(f"Sentence {s_idx} (sentence_destination2) was not updated in SQLite")
+                    elif isinstance(sentence_translations_raw, dict):
+                        updated_sentence_count = sum(
+                            1
+                            for _, _, val in progressive.sentence_entries(sentence_translations_raw)
+                            if not is_stored_translation_failure(val)
+                        )
+                    elif isinstance(sentence_translations_raw, str) and sentence_translations_raw.strip() and not is_stored_translation_failure(sentence_translations_raw):
+                        updated_sentence_count = 1
+
+                    if updated_sentence_count == 0:
+                        raise RuntimeError("Sentence text translation produced zero valid translated sentences")
 
                     if data_rows or not is_sqlite:
                         c, h, data_rows = storage_adapter.load_tsv_rows(tsv_path)
@@ -18535,10 +18727,10 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id, row_provenances=projected_provs, occurrence_provenances=occurrence_provenances if is_sqlite else None, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter)
                 except Exception as e:
                     logger.warning(f"[{zid}] Sentence text translation failed (non-fatal, proceeding to lemma translation): {e}")
-                    stage_error = _translation_stage_error(e)
+                    stage_error = progressive.combine_worker_errors(stage_error, _translation_stage_error(e))
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
                     projected_provs = _project_sorted_row_provenances(sorted_rows, headers, role_fields, occurrence_provenances) if is_sqlite else row_provenances
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", translated_text="", zid=zid, trace_id=trace_id, row_provenances=projected_provs, occurrence_provenances=occurrence_provenances if is_sqlite else None, text_translation_status="failed", text_translation_failed=True, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", status="failed", translated_text="", zid=zid, trace_id=trace_id, row_provenances=projected_provs, occurrence_provenances=occurrence_provenances if is_sqlite else None, text_translation_status="failed", text_translation_failed=True, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter)
 
         if run_base == 'auto' and col_lemma != -1 and data_rows:
             lang = getattr(args, 'language', 'en')
@@ -18586,9 +18778,12 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                 selected_rows_to_enrich.append(i)
 
                     if selected_rows_to_enrich:
-                        data_rows = _progressive_worker_stage_enrichment(
+                        enrich_res = _progressive_worker_stage_enrichment(
                             tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="translated", selected_rows=selected_rows_to_enrich
                         )
+                        data_rows = enrich_res
+                        if isinstance(enrich_res, StageTranslationResult) and enrich_res.error:
+                            stage_error = progressive.combine_worker_errors(stage_error, enrich_res.error)
                     else:
                         sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
                         projected_provs = _project_sorted_row_provenances(sorted_rows, headers, role_fields, occurrence_provenances) if is_sqlite else row_provenances
@@ -18630,16 +18825,19 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                             with file_lock(tsv_path):
                                 comments, headers, current_rows = load_tsv_rows(tsv_path)
                                 for r_idx, row in enumerate(current_rows):
+                                    if r_idx not in eligible_rows:
+                                        continue
                                     if col_lemma != -1 and len(row) > col_lemma:
                                         lemma_val = row[col_lemma].strip()
                                         if col_word_dest != -1:
                                             while len(row) <= col_word_dest:
                                                 row.append("")
-                                            if lemma_val in lemma_translations:
-                                                row[col_word_dest] = lemma_translations[lemma_val]
+                                            if lemma_val in lemma_translations and is_unfinished_translation(row[col_word_dest]):
+                                                row[col_word_dest] = str(lemma_translations[lemma_val])
+                                                item_prov = getattr(lemma_translations[lemma_val], 'provenance', None) or fast_prov
                                                 t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(r_idx)
-                                                row_provenances[r_idx] = fast_prov
-                                                row_provenances[t_ord] = fast_prov
+                                                row_provenances[r_idx] = item_prov
+                                                row_provenances[t_ord] = item_prov
                                 save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
                                 data_rows = current_rows
 
@@ -18663,7 +18861,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
         logger.error(f"Failing in translated stage: {e}")
         failed_lemmas = chunk if 'chunk' in locals() else (lemmas_to_translate if 'lemmas_to_translate' in locals() else [])
         err_obj = _translation_stage_error(e, failed_lemmas)
-        stage_error = err_obj
+        stage_error = progressive.combine_worker_errors(stage_error, err_obj)
         results_dir = resolve_results_dir(resolved_paths, config)
         if zid and results_dir:
             sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
@@ -18679,15 +18877,19 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
     trace_id = getattr(args, 'trace_id', None) or f"{zid}:progressive:{stage_name}"
     storage_adapter = get_storage_adapter(config, resolved_paths)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+    stage_error = None
     try:
         lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
         batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=30)
+        reprocess_flag = bool(getattr(args, 'reprocess', False))
         if selected_rows is None:
             selected_rows = list(range(len(data_rows)))
 
         col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
         col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
         col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
+        col_sent_idx = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+        col_token_order = headers.index('TokenOrder') if 'TokenOrder' in headers else (headers.index('token_order') if 'token_order' in headers else -1)
 
         # Protection against empty lines slipping through to IntelliFiller
         valid_selected = []
@@ -18702,13 +18904,9 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
                 if source_idx != -1 and len(row) > source_idx and not str(row[source_idx]).strip():
                     continue
 
-                has_dest = col_word_dest != -1 and len(row) > col_word_dest and str(row[col_word_dest]).strip()
-                has_ipa = col_ipa != -1 and len(row) > col_ipa and str(row[col_ipa]).strip()
-                has_morph = col_morph != -1 and len(row) > col_morph and str(row[col_morph]).strip()
-
-                need_dest = col_word_dest != -1 and not has_dest
-                need_ipa = col_ipa != -1 and not has_ipa
-                need_morph = col_morph != -1 and not has_morph
+                need_dest = col_word_dest != -1 and is_field_empty(row, col_word_dest)
+                need_ipa = col_ipa != -1 and is_field_empty(row, col_ipa)
+                need_morph = col_morph != -1 and is_field_empty(row, col_morph)
 
                 if not (need_dest or need_ipa or need_morph):
                     continue
@@ -18722,18 +18920,24 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
             sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
             proj_provs = _project_sorted_row_provenances(sorted_rows, headers, role_fields, occ_provs) if is_sqlite else None
             safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id, row_provenances=proj_provs, occurrence_provenances=occ_provs, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter)
-            return data_rows
+            return StageTranslationResult(data_rows, None, None)
 
         prompt_val = getattr(args, 'prompt', None) or config.get(SEC_LANGUAGES, f"{getattr(args, 'language', 'en')}_prompt", fallback="")
         hb_interval = config.getfloat(SEC_PROGRESSIVE, 'worker_heartbeat_interval_seconds', fallback=3.0) if hasattr(config, 'getfloat') else 3.0
         record_worker_heartbeat(zid, getattr(storage_adapter, 'db', None), min_interval_seconds=hb_interval)
 
         if is_sqlite:
+            target_coordinates = []
+            for r_i in selected_rows:
+                row_obj = data_rows[r_i]
+                s_val = int(str(row_obj[col_sent_idx]).strip()) if (col_sent_idx != -1 and len(row_obj) > col_sent_idx and str(row_obj[col_sent_idx]).strip().isdigit()) else 1
+                t_val = int(str(row_obj[col_token_order]).strip()) if (col_token_order != -1 and len(row_obj) > col_token_order and str(row_obj[col_token_order]).strip().isdigit()) else r_i
+                target_coordinates.append({"session_zid": zid, "sentence_idx": s_val, "token_order": t_val})
             storage_adapter.enrich_session_intellifiller(
                 session_zid=zid,
                 prompt_name=prompt_val,
-                selected_rows=selected_rows,
-                reprocess=True,
+                target_coordinates=target_coordinates,
+                reprocess=reprocess_flag,
                 zid=zid,
                 trace_id=trace_id,
             )
@@ -18746,7 +18950,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
             for i in range(0, len(selected_rows), batch_size):
                 batch = selected_rows[i:i + batch_size]
                 logger.info(f"Running IntelliFiller for progressive batch {i // batch_size + 1}: {len(batch)} rows.")
-                run_headless_intellifiller(tsv_path, prompt_val, config, resolved_paths, selected_rows=batch, reprocess=True)
+                run_headless_intellifiller(tsv_path, prompt_val, config, resolved_paths, selected_rows=batch, reprocess=reprocess_flag)
 
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
                 sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
@@ -18759,6 +18963,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
             "provider": "intellifiller",
             "details": {}
         }
+        stage_error = err_obj
         results_dir = resolve_results_dir(resolved_paths, config)
         if zid and results_dir:
             sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
@@ -18767,7 +18972,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
         sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
         proj_provs = _project_sorted_row_provenances(sorted_rows, headers, role_fields, occ_provs) if is_sqlite else None
         safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=stage_name, status="failed", error=err_obj, zid=zid, trace_id=trace_id, row_provenances=proj_provs, occurrence_provenances=occ_provs, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter)
-    return data_rows
+    return StageTranslationResult(data_rows, None, stage_error)
 
 def cmd_retext(args):
     """@deprecated Legacy file-manifest retext CLI subcommand (frozen / maintenance-only). Superseded by HTTP POST /session/retext."""
@@ -18989,22 +19194,27 @@ def cmd_retext_worker(args):
             # source_text="" because retext never changes the source text;
             # sending it would cause receiveUpdate to wipe the span DOM.
             status_val = "failed" if worker_error else "success"
-            retext_provenances = {}
-            if is_sqlite:
-                try:
-                    db_words = storage_adapter.db.get_words_by_session(zid)
-                    for w in db_words:
-                        w_prov = w.get("word_provenance")
-                        if w_prov:
-                            t_ord = str(w.get("token_order", ""))
-                            retext_provenances[t_ord] = w_prov
-                            if t_ord.isdigit():
-                                retext_provenances[int(t_ord)] = w_prov
-                except Exception:
-                    pass
-            text_prov = f"live:{text_reprocess_provider}" if 'text_reprocess_provider' in locals() and text_reprocess_provider else None
+            retext_occ_provs = _seed_cli_occurrence_provenances(storage_adapter, zid, is_sqlite) if is_sqlite else None
             sorted_rows = sort_session_data_rows(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, source_text="", translated_text=translated_html, error=worker_error, zid=zid, trace_id=trace_id, config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter, row_provenances=retext_provenances, text_provenance=text_prov)
+            retext_provenances = (
+                _project_sorted_row_provenances(sorted_rows, headers, role_fields, retext_occ_provs)
+                if is_sqlite
+                else {}
+            )
+            actual_prov = getattr(sentence_translations, 'provenance', None)
+            if actual_prov:
+                text_prov = actual_prov
+            elif not worker_error and 'text_reprocess_provider' in locals() and text_reprocess_provider:
+                text_prov = f"live:{text_reprocess_provider}"
+            else:
+                text_prov = None
+            safe_write_update_js(
+                tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val,
+                source_text="", translated_text=translated_html, error=worker_error, zid=zid, trace_id=trace_id,
+                config=config, resolved_paths=resolved_paths, storage_adapter=storage_adapter,
+                row_provenances=retext_provenances, occurrence_provenances=retext_occ_provs,
+                text_provenance=text_prov,
+            )
         except Exception as fe:
             logger.error(f"Failed to write finished event in retext: {fe}")
 def get_batch_sibling_tsvs(working_tsv_path, max_delta_seconds=120):
@@ -19183,7 +19393,19 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
             dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
             with db.get_connection(read_only=True) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT zid FROM sessions WHERE deleted_at IS NULL AND zid != ?;", (my_zid,))
+                cursor.execute("SELECT source_language, target_language FROM sessions WHERE zid = ?;", (my_zid,))
+                cur_meta = cursor.fetchone()
+                cur_src_lang = cur_meta["source_language"] if cur_meta else None
+                cur_tgt_lang = cur_meta["target_language"] if cur_meta else None
+                sib_conds = ["deleted_at IS NULL", "zid != ?"]
+                sib_params: List[Any] = [my_zid]
+                if cur_src_lang:
+                    sib_conds.append("source_language = ?")
+                    sib_params.append(cur_src_lang)
+                if cur_tgt_lang:
+                    sib_conds.append("target_language = ?")
+                    sib_params.append(cur_tgt_lang)
+                cursor.execute(f"SELECT zid FROM sessions WHERE {' AND '.join(sib_conds)};", sib_params)
                 for row in cursor.fetchall():
                     szid = row["zid"] if isinstance(row, dict) or hasattr(row, 'keys') else row[0]
                     if not re.match(r'^\d{14}', str(szid)):
@@ -19452,7 +19674,10 @@ def cmd_progressive_worker(args):
                 with TraceTimer("cross_pollinate_from_siblings", zid_part, config, resolved_paths):
                     data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields, storage_adapter=storage_adapter, is_sqlite=is_sqlite)
             if not skip_intellifiller:
-                data_rows = _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
+                enrich_res = _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
+                data_rows = enrich_res
+                if isinstance(enrich_res, StageTranslationResult) and enrich_res.error:
+                    worker_error = progressive.combine_worker_errors(worker_error, enrich_res.error)
 
         except SystemExit as se:
             raise se
@@ -19974,6 +20199,8 @@ def core_edit_save(
                     raise StructuredError(ErrorCode.DESK_FAILED, f"Row index {row_id} is out of bounds (total rows: {len(data_rows)})")
 
             if data_rows[target_row_idx] is not None:
+                while len(data_rows[target_row_idx]) <= col_idx:
+                    data_rows[target_row_idx].append("")
                 data_rows[target_row_idx][col_idx] = val
 
         data_rows = [r for r in data_rows if r is not None]
