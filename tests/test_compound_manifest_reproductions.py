@@ -88,6 +88,16 @@ def test_tag_server_compound_tokens_multi_char_delimiters_and_mixed_camelcase(id
     assert None not in compound_ids
 
 
+def _row_id_by_lemma(html_text: str, lemma: str) -> int:
+    session = island(html_text, "session-data")
+    headers = session["headers"]
+    lemma_col = headers.index("WordSource")
+    for idx, row in enumerate(session["data_rows"]):
+        if row[lemma_col] == lemma:
+            return idx
+    raise AssertionError(f"Lemma {lemma!r} not found in session-data rows")
+
+
 def test_irregular_compound_subtoken_attribution_en_and_de(tmp_path):
     en_ident = "test_tray_startup.py::test_startup_slice_has_bounded_branch_complexity"
     headers = [
@@ -106,9 +116,11 @@ def test_irregular_compound_subtoken_attribution_en_and_de(tmp_path):
     ]
     en_html = _render_sqlite_session(tmp_path, en_ident, "en", headers, en_rows, zid="20261127060412")
     en_manifest = island(en_html, "token-map")
+    have_row_id = _row_id_by_lemma(en_html, "have")
+    comp_row_id = _row_id_by_lemma(en_html, en_ident)
     has_tok = next(t for t in en_manifest if t.get("lower_clean") == "has")
-    assert has_tok.get("atomic_row_ids") == [1]
-    assert has_tok.get("compound_row_ids") == [0]
+    assert has_tok.get("atomic_row_ids") == [have_row_id]
+    assert has_tok.get("compound_row_ids") == [comp_row_id]
     assert has_tok.get("lemma") == "have"
     assert has_tok.get("compound_id") is not None
 
@@ -119,9 +131,11 @@ def test_irregular_compound_subtoken_attribution_en_and_de(tmp_path):
     ]
     de_html = _render_sqlite_session(tmp_path, de_text, "de", headers, de_rows, zid="20261127060413")
     de_manifest = island(de_html, "token-map")
+    haben_row_id = _row_id_by_lemma(de_html, "haben")
+    de_comp_row_id = _row_id_by_lemma(de_html, de_text)
     hat_tok = next(t for t in de_manifest if t.get("lower_clean") == "hat")
-    assert hat_tok.get("atomic_row_ids") == [1]
-    assert hat_tok.get("compound_row_ids") == [0]
+    assert hat_tok.get("atomic_row_ids") == [haben_row_id]
+    assert hat_tok.get("compound_row_ids") == [de_comp_row_id]
     assert hat_tok.get("lemma") == "haben"
 
 
@@ -144,12 +158,17 @@ def test_html_and_token_manifest_parity_on_20261127060412_shaped_fixture(tmp_pat
     ]
     html_text = _render_sqlite_session(tmp_path, source_text, "en", headers, rows, zid="20261127060414")
     manifest = island(html_text, "token-map")
+    comp_row_id = _row_id_by_lemma(html_text, en_ident)
     manifest_by_vidx = {str(t["visual_idx"]): t for t in manifest if t.get("is_word")}
     spans = _source_word_spans(html_text)
     assert len(spans) == len(manifest_by_vidx)
 
-    # All subtokens in the pytest node-id share one non-null compound_id and reference composite row 0.
-    ident_tokens = [t for t in manifest if t.get("is_word") and t.get("compound_id") is not None and 0 in (t.get("compound_row_ids") or [])]
+    # All subtokens in the pytest node-id share one non-null compound_id and reference composite row.
+    ident_tokens = [
+        t
+        for t in manifest
+        if t.get("is_word") and t.get("compound_id") is not None and comp_row_id in (t.get("compound_row_ids") or [])
+    ]
     assert len(ident_tokens) == 11
     assert len({t["compound_id"] for t in ident_tokens}) == 1
 
@@ -175,7 +194,7 @@ def test_html_and_token_manifest_parity_on_20261127060412_shaped_fixture(tmp_pat
 
 
 def test_filtered_empty_mapped_rows_does_not_resurrect_cross_sentence_stem(tmp_path):
-    source_text = "Cat's hat.\nCat sleeps."
+    source_text = "Cat's-other hat.\nCat-house sleeps."
     headers = [
         "Quotation",
         "WordSource",
@@ -185,10 +204,11 @@ def test_filtered_empty_mapped_rows_does_not_resurrect_cross_sentence_stem(tmp_p
         "SentenceSource",
         "DeskSelected",
     ]
-    # Only Sentence 2 has a row for "Cat"; Sentence 1's "Cat's" is filtered out by sentence isolation.
+    # Only Sentence 2 has a compound row for "Cat-house"; Sentence 1's "Cat's" inside "Cat's-other"
+    # must be filtered out by compound matching and must not resurrect Sentence 2's row via stem fallback.
     rows = [
-        ["hat", "hat", "hat", "шляпа", "1", "Cat's hat.", "0"],
-        ["Cat", "cat", "Cat", "кот", "2", "Cat sleeps.", "0"],
+        ["hat", "hat", "hat", "шляпа", "1", "Cat's-other hat.", "0"],
+        ["Cat-house", "Cat-house", "Cat-house", "кошкин-дом", "2", "Cat-house sleeps.", "0"],
     ]
     html_text = _render_sqlite_session(
         tmp_path,
@@ -197,7 +217,7 @@ def test_filtered_empty_mapped_rows_does_not_resurrect_cross_sentence_stem(tmp_p
         headers,
         rows,
         zid="20261127060415",
-        text_mode="sentences",
+        text_mode="multi",
     )
     manifest = island(html_text, "token-map")
     sent1_cats = next(
@@ -205,12 +225,14 @@ def test_filtered_empty_mapped_rows_does_not_resurrect_cross_sentence_stem(tmp_p
         if t.get("is_word") and t.get("source_sentence_idx") == 1 and t.get("text") == "Cat's"
     )
     assert not sent1_cats.get("row_ids"), (
-        f"Cross-sentence stem fallback resurrected row_ids={sent1_cats.get('row_ids')} on Sentence 1 token"
+        f"Filtered empty mapping resurrected row_ids={sent1_cats.get('row_ids')} on Sentence 1 token"
     )
+    sent1_span = next(s for s in _source_word_spans(html_text) if s.get("data-word-idx") == str(sent1_cats["visual_idx"]))
+    assert "not-connected" in (sent1_span.get("class") or "").split()
 
 
 def test_data_lower_clean_attribute_escaping(tmp_path):
-    source_text = 'foo"bar'
+    source_text = "Cat's"
     headers = [
         "Quotation",
         "WordSource",
@@ -230,12 +252,11 @@ def test_data_lower_clean_attribute_escaping(tmp_path):
         headers,
         rows,
         zid="20261127060416",
-        extra_config={"tokenization": {"apostrophe_chars": "',\""}},
     )
-    assert 'data-lower-clean="foo&quot;bar"' in html_text
+    assert 'data-lower-clean="cat&#x27;s"' in html_text
     spans = _source_word_spans(html_text)
     assert len(spans) == 1
-    assert spans[0].get("data-lower-clean") == 'foo"bar'
+    assert spans[0].get("data-lower-clean") == "cat's"
 
 
 def test_disable_css_suppresses_all_style_tags():

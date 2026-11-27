@@ -41,7 +41,7 @@ import http.client
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
-from typing import Optional, Any, Union, List, FrozenSet, TypedDict, Tuple, Dict, Set, Literal
+from typing import Callable, Optional, Any, Union, List, FrozenSet, TypedDict, Tuple, Dict, Set, Literal
 from enum import Enum, auto
 
 from kardenwort_grammar import (
@@ -11161,49 +11161,429 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             with _ACTIVE_ZIDS_LOCK:
                 _ACTIVE_ZIDS.discard(zid)
 
+_IRREGULAR_SUBTOKEN_LEMMAS: Dict[str, FrozenSet[str]] = {
+    # English irregular verbs and high-frequency irregular forms
+    "has": frozenset({"have"}),
+    "had": frozenset({"have"}),
+    "having": frozenset({"have"}),
+    "is": frozenset({"be"}),
+    "am": frozenset({"be"}),
+    "are": frozenset({"be"}),
+    "was": frozenset({"be"}),
+    "were": frozenset({"be"}),
+    "been": frozenset({"be"}),
+    "being": frozenset({"be"}),
+    "went": frozenset({"go"}),
+    "gone": frozenset({"go"}),
+    "goes": frozenset({"go"}),
+    "did": frozenset({"do"}),
+    "done": frozenset({"do"}),
+    "does": frozenset({"do"}),
+    "ran": frozenset({"run"}),
+    "saw": frozenset({"see"}),
+    "seen": frozenset({"see"}),
+    "took": frozenset({"take"}),
+    "taken": frozenset({"take"}),
+    "came": frozenset({"come"}),
+    "gave": frozenset({"give"}),
+    "given": frozenset({"give"}),
+    "made": frozenset({"make"}),
+    "said": frozenset({"say"}),
+    "got": frozenset({"get"}),
+    "gotten": frozenset({"get"}),
+    "knew": frozenset({"know"}),
+    "known": frozenset({"know"}),
+    "thought": frozenset({"think"}),
+    "brought": frozenset({"bring"}),
+    "bought": frozenset({"buy"}),
+    "caught": frozenset({"catch"}),
+    "taught": frozenset({"teach"}),
+    "fought": frozenset({"fight"}),
+    "found": frozenset({"find"}),
+    "held": frozenset({"hold"}),
+    "left": frozenset({"leave"}),
+    "lost": frozenset({"lose"}),
+    "met": frozenset({"meet"}),
+    "paid": frozenset({"pay"}),
+    "sat": frozenset({"sit"}),
+    "sold": frozenset({"sell"}),
+    "sent": frozenset({"send"}),
+    "spent": frozenset({"spend"}),
+    "stood": frozenset({"stand"}),
+    "told": frozenset({"tell"}),
+    "won": frozenset({"win"}),
+    "wrote": frozenset({"write"}),
+    "written": frozenset({"write"}),
+    "spoke": frozenset({"speak"}),
+    "spoken": frozenset({"speak"}),
+    "broke": frozenset({"break"}),
+    "broken": frozenset({"break"}),
+    "chose": frozenset({"choose"}),
+    "chosen": frozenset({"choose"}),
+    "drove": frozenset({"drive"}),
+    "driven": frozenset({"drive"}),
+    "fell": frozenset({"fall"}),
+    "fallen": frozenset({"fall"}),
+    "flew": frozenset({"fly"}),
+    "flown": frozenset({"fly"}),
+    "grew": frozenset({"grow"}),
+    "grown": frozenset({"grow"}),
+    "kept": frozenset({"keep"}),
+    "led": frozenset({"lead"}),
+    "meant": frozenset({"mean"}),
+    "rode": frozenset({"ride"}),
+    "ridden": frozenset({"ride"}),
+    "rose": frozenset({"rise"}),
+    "risen": frozenset({"rise"}),
+    "shook": frozenset({"shake"}),
+    "shaken": frozenset({"shake"}),
+    "slept": frozenset({"sleep"}),
+    "stole": frozenset({"steal"}),
+    "stolen": frozenset({"steal"}),
+    "swam": frozenset({"swim"}),
+    "swum": frozenset({"swim"}),
+    "threw": frozenset({"throw"}),
+    "thrown": frozenset({"throw"}),
+    "wore": frozenset({"wear"}),
+    "worn": frozenset({"wear"}),
+    "ate": frozenset({"eat"}),
+    "eaten": frozenset({"eat"}),
+    "began": frozenset({"begin"}),
+    "begun": frozenset({"begin"}),
+    "drank": frozenset({"drink"}),
+    "drunk": frozenset({"drink"}),
+    "sang": frozenset({"sing"}),
+    "sung": frozenset({"sing"}),
+    "sank": frozenset({"sink"}),
+    "sunk": frozenset({"sink"}),
+    "better": frozenset({"good"}),
+    "best": frozenset({"good"}),
+    "worse": frozenset({"bad"}),
+    "worst": frozenset({"bad"}),
+    "men": frozenset({"man"}),
+    "women": frozenset({"woman"}),
+    "children": frozenset({"child"}),
+    "feet": frozenset({"foot"}),
+    "teeth": frozenset({"tooth"}),
+    "mice": frozenset({"mouse"}),
+    "geese": frozenset({"goose"}),
+    "people": frozenset({"person"}),
+    # German irregular verbs and common suppletive forms
+    "hat": frozenset({"haben"}),
+    "hast": frozenset({"haben"}),
+    "habt": frozenset({"haben"}),
+    "hatte": frozenset({"haben"}),
+    "hatten": frozenset({"haben"}),
+    "hattest": frozenset({"haben"}),
+    "hattet": frozenset({"haben"}),
+    "hätte": frozenset({"haben"}),
+    "gehabt": frozenset({"haben"}),
+    "ist": frozenset({"sein"}),
+    "bin": frozenset({"sein"}),
+    "bist": frozenset({"sein"}),
+    "sind": frozenset({"sein"}),
+    "seid": frozenset({"sein"}),
+    "war": frozenset({"sein"}),
+    "waren": frozenset({"sein"}),
+    "warst": frozenset({"sein"}),
+    "wart": frozenset({"sein"}),
+    "wäre": frozenset({"sein"}),
+    "gewesen": frozenset({"sein"}),
+    "ging": frozenset({"gehen"}),
+    "gingen": frozenset({"gehen"}),
+    "gingst": frozenset({"gehen"}),
+    "gegangen": frozenset({"gehen"}),
+    "wird": frozenset({"werden"}),
+    "wirst": frozenset({"werden"}),
+    "wurde": frozenset({"werden"}),
+    "wurden": frozenset({"werden"}),
+    "würde": frozenset({"werden"}),
+    "geworden": frozenset({"werden"}),
+    "kann": frozenset({"können"}),
+    "kannst": frozenset({"können"}),
+    "konnte": frozenset({"können"}),
+    "konnten": frozenset({"können"}),
+    "muss": frozenset({"müssen"}),
+    "musst": frozenset({"müssen"}),
+    "musste": frozenset({"müssen"}),
+    "mussten": frozenset({"müssen"}),
+    "will": frozenset({"wollen"}),
+    "willst": frozenset({"wollen"}),
+    "wollte": frozenset({"wollen"}),
+    "wollten": frozenset({"wollen"}),
+    "mag": frozenset({"mögen"}),
+    "magst": frozenset({"mögen"}),
+    "mochte": frozenset({"mögen"}),
+    "möchte": frozenset({"mögen"}),
+    "darf": frozenset({"dürfen"}),
+    "darfst": frozenset({"dürfen"}),
+    "durfte": frozenset({"dürfen"}),
+    "weiß": frozenset({"wissen"}),
+    "weißt": frozenset({"wissen"}),
+    "wusste": frozenset({"wissen"}),
+    "gewusst": frozenset({"wissen"}),
+    "sah": frozenset({"sehen"}),
+    "sieht": frozenset({"sehen"}),
+    "siehst": frozenset({"sehen"}),
+    "gesehen": frozenset({"sehen"}),
+    "gab": frozenset({"geben"}),
+    "gibt": frozenset({"geben"}),
+    "gibst": frozenset({"geben"}),
+    "gegeben": frozenset({"geben"}),
+    "nahm": frozenset({"nehmen"}),
+    "nimmt": frozenset({"nehmen"}),
+    "nimmst": frozenset({"nehmen"}),
+    "genommen": frozenset({"nehmen"}),
+    "kam": frozenset({"kommen"}),
+    "kamen": frozenset({"kommen"}),
+    "gekommen": frozenset({"kommen"}),
+    "tat": frozenset({"tun"}),
+    "taten": frozenset({"tun"}),
+    "getan": frozenset({"tun"}),
+    "stand": frozenset({"stehen"}),
+    "standen": frozenset({"stehen"}),
+    "gestanden": frozenset({"stehen"}),
+    "brachte": frozenset({"bringen"}),
+    "gebracht": frozenset({"bringen"}),
+    "dachte": frozenset({"denken"}),
+    "gedacht": frozenset({"denken"}),
+}
+
+
+def _is_compound_delimiter_token(token: Dict[str, Any], delimiters: FrozenSet[str]) -> bool:
+    if token.get("is_word"):
+        return False
+    text = token.get("text")
+    return bool(text) and all(ch in delimiters for ch in text)
+
+
+def _are_words_compound_linked(
+    source_tokens: List[Dict[str, Any]],
+    prev_idx: int,
+    next_idx: int,
+    delimiters: FrozenSet[str],
+) -> bool:
+    if next_idx == prev_idx + 1:
+        prev_cid = source_tokens[prev_idx].get("compound_id")
+        return prev_cid is not None and prev_cid == source_tokens[next_idx].get("compound_id")
+    return all(_is_compound_delimiter_token(source_tokens[k], delimiters) for k in range(prev_idx + 1, next_idx))
+
+
+def _collect_compound_runs(
+    source_tokens: List[Dict[str, Any]],
+    delimiters: FrozenSet[str],
+) -> List[List[int]]:
+    word_indices = [idx for idx, token in enumerate(source_tokens) if token.get("is_word")]
+    if not word_indices:
+        return []
+    runs: List[List[int]] = [[word_indices[0]]]
+    for idx in word_indices[1:]:
+        if _are_words_compound_linked(source_tokens, runs[-1][-1], idx, delimiters):
+            runs[-1].append(idx)
+        else:
+            runs.append([idx])
+    return runs
+
+
+def _allocate_run_compound_id(
+    source_tokens: List[Dict[str, Any]],
+    run: List[int],
+    used_ids: Set[int],
+    next_id: int,
+) -> Tuple[int, int]:
+    for idx in run:
+        existing = source_tokens[idx].get("compound_id")
+        if isinstance(existing, int) and existing not in used_ids:
+            used_ids.add(existing)
+            return existing, max(next_id, existing + 1)
+    used_ids.add(next_id)
+    return next_id, next_id + 1
+
+
+def _clean_alnum_lower(text: str, apo_set: Set[str]) -> str:
+    if not text:
+        return ""
+    return tok.utf8_to_lower("".join(ch for ch in text if ch.isalnum() or ch in apo_set))
+
+
+def _matches_prefix_stem(clean_sub: str, clean_lemma_lower: str) -> bool:
+    if len(clean_lemma_lower) >= 3 and clean_sub.startswith(clean_lemma_lower):
+        return True
+    if len(clean_sub) >= 3 and clean_lemma_lower.startswith(clean_sub):
+        return True
+    return len(clean_lemma_lower) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == clean_lemma_lower[:4]
+
+
+def _compound_subtoken_matches_lemma(
+    clean_sub: str,
+    clean_lemma_lower: str,
+    clean_whole: str,
+    is_composite_row: bool,
+) -> bool:
+    if not clean_sub:
+        return False
+    if is_composite_row or not clean_lemma_lower:
+        return True
+    if clean_sub == clean_lemma_lower or clean_lemma_lower == clean_whole:
+        return True
+    if clean_lemma_lower in _IRREGULAR_SUBTOKEN_LEMMAS.get(clean_sub, ()):
+        return True
+    return _matches_prefix_stem(clean_sub, clean_lemma_lower)
+
+
+def _row_compound_clean_strings(
+    r_idx: int,
+    row_primary_lemmas: Dict[int, str],
+    data_rows: List[List[Any]],
+    col_inflected: int,
+    col_inflected2: int,
+    col_quotation: int,
+    col_lemma: int,
+    apo_set: Set[str],
+) -> Set[str]:
+    candidates: List[str] = [row_primary_lemmas.get(r_idx, "")]
+    if 0 <= r_idx < len(data_rows):
+        inf = resolve_row_inflected_form(data_rows[r_idx], col_inflected, col_inflected2, col_quotation, col_lemma)
+        candidates.extend(form.strip() for form in inf.split(","))
+    cleaned = (_clean_alnum_lower(item, apo_set) for item in candidates)
+    return {item for item in cleaned if item}
+
+
+def _partition_token_rows(
+    filtered_rows: List[int],
+    lower_clean: str,
+    compound_rows: Set[int],
+    row_direct_candidates: Dict[int, Set[str]],
+    row_primary_lemmas: Dict[int, str],
+    has_comp_marker_fn: Callable[[str], bool],
+) -> Tuple[List[int], List[int]]:
+    atomic_rows: List[int] = []
+    compound_cand_rows: List[int] = []
+    for r_idx in filtered_rows:
+        if r_idx in compound_rows:
+            if lower_clean in row_direct_candidates.get(r_idx, set()) and not has_comp_marker_fn(
+                row_primary_lemmas.get(r_idx, "")
+            ):
+                atomic_rows.append(r_idx)
+            else:
+                compound_cand_rows.append(r_idx)
+        else:
+            atomic_rows.append(r_idx)
+    return atomic_rows, compound_cand_rows
+
+
+def _filter_compound_candidate_rows(
+    compound_cand_rows: List[int],
+    comp_clean: str,
+    row_primary_lemmas: Dict[int, str],
+    data_rows: List[List[Any]],
+    col_inflected: int,
+    col_inflected2: int,
+    col_quotation: int,
+    col_lemma: int,
+    apo_set: Set[str],
+) -> List[int]:
+    if not comp_clean:
+        return compound_cand_rows
+    return [
+        r_idx
+        for r_idx in compound_cand_rows
+        if comp_clean
+        in _row_compound_clean_strings(
+            r_idx, row_primary_lemmas, data_rows, col_inflected, col_inflected2, col_quotation, col_lemma, apo_set
+        )
+    ]
+
+
+def _row_mapping_words(
+    row: List[Any],
+    col_lemma: int,
+    col_inflected: int,
+    col_inflected2: int,
+    col_quotation: int,
+) -> Set[str]:
+    lem = row[col_lemma].strip().lower() if col_lemma != -1 and len(row) > col_lemma else ""
+    inf = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma).lower()
+    forms = [f.strip() for f in inf.split(",") if f.strip()]
+    words = set(forms)
+    if lem:
+        words.add(lem)
+    for form in forms:
+        words.update(form.split())
+    return words
+
+
+def _row_mapping_rank(
+    r_idx: int,
+    targets: List[str],
+    data_rows: List[List[Any]],
+    col_lemma: int,
+    col_inflected: int,
+    col_inflected2: int,
+    col_quotation: int,
+) -> int:
+    if not (0 <= r_idx < len(data_rows)):
+        return len(targets)
+    words = _row_mapping_words(data_rows[r_idx], col_lemma, col_inflected, col_inflected2, col_quotation)
+    for idx, target in enumerate(targets):
+        if target in words:
+            return idx
+    return len(targets)
+
+
+def _rank_filtered_rows_by_token_mappings(
+    filtered_rows: List[int],
+    lower_clean: str,
+    token_mappings: Dict[str, List[str]],
+    data_rows: List[List[Any]],
+    col_lemma: int,
+    col_inflected: int,
+    col_inflected2: int,
+    col_quotation: int,
+) -> List[int]:
+    if not token_mappings or not lower_clean:
+        return filtered_rows
+    norm_tok = re.sub(r"[’‘`´ʼ]", "'", lower_clean)
+    norm_tok = re.sub(r"\s+", "", norm_tok).lower()
+    targets = [t.lower().strip() for t in token_mappings.get(norm_tok, []) if t.strip()]
+    if not targets:
+        return filtered_rows
+    return sorted(
+        filtered_rows,
+        key=lambda r_idx: _row_mapping_rank(
+            r_idx, targets, data_rows, col_lemma, col_inflected, col_inflected2, col_quotation
+        ),
+    )
+
+
+def _apply_compound_run(source_tokens: List[Dict[str, Any]], run: List[int], comp_id: int) -> None:
+    comp_text = "".join(source_tokens[k].get("text", "") for k in range(run[0], run[-1] + 1))
+    for idx in run:
+        source_tokens[idx]["is_in_compound"] = True
+        source_tokens[idx]["compound_text"] = comp_text
+        source_tokens[idx]["compound_id"] = comp_id
+
+
 def tag_server_compound_tokens(source_tokens: List[Dict[str, Any]]) -> None:
     """
-    Identifies compound token chains connected by COMPOUND_JOINERS or PATH_LEVEL_DELIMITERS.
-    Sets is_in_compound=True and compound_text for participating word tokens.
+    Identifies compound token chains connected by COMPOUND_JOINERS, PATH_LEVEL_DELIMITERS,
+    multi-character delimiter runs (::, __, //, --), or mixed CamelCase+delimiter chains.
+    Sets is_in_compound, compound_text, and deterministic compound_id for participating word tokens.
     """
-    compound_delimiters = COMPOUND_JOINERS | PATH_LEVEL_DELIMITERS
-    n_tokens = len(source_tokens)
-    i = 0
-    while i < n_tokens:
-        if source_tokens[i].get("is_word"):
-            j = i
-            chain = [j]
-            while j + 2 < n_tokens:
-                delim_tok = source_tokens[j + 1]
-                next_word_tok = source_tokens[j + 2]
-                if (not delim_tok.get("is_word") and
-                    delim_tok.get("text") and
-                    all(c in compound_delimiters for c in delim_tok.get("text")) and
-                    next_word_tok.get("is_word")):
-                    chain.append(j + 2)
-                    j += 2
-                else:
-                    break
-            if len(chain) > 1:
-                comp_text = "".join(source_tokens[k].get("text", "") for k in range(chain[0], chain[-1] + 1))
-                for idx in chain:
-                    source_tokens[idx]["is_in_compound"] = True
-                    source_tokens[idx]["compound_text"] = comp_text
-                i = chain[-1] + 1
-                continue
-            elif source_tokens[i].get("compound_id") is not None:
-                source_tokens[i]["is_in_compound"] = True
-                cid = source_tokens[i].get("compound_id")
-                same_cid = [k for k in range(n_tokens) if source_tokens[k].get("compound_id") == cid]
-                comp_text = "".join(source_tokens[k].get("text", "") for k in same_cid)
-                for idx in same_cid:
-                    source_tokens[idx]["is_in_compound"] = True
-                    source_tokens[idx]["compound_text"] = comp_text
-                i = max(same_cid) + 1 if same_cid else i + 1
-                continue
-            else:
-                source_tokens[i]["is_in_compound"] = False
-        i += 1
+    runs = _collect_compound_runs(source_tokens, COMPOUND_JOINERS | PATH_LEVEL_DELIMITERS)
+    existing_ids = [int(t["compound_id"]) for t in source_tokens if isinstance(t.get("compound_id"), int)]
+    used_ids: Set[int] = set()
+    next_id = max(existing_ids, default=0) + 1
+    for run in runs:
+        if len(run) > 1:
+            comp_id, next_id = _allocate_run_compound_id(source_tokens, run, used_ids, next_id)
+            _apply_compound_run(source_tokens, run, comp_id)
+        else:
+            tok_single = source_tokens[run[0]]
+            has_cid = tok_single.get("compound_id") is not None
+            tok_single["is_in_compound"] = has_cid
+            if has_cid:
+                tok_single["compound_text"] = tok_single.get("text", "")
 
 
 def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None, api_token="", server_enabled=False, read_only=False, preloaded_bundle=None, read_only_preview=False, preview_project_id=None, fingerprint=""):
@@ -12599,23 +12979,23 @@ html, body {{
                         node_subs = tok.decompose_identifier(node)
                         clean_node_subs = [tok.utf8_to_lower("".join(ch for ch in s if ch.isalnum() or ch in apo_set)) for s in node_subs]
                         clean_node = tok.utf8_to_lower("".join(ch for ch in node if ch.isalnum() or ch in apo_set))
-                        node_matches = (not clean_lemma_lower or is_composite_row or clean_lemma_lower in clean_node or
-                                        any(s == clean_lemma_lower or
-                                            (len(clean_lemma_lower) >= 3 and s.startswith(clean_lemma_lower)) or
-                                            (len(s) >= 3 and clean_lemma_lower.startswith(s)) or
-                                            (len(clean_lemma_lower) >= 4 and len(s) >= 4 and s[:4] == clean_lemma_lower[:4])
-                                            for s in clean_node_subs if s))
+                        node_matches = (
+                            not clean_lemma_lower
+                            or is_composite_row
+                            or clean_lemma_lower in clean_node
+                            or any(
+                                _compound_subtoken_matches_lemma(s, clean_lemma_lower, clean_node, is_composite_row)
+                                for s in clean_node_subs
+                                if s
+                            )
+                        )
                         if node_matches:
                             _add_cand(clean_node)
                             for sub in node_subs:
                                 clean_sub = tok.utf8_to_lower("".join(ch for ch in sub if ch.isalnum() or ch in apo_set))
-                                sub_matches = (not clean_lemma_lower or
-                                               is_composite_row or
-                                               clean_sub == clean_lemma_lower or
-                                               clean_lemma_lower == clean_node or
-                                               (len(clean_lemma_lower) >= 3 and clean_sub.startswith(clean_lemma_lower)) or
-                                               (len(clean_sub) >= 3 and clean_lemma_lower.startswith(clean_sub)) or
-                                               (len(clean_lemma_lower) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == clean_lemma_lower[:4]))
+                                sub_matches = _compound_subtoken_matches_lemma(
+                                    clean_sub, clean_lemma_lower, clean_node, is_composite_row
+                                )
                                 if sub_matches:
                                     _add_cand(clean_sub)
                                     if not is_composite_row:
@@ -12632,13 +13012,9 @@ html, body {{
                     subtokens = tok.decompose_identifier(val)
                     for sub in subtokens:
                         clean_sub = tok.utf8_to_lower("".join(ch for ch in sub if ch.isalnum() or ch in apo_set))
-                        sub_matches = (not clean_lemma_lower or
-                                       is_composite_row or
-                                       clean_sub == clean_lemma_lower or
-                                       clean_lemma_lower == clean_val or
-                                       (len(clean_lemma_lower) >= 3 and clean_sub.startswith(clean_lemma_lower)) or
-                                       (len(clean_sub) >= 3 and clean_lemma_lower.startswith(clean_sub)) or
-                                       (len(clean_lemma_lower) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == clean_lemma_lower[:4]))
+                        sub_matches = _compound_subtoken_matches_lemma(
+                            clean_sub, clean_lemma_lower, clean_val, is_composite_row
+                        )
                         if sub_matches:
                             _add_cand(clean_sub)
                             if not is_composite_row:
@@ -12772,6 +13148,7 @@ html, body {{
     current_chunk_idx = None
     current_chunk_elements = []
     is_multi_sentence = (smc.enabled and len(source_sentences) >= 2)
+    token_mappings = get_desk_token_mappings(resolved_paths, language, config) if token_cfg.token_mappings_enabled else {}
 
     word_counter = 0
     current_a_idx = 0
@@ -12816,27 +13193,48 @@ html, body {{
                 filtered_cand_rows, tok_text, apo_set, single_word_rows, compound_rows, row_exact_surface_forms
             )
 
-            token["filtered_mapped_rows"] = mapped_rows
+            paired_anchored = [r_idx for r_idx in mapped_rows if word_counter in anchored_positions.get(r_idx, set())]
+            filtered_rows = paired_anchored if paired_anchored else [r_idx for r_idx in mapped_rows if r_idx in single_word_rows]
+            filtered_rows = _rank_filtered_rows_by_token_mappings(
+                filtered_rows, lower_clean, token_mappings, data_rows, col_lemma, col_inflected, col_inflected2, col_quotation
+            )
+            atomic_rows, compound_cand_rows = _partition_token_rows(
+                filtered_rows, lower_clean, compound_rows, row_direct_candidates, row_primary_lemmas, _has_comp_marker
+            )
+            if is_in_comp:
+                comp_text = token.get("compound_text", "")
+                comp_clean = tok.utf8_to_lower("".join(ch for ch in comp_text if ch.isalnum() or ch in apo_set)) if comp_text else ""
+                compound_cand_rows = _filter_compound_candidate_rows(
+                    compound_cand_rows, comp_clean, row_primary_lemmas, data_rows,
+                    col_inflected, col_inflected2, col_quotation, col_lemma, apo_set,
+                )
+            effective_row_ids = [r for r in filtered_rows if r in atomic_rows or r in compound_cand_rows]
+            is_paired = bool(paired_anchored and any(r in paired_anchored for r in effective_row_ids))
+            token["filtered_mapped_rows"] = effective_row_ids
+            token["_projected_binding"] = {
+                "row_ids": effective_row_ids,
+                "atomic_row_ids": atomic_rows,
+                "compound_row_ids": compound_cand_rows,
+                "is_paired": is_paired,
+            }
 
             classes = ["word"]
-            if mapped_rows:
-                is_paired = any(word_counter in anchored_positions.get(r_idx, set()) for r_idx in mapped_rows)
+            if effective_row_ids:
                 if is_paired:
                     classes.append("highlight-purple")
-                elif any(r_idx in single_word_rows for r_idx in mapped_rows):
-                    classes.append("highlight-orange")
                 else:
-                    classes.append("not-connected")
+                    classes.append("highlight-orange")
             else:
                 classes.append("not-connected")
             classes_str = " ".join(classes)
             compound_id = token.get("compound_id")
             compound_attr = f' data-compound-id="{compound_id}"' if compound_id is not None else ""
             sent_attr = f' data-sentence-idx="{tok_sent_idx}"' if is_multi_sentence else ""
+            lower_clean_escaped = html.escape(lower_clean, quote=True)
             word_span = (
                 f'<span class="{classes_str}" data-word-idx="{token["visual_idx"]}" '
                 f'data-line-idx="{current_a_idx}"{compound_attr} '
-                f'data-lower-clean="{lower_clean}"{sent_attr}>{text_escaped}</span>'
+                f'data-lower-clean="{lower_clean_escaped}"{sent_attr}>{text_escaped}</span>'
             )
             if is_multi_sentence:
                 current_chunk_elements.append(word_span)
@@ -13170,7 +13568,6 @@ html, body {{
 
     token_manifest = []
     word_counter = 0
-    token_mappings = get_desk_token_mappings(resolved_paths, language, config) if token_cfg.token_mappings_enabled else {}
     for token in source_tokens:
         tok_data = {
             "text": token["text"],
@@ -13178,89 +13575,22 @@ html, body {{
             "visual_idx": token["visual_idx"],
             "source_sentence_idx": token.get("sentence_idx", 1),
         }
+        if token.get("compound_id") is not None:
+            tok_data["compound_id"] = token["compound_id"]
         if token["is_word"] and "lower_clean" in token:
             lower_clean = token["lower_clean"]
             tok_data["lower_clean"] = lower_clean
             tok_data["bound_visual_idxs_by_row"] = bound_visual_indices.get(word_counter, {})
-            mapped_rows = token.get("filtered_mapped_rows", token_to_rows.get(lower_clean, []))
-            if not mapped_rows:
-                stem = re.sub(r"(?:n[" + "".join(re.escape(c) for c in apo_set) + r"]t|[" + "".join(re.escape(c) for c in apo_set) + r"](?:s|ve|ll|d|re|m)?)$", "", lower_clean, flags=re.IGNORECASE)
-                if stem and stem in token_to_rows:
-                    mapped_rows = token_to_rows[stem]
-            is_in_comp = token.get("is_in_compound", token.get("compound_id") is not None)
-            filtered_cand_rows = []
-            for r_idx in mapped_rows:
-                if r_idx in compound_rows and not is_in_comp:
-                    if lower_clean in row_direct_candidates.get(r_idx, set()):
-                        filtered_cand_rows.append(r_idx)
-                else:
-                    filtered_cand_rows.append(r_idx)
-            mapped_rows = filtered_cand_rows
-
-            paired_anchored = [r_idx for r_idx in mapped_rows if word_counter in anchored_positions.get(r_idx, set())]
-            if paired_anchored:
-                filtered_rows = paired_anchored
-            else:
-                filtered_rows = [r_idx for r_idx in mapped_rows if r_idx in single_word_rows]
-            if filtered_rows:
-                if token_mappings and lower_clean:
-                    norm_tok = lower_clean.replace('’', "'").replace('‘', "'").replace('`', "'").replace('´', "'").replace('ʼ', "'")
-                    norm_tok = re.sub(r'\s+', '', norm_tok).lower()
-                    if norm_tok in token_mappings:
-                        targets = [t.lower().strip() for t in token_mappings[norm_tok] if t.strip()]
-                        if targets:
-                            def _row_rank(r_idx):
-                                if 0 <= r_idx < len(data_rows):
-                                    r = data_rows[r_idx]
-                                    lem = r[col_lemma].strip().lower() if col_lemma != -1 and len(r) > col_lemma else ""
-                                    inf = resolve_row_inflected_form(r, col_inflected, col_inflected2, col_quotation, col_lemma).lower()
-                                    forms = [f.strip() for f in inf.split(',') if f.strip()]
-                                    r_words = set(forms)
-                                    if lem:
-                                        r_words.add(lem)
-                                    for f in forms:
-                                        for part in f.split():
-                                            r_words.add(part)
-                                    for idx, target in enumerate(targets):
-                                        if target in r_words:
-                                            return idx
-                                return len(targets)
-                            filtered_rows = sorted(filtered_rows, key=_row_rank)
-                tok_data["row_ids"] = filtered_rows
-
-                atomic_rows = []
-                compound_cand_rows = []
-                for r_idx in filtered_rows:
-                    if r_idx in compound_rows:
-                        if lower_clean in row_direct_candidates.get(r_idx, set()) and not _has_comp_marker(row_primary_lemmas.get(r_idx)):
-                            atomic_rows.append(r_idx)
-                        else:
-                            compound_cand_rows.append(r_idx)
-                    else:
-                        atomic_rows.append(r_idx)
-
-                if is_in_comp:
-                    comp_text = token.get("compound_text", "")
-                    comp_clean = tok.utf8_to_lower("".join(ch for ch in comp_text if ch.isalnum() or ch in apo_set)) if comp_text else ""
-                    if comp_clean:
-                        filtered_comp_rows = []
-                        for r_idx in compound_cand_rows:
-                            r_comp_strings = set()
-                            lem = row_primary_lemmas.get(r_idx, "")
-                            if lem:
-                                r_comp_strings.add(tok.utf8_to_lower("".join(ch for ch in lem if ch.isalnum() or ch in apo_set)))
-                            if 0 <= r_idx < len(data_rows):
-                                r = data_rows[r_idx]
-                                inf = resolve_row_inflected_form(r, col_inflected, col_inflected2, col_quotation, col_lemma)
-                                for f in inf.split(','):
-                                    f_clean = tok.utf8_to_lower("".join(ch for ch in f.strip() if ch.isalnum() or ch in apo_set))
-                                    if f_clean:
-                                        r_comp_strings.add(f_clean)
-                            if any(rc == comp_clean for rc in r_comp_strings if rc):
-                                filtered_comp_rows.append(r_idx)
-                        compound_cand_rows = filtered_comp_rows
-                        tok_data["row_ids"] = [r for r in filtered_rows if r in atomic_rows or r in compound_cand_rows]
-
+            binding = token.get("_projected_binding") or {
+                "row_ids": [],
+                "atomic_row_ids": [],
+                "compound_row_ids": [],
+            }
+            effective_rows = list(binding["row_ids"])
+            atomic_rows = list(binding["atomic_row_ids"])
+            compound_cand_rows = list(binding["compound_row_ids"])
+            if effective_rows:
+                tok_data["row_ids"] = effective_rows
                 tok_data["atomic_row_ids"] = atomic_rows
                 tok_data["compound_row_ids"] = compound_cand_rows
                 if atomic_rows:
@@ -13295,8 +13625,8 @@ html, body {{
                             tok_data["sentence_idx"] = comp_sent
                         if comp_ord is not None:
                             tok_data["token_order"] = comp_ord
-                if "pos" not in tok_data and filtered_rows and 0 <= filtered_rows[0] < len(data_rows):
-                    r_f = data_rows[filtered_rows[0]]
+                if "pos" not in tok_data and effective_rows and 0 <= effective_rows[0] < len(data_rows):
+                    r_f = data_rows[effective_rows[0]]
                     if col_pos != -1 and len(r_f) > col_pos and str(r_f[col_pos]).strip():
                         tok_data["pos"] = str(r_f[col_pos]).strip()
             word_counter += 1
@@ -15138,7 +15468,8 @@ def render_declarative_web_shell(
     )
     if active_sentence:
         source_rules += f'\n#translation-container > [data-translation-sentence]:not([data-translation-sentence="{active_sentence}"]) {{ display: none; }}'
-    base_html = base_html.replace('</head>', f'<style id="kw-source-projection">{source_rules}</style></head>')
+    if not disable_css:
+        base_html = base_html.replace('</head>', f'<style id="kw-source-projection">{source_rules}</style></head>')
 
     # Toolbar and UI Config states
     ui_cfg = bootstrap_payload.get("ui_config", {})
@@ -15207,7 +15538,8 @@ def render_declarative_web_shell(
         base_html = base_html.replace('<link rel="stylesheet" href="/css/workspace.css">', '')
         base_html = base_html.replace('<script src="/js/features/sqlite-state.js"></script>', '')
         base_html = base_html.replace('<script src="/js/features/workspace-presentation.js"></script>', '')
-        base_html = base_html.replace('</head>', f'<style>{presentation_css}</style><script>{state_js}\n{scope_script}\n{presentation_js}</script></head>')
+        style_block = "" if disable_css else f'<style>{presentation_css}</style>'
+        base_html = base_html.replace('</head>', f'{style_block}<script>{state_js}\n{scope_script}\n{presentation_js}</script></head>')
     if disable_css:
         base_html = re.sub(r'<link\b[^>]*\brel=["\']stylesheet["\'][^>]*>\s*', '', base_html, flags=re.IGNORECASE)
     else:

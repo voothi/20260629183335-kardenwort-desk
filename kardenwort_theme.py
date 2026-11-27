@@ -75,7 +75,7 @@ def _allowed_theme_properties():
 
 
 def theme_style(colors, theme):
-    if colors and theme not in ('dark', 'light', 'white'):
+    if colors and theme not in ('dark', 'light', 'white', 'compact'):
         raise ValueError('Invalid configured theme')
     if not set(colors).issubset(_allowed_theme_properties()):
         raise ValueError('Unknown configured theme property')
