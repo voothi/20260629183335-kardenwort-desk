@@ -183,7 +183,13 @@ async function apiFetch(endpoint, options = {}) {
         }
         return data.data !== undefined ? data.data : data;
     } catch (err) {
+        if ((err && err.name === 'AbortError') || (options && options.signal && options.signal.aborted)) {
+            throw err;
+        }
         showToast(err.message, 'error');
+        if (err && typeof err === 'object') {
+            err._toastShown = true;
+        }
         throw err;
     }
 }
@@ -503,7 +509,9 @@ async function exportProjectDeck(projectId, title) {
         });
         showToast(`Exported deck for "${title}" (${res.total_words || 0} words).`, 'success');
     } catch (e) {
-        showToast(`Failed to export deck: ${e.message}`, 'error');
+        if (!e || !e._toastShown) {
+            showToast(`Failed to export deck: ${e && e.message ? e.message : 'Unknown error'}`, 'error');
+        }
     }
 }
 
@@ -579,8 +587,12 @@ function initModals() {
     // TSV Inspector Modal Events
     const tsvModal = document.getElementById('tsv-inspector-modal');
     if (tsvModal) {
-        document.getElementById('btn-tsv-modal-close').addEventListener('click', () => tsvModal.classList.add('hidden'));
-        document.getElementById('btn-tsv-modal-dismiss').addEventListener('click', () => tsvModal.classList.add('hidden'));
+        const dismissTsvModal = () => {
+            cancelPendingTsvInspector();
+            tsvModal.classList.add('hidden');
+        };
+        document.getElementById('btn-tsv-modal-close').addEventListener('click', dismissTsvModal);
+        document.getElementById('btn-tsv-modal-dismiss').addEventListener('click', dismissTsvModal);
         document.getElementById('btn-tsv-copy').addEventListener('click', async () => {
             const viewer = document.getElementById('tsv-raw-viewer');
             if (!viewer || !viewer.value) return;
@@ -612,8 +624,10 @@ function initModals() {
                 e.preventDefault();
                 closeConfirm(false);
             } else if (e.key === 'Enter') {
+                const active = document.activeElement;
+                const cancelFocused = active && (active.id === 'btn-confirm-cancel' || active.id === 'btn-confirm-modal-close');
                 e.preventDefault();
-                closeConfirm(true);
+                closeConfirm(!cancelFocused);
             }
         }
     });
@@ -877,6 +891,9 @@ async function saveAssignProjectModal() {
 
             showToast(`Assigned ${res.linked_count ?? totalSelected} session(s) to project`, 'success');
             document.getElementById('assign-project-modal').classList.add('hidden');
+            if (state.sessionsExplorer.assigned) {
+                clearAllSelections();
+            }
             await loadSessionsExplorer();
             loadProjectTree();
         } catch (e) {}
@@ -1253,7 +1270,9 @@ async function handleTsvFileUpload(files) {
             showToast(`Ingested session ${res.session_zid || file.name} (${res.sentences_count} sent, ${res.words_count} words)`, 'success');
         } catch (err) {
             errorCount++;
-            showToast(`Failed to import ${file.name}: ${err.message}`, 'error');
+            if (!err || !err._toastShown) {
+                showToast(`Failed to import ${file.name}: ${err && err.message ? err.message : 'Unknown error'}`, 'error');
+            }
         }
     }
 
@@ -1269,7 +1288,31 @@ async function handleTsvFileUpload(files) {
     loadTelemetry();
 }
 
+let tsvInspectorSeq = 0;
+let tsvInspectorAbort = null;
+let sessionsExplorerSeq = 0;
+let sessionsExplorerAbort = null;
+
+function cancelPendingTsvInspector() {
+    tsvInspectorSeq += 1;
+    if (tsvInspectorAbort) {
+        tsvInspectorAbort.abort();
+        tsvInspectorAbort = null;
+    }
+}
+
+function isStaleOrAborted(reqSeq, currentSeq, controller, err) {
+    if (reqSeq !== currentSeq) return true;
+    if (controller && controller.signal && controller.signal.aborted) return true;
+    return Boolean(err && err.name === 'AbortError');
+}
+
 async function openTsvInspectorModal(session) {
+    cancelPendingTsvInspector();
+    const reqSeq = tsvInspectorSeq;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    tsvInspectorAbort = controller;
+
     const modal = document.getElementById('tsv-inspector-modal');
     const titleEl = document.getElementById('tsv-modal-title');
     const statsEl = document.getElementById('tsv-modal-stats');
@@ -1310,12 +1353,15 @@ async function openTsvInspectorModal(session) {
         if (state.token) {
             headers['X-API-Token'] = state.token;
         }
-        const resp = await fetch(tsvEndpoint, { headers });
+        const fetchOpts = controller ? { headers, signal: controller.signal } : { headers };
+        const resp = await fetch(tsvEndpoint, fetchOpts);
+        if (isStaleOrAborted(reqSeq, tsvInspectorSeq, controller, null)) return;
         if (!resp.ok) {
             const errMsg = await parseResponseErrorMessage(resp);
             throw new Error(`Failed to fetch TSV: ${errMsg}`);
         }
         const text = await resp.text();
+        if (isStaleOrAborted(reqSeq, tsvInspectorSeq, controller, null)) return;
         loadedTsvText = text;
         viewer.value = text;
 
@@ -1324,13 +1370,23 @@ async function openTsvInspectorModal(session) {
         const sizeKb = (new Blob([text]).size / 1024).toFixed(1);
         statsEl.textContent = `${Math.max(0, dataRowsCount)} rows | ${sizeKb} KB | UTF-8`;
     } catch (err) {
+        if (isStaleOrAborted(reqSeq, tsvInspectorSeq, controller, err)) return;
         viewer.value = `Error loading TSV: ${err.message}`;
         statsEl.textContent = 'Error loading TSV';
         showToast(err.message, 'error');
+    } finally {
+        if (tsvInspectorAbort === controller) tsvInspectorAbort = null;
     }
 }
 
 async function loadSessionsExplorer(force = false) {
+    if (sessionsExplorerAbort) {
+        sessionsExplorerAbort.abort();
+    }
+    const reqSeq = ++sessionsExplorerSeq;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    sessionsExplorerAbort = controller;
+
     const tbody = document.getElementById('sessions-table-body');
     const prevBtn = document.getElementById('btn-sessions-prev');
     const nextBtn = document.getElementById('btn-sessions-next');
@@ -1348,8 +1404,10 @@ async function loadSessionsExplorer(force = false) {
     if (assigned) params.set('assigned', assigned);
 
     try {
-        tbody.innerHTML = '<tr><td colspan="8" class="loading-spinner">Loading sessions library...</td></tr>';
-        const res = await apiFetch(`/api/v1/admin/sessions?${params.toString()}`);
+        tbody.innerHTML = '<tr><td colspan="9" class="loading-spinner">Loading sessions library...</td></tr>';
+        const fetchOpts = controller ? { signal: controller.signal } : {};
+        const res = await apiFetch(`/api/v1/admin/sessions?${params.toString()}`, fetchOpts);
+        if (isStaleOrAborted(reqSeq, sessionsExplorerSeq, controller, null)) return;
         state.sessionsExplorer.sessions = res.sessions || [];
         state.sessionsExplorer.totalCount = res.total_count || 0;
 
@@ -1361,7 +1419,10 @@ async function loadSessionsExplorer(force = false) {
         prevBtn.disabled = page <= 1;
         nextBtn.disabled = page >= totalPages;
     } catch (e) {
+        if (isStaleOrAborted(reqSeq, sessionsExplorerSeq, controller, e)) return;
         tbody.innerHTML = '<tr><td colspan="9" class="empty-state">Failed to load sessions.</td></tr>';
+    } finally {
+        if (sessionsExplorerAbort === controller) sessionsExplorerAbort = null;
     }
 }
 
@@ -1439,13 +1500,22 @@ function renderSessionsExplorerTable(sessions) {
     updateSelectionUI();
 }
 
+function getActiveAdminTheme() {
+    const body = typeof document !== 'undefined' ? document.body : null;
+    if (body && body.classList.contains('theme-light')) return 'light';
+    if (body && body.classList.contains('theme-white')) return 'white';
+    return 'dark';
+}
+
 function openSessionInDesk(zid) {
-    const url = `/?session_zid=${encodeURIComponent(zid)}&theme=dark`;
+    const theme = encodeURIComponent(getActiveAdminTheme());
+    const url = `/?session_zid=${encodeURIComponent(zid)}&theme=${theme}`;
     window.open(url, '_blank');
 }
 
 function openSessionInDict(zid) {
-    const url = `/?session_zid=${encodeURIComponent(zid)}&view=goldendict&theme=dark`;
+    const theme = encodeURIComponent(getActiveAdminTheme());
+    const url = `/?session_zid=${encodeURIComponent(zid)}&view=goldendict&theme=${theme}`;
     window.open(url, '_blank');
 }
 
@@ -1484,7 +1554,7 @@ async function openProjectInDesk(projectId) {
         if (!persistedZid) {
             throw new Error('Project materialization did not return a persisted session identity');
         }
-        const targetUrl = `/?session_zid=${encodeURIComponent(persistedZid)}&theme=dark`;
+        const targetUrl = `/?session_zid=${encodeURIComponent(persistedZid)}&theme=${encodeURIComponent(getActiveAdminTheme())}`;
         if (popup) {
             popup.location.href = targetUrl;
         } else {
@@ -1495,12 +1565,15 @@ async function openProjectInDesk(projectId) {
             popup.close();
         }
         console.error('[Admin] openProjectInDesk failed:', e);
-        showToast(`Failed to open project in Desk: ${e && e.message ? e.message : 'Unknown error'}`, 'error');
+        if (!e || !e._toastShown) {
+            showToast(`Failed to open project in Desk: ${e && e.message ? e.message : 'Unknown error'}`, 'error');
+        }
     }
 }
 
 function openProjectInDict(projectId) {
-    const url = `/?project_id=${encodeURIComponent(projectId)}&view=goldendict&theme=dark`;
+    const theme = encodeURIComponent(getActiveAdminTheme());
+    const url = `/?project_id=${encodeURIComponent(projectId)}&view=goldendict&theme=${theme}`;
     window.open(url, '_blank');
 }
 
@@ -1715,7 +1788,9 @@ function initMaintenance() {
             showToast('Vacuum completed', 'success');
         } catch (e) {
             vacStatus.textContent = 'Failed';
-            showToast(`Vacuum failed: ${e && e.message ? e.message : 'Unknown error'}`, 'error');
+            if (!e || !e._toastShown) {
+                showToast(`Vacuum failed: ${e && e.message ? e.message : 'Unknown error'}`, 'error');
+            }
         } finally {
             btnVacuum.disabled = false;
         }

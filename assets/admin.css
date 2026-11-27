@@ -15,6 +15,8 @@
     --text-main: #e3e6eb;
     --text-muted: #8b949e;
     --text-dim: #6e7681;
+    --code-text: #a5d6ff;
+    --text-on-hover: #ffffff;
 
     --accent-blue: #1f6feb;
     --accent-green: #2da44e;
@@ -40,6 +42,8 @@ body.theme-light {
     --text-main: #1f2328;
     --text-muted: #59636e;
     --text-dim: #6e7781;
+    --code-text: #0550ae;
+    --text-on-hover: #1f2328;
 }
 
 body.theme-white {
@@ -52,6 +56,8 @@ body.theme-white {
     --text-main: #111111;
     --text-muted: #555555;
     --text-dim: #777777;
+    --code-text: #0550ae;
+    --text-on-hover: #111111;
 }
 
 * {
@@ -579,7 +585,7 @@ body {
     font-family: var(--font-mono);
     font-size: var(--font-size-xs);
     overflow-x: auto;
-    color: #a5d6ff;
+    color: var(--code-text);
 }
 
 /* --------------------------------------------------------------------------
@@ -633,7 +639,7 @@ body {
 }
 
 .modal-close:hover {
-    color: #fff;
+    color: var(--text-on-hover);
 }
 
 .modal-body {
@@ -916,7 +922,7 @@ body {
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
-    color: #e3e6eb;
+    color: var(--text-main);
     font-family: var(--font-mono);
     font-size: var(--font-size-xs);
     line-height: 1.45;
@@ -1003,7 +1009,7 @@ body {
 
 .select-dropdown-menu .dropdown-item:hover {
     background: var(--bg-hover);
-    color: #ffffff;
+    color: var(--text-on-hover);
 }
 
 /* Batch Toolbar (Fixed Overlay: Zero Flow Reflow & Zero Unused Gap) */
